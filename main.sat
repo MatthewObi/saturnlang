@@ -1,0 +1,23 @@
+fn strlen(str: cstring): int;
+/*
+fn strcmp(lhs: cstring, rhs: cstring): int;
+fn strcpy(dest: cstring, src: cstring): cstring;
+
+fn abs(n: int): int;
+fn nanf(n: float32): float32;
+fn nan(n: float64): float64;
+fn floorf(n: float32): float32;
+fn floor(n: float64): float64;
+*/
+fn square(n: int): int {
+    return n * n;
+}
+
+fn main(): int {
+    str := "Hello, world!\n";
+    len := strlen(str);
+    printf(str);
+    printf("length: %d\n", len);
+    printf("%d squared = %d", len, square(len));
+    return 0;
+}
