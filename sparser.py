@@ -1,5 +1,12 @@
 from rply import ParserGenerator, Token
-from ast import Program, CodeBlock, Statement, ReturnStatement, Sum, Sub, Mul, Div, Print, Number, Integer, Integer64, Byte, StringLiteral, FuncDecl, FuncDeclExtern, FuncArgList, FuncArg, GlobalVarDecl, VarDecl, VarDeclAssign, LValue, FuncCall, Assignment, AddAssignment, MulAssignment, Boolean, BooleanEq, BooleanNeq, IfStatement
+from ast import ( 
+    Program, CodeBlock, Statement, ReturnStatement, 
+    Sum, Sub, Mul, Div, Print, 
+    Number, Integer, Integer64, Byte, StringLiteral, 
+    FuncDecl, FuncDeclExtern, FuncArgList, FuncArg, GlobalVarDecl, VarDecl, VarDeclAssign, 
+    LValue, FuncCall, Assignment, AddAssignment, SubAssignment, MulAssignment, 
+    Boolean, BooleanEq, BooleanNeq, BooleanGt, IfStatement, WhileStatement
+)
 
 
 class Parser():
@@ -8,8 +15,9 @@ class Parser():
             # A list of all token names accepted by the parser.
             ['INT', 'LONGINT', 'BYTE', 'STRING', 'IDENT', 'TPRINT', 'DOT', 'TRETURN', 'LPAREN', 'RPAREN',
              'SEMICOLON', 'ADD', 'SUB', 'MUL', 'DIV',
-             'TFN', 'COLON', 'LBRACE', 'RBRACE', 'COMMA', 'EQ', 'CEQ', 'ADDEQ', 'MULEQ',
-             'TIF', 'TELSE', 'BOOLAND', 'BOOLEQ', 'BOOLNEQ', 'TTRUE', 'TFALSE'],
+             'TFN', 'COLON', 'LBRACE', 'RBRACE', 'COMMA', 'EQ', 'CEQ', 'ADDEQ', 'SUBEQ', 'MULEQ',
+             'TIF', 'TELSE', 'TWHILE',
+             'BOOLEQ', 'BOOLNEQ', 'BOOLGT', 'TTRUE', 'TFALSE'],
 
              precedence=[
                 ('left', ['ADD', 'SUB']),
@@ -132,7 +140,7 @@ class Parser():
             return VarDecl(self.builder, self.module, spos, p[0], p[2], p[4])
 
         @self.pg.production('stmt : IDENT CEQ expr SEMICOLON')
-        def stmt_var_decl(p):
+        def stmt_var_decl_ceq(p):
             spos = p[0].getsourcepos()
             return VarDeclAssign(self.builder, self.module, spos, p[0], p[2])
 
@@ -146,6 +154,11 @@ class Parser():
             spos = p[0].getsourcepos()
             return AddAssignment(self.builder, self.module, spos, p[0], p[2])
 
+        @self.pg.production('stmt : lvalue SUBEQ expr SEMICOLON')
+        def stmt_assign_sub(p):
+            spos = p[0].getsourcepos()
+            return SubAssignment(self.builder, self.module, spos, p[0], p[2])
+
         @self.pg.production('stmt : lvalue MULEQ expr SEMICOLON')
         def stmt_assign_mul(p):
             spos = p[0].getsourcepos()
@@ -158,6 +171,11 @@ class Parser():
         @self.pg.production('stmt : if_stmt')
         def stmt_if(p):
             return p[0]
+
+        @self.pg.production('stmt : TWHILE LPAREN expr RPAREN LBRACE block RBRACE')
+        def stmt_while(p):
+            spos = p[0].getsourcepos()
+            return WhileStatement(self.builder, self.module, spos, p[2], p[5])
 
         @self.pg.production('if_stmt : TIF LPAREN expr RPAREN LBRACE block RBRACE')
         def if_stmt(p):
@@ -175,6 +193,7 @@ class Parser():
         @self.pg.production('expr : expr DIV expr')
         @self.pg.production('expr : expr BOOLEQ expr')
         @self.pg.production('expr : expr BOOLNEQ expr')
+        @self.pg.production('expr : expr BOOLGT expr')
         def expr(p):
             left = p[0]
             right = p[2]
@@ -192,6 +211,8 @@ class Parser():
                 return BooleanEq(self.builder, self.module, spos, left, right)
             elif operator.gettokentype() == 'BOOLNEQ':
                 return BooleanNeq(self.builder, self.module, spos, left, right)
+            elif operator.gettokentype() == 'BOOLGT':
+                return BooleanGt(self.builder, self.module, spos, left, right)
 
         @self.pg.production('expr : lvalue LPAREN args RPAREN')
         def expr_func_call(p):

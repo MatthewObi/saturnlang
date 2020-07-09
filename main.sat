@@ -16,6 +16,14 @@ fn square(n: int): int {
 fn main(): int {
     str := "Hello, world!\n";
     len := strlen(str);
+    i := 10;
+    while(i > 0) {
+        printf("%d\n", i);
+        i-=1;
+    }
+    if(len > 5) {
+        printf("String is greater than 5 characters!\n");
+    }
     printf(str);
     printf("length: %d\n", len);
     printf("%d squared = %d", len, square(len));

@@ -201,6 +201,20 @@ class BooleanNeq(BinaryOp):
         return ir.IntType(1)
 
 
+class BooleanGt(BinaryOp):
+    def eval(self):
+        if isinstance(self._get_type(), ir.IntType):
+            i = self.builder.icmp_signed('>', self.left.eval(), self.right.eval())
+        elif isinstance(self._get_type(), ir.FloatType) or isinstance(self._get_type(), ir.DoubleType):
+            i = self.builder.fcmp_ordered('>', self.left.eval(), self.right.eval())
+        else:
+            i = self.builder.fcmp_ordered('>', self.left.eval(), self.right.eval())
+        return i
+
+    def _get_type(self):
+        return ir.IntType(1)
+
+
 class Assignment():
     def __init__(self, builder, module, spos, lvalue, expr):
         self.builder = builder
@@ -228,6 +242,17 @@ class AddAssignment(Assignment):
             ptr = self.module.get_global(self.lvalue.get_name())
         value = self.builder.load(ptr)
         res = self.builder.add(value, self.expr.eval())
+        self.builder.store(res, ptr)
+
+
+class SubAssignment(Assignment):
+    def eval(self):
+        name = self.lvalue.get_name()
+        ptr = check_name_in_scope(name)
+        if name is None:
+            ptr = self.module.get_global(self.lvalue.get_name())
+        value = self.builder.load(ptr)
+        res = self.builder.sub(value, self.expr.eval())
         self.builder.store(res, ptr)
 
 
@@ -619,6 +644,31 @@ class IfStatement():
             self.builder.position_at_start(el)
             self.el.eval()
             self.builder.branch(after)
+        self.builder.goto_block(after)
+        self.builder.position_at_start(after)
+
+
+class WhileStatement():
+    def __init__(self, builder, module, spos, boolexpr, loop):
+        self.builder = builder
+        self.module = module
+        self.spos = spos
+        self.boolexpr = boolexpr
+        self.loop = loop
+
+    def getsourcepos(self):
+        return self.spos
+
+    def eval(self):
+        bexpr = self.boolexpr.eval()
+        loop = self.builder.append_basic_block(self.module.get_unique_name("while"))
+        after = self.builder.append_basic_block(self.module.get_unique_name("after"))
+        self.builder.cbranch(bexpr, loop, after)
+        self.builder.goto_block(loop)
+        self.builder.position_at_start(loop)
+        self.loop.eval()
+        bexpr2 = self.boolexpr.eval()
+        self.builder.cbranch(bexpr2, loop, after)
         self.builder.goto_block(after)
         self.builder.position_at_start(after)
 
