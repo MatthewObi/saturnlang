@@ -12,7 +12,7 @@ with open('main.sat') as f:
 lexer = Lexer().get_lexer()
 tokens = lexer.lex(text_input)
 
-codegen = CodeGen()
+codegen = CodeGen('main.sat', opt_level=1)
 
 module = codegen.module
 builder = codegen.builder
@@ -22,8 +22,8 @@ pg.parse()
 parser = pg.get_parser()
 parser.parse(tokens).eval()
 
-codegen.create_ir()
-codegen.save_ir("output.ll")
+ir = codegen.create_ir()
+codegen.save_ir("output.ll", ir)
 
 os.system('llc -O2 -o main.s output.ll')
 print('llc -filetype=obj -O2 -o main.o output.ll')

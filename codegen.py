@@ -7,8 +7,10 @@ double = ir.DoubleType()
 void = ir.VoidType()
 
 class CodeGen():
-    def __init__(self):
+    def __init__(self, filename, opt_level):
         self.binding = binding
+        self.filename = filename
+        self.opt_level = opt_level
         self.binding.initialize()
         self.binding.initialize_native_target()
         self.binding.initialize_native_asmprinter()
@@ -18,7 +20,7 @@ class CodeGen():
 
     def _config_llvm(self):
         # Config LLVM
-        self.module = ir.Module(name='main.sat')
+        self.module = ir.Module(name=self.filename)
         self.module.triple = "x86_64-pc-windows-msvc"
         self.module.di_file = self.module.add_debug_info("DIFile", {
             "filename": "main.sat",
@@ -105,19 +107,29 @@ class CodeGen():
         # Create a LLVM module object from the IR
         llvm_ir = str(self.module)
         mod = self.binding.parse_assembly(llvm_ir)
+        mod.name = self.module.name
         mod.verify()
-        # Opt module
-        pmb = self.binding.PassManagerBuilder()
-        mpm = self.binding.ModulePassManager()
-        pmb.populate(mpm)
-        mpm.run(mod)
+        if self.opt_level > 0:
+            # Opt module
+            pmb = self.binding.PassManagerBuilder()
+            pmb.opt_level = self.opt_level
+            if pmb.opt_level < 2:
+                pmb.disable_unroll_loops = True
+            mpm = self.binding.ModulePassManager()
+            pmb.populate(mpm)
+            if mpm.run(mod):
+                print('opt ', self.module.name)
 
-        fpm = self.binding.FunctionPassManager(mod)
-        pmb.populate(fpm)
-        fpm.initialize()
-        fpm.finalize()
-        for f in mod.functions:
-            fpm.run(f)
+            # Opt functions
+            fpm = self.binding.FunctionPassManager(mod)
+            pmb.populate(fpm)
+            fpm.initialize()
+            for f in mod.functions:
+                if not fpm.run(f):
+                    print('noopt ', f.name)
+                else:
+                    print('opt ', f.name)
+            fpm.finalize()
 
         # Now add the module and make sure it is ready for execution
         self.engine.add_module(mod)
@@ -126,8 +138,8 @@ class CodeGen():
         return mod
 
     def create_ir(self):
-        self._compile_ir()
+        return self._compile_ir()
 
-    def save_ir(self, filename):
+    def save_ir(self, filename, ir):
         with open(filename, 'w') as output_file:
-            output_file.write(str(self.module))
+            output_file.write(str(ir).replace('<string>', self.filename))
