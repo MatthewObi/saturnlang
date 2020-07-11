@@ -1,7 +1,7 @@
 from rply import ParserGenerator, Token
 from ast import ( 
     Program, CodeBlock, Statement, ReturnStatement, 
-    Sum, Sub, Mul, Div, Print, 
+    Sum, Sub, Mul, Div, And, Or, Print, 
     Number, Integer, Integer64, Byte, StringLiteral, 
     FuncDecl, FuncDeclExtern, FuncArgList, FuncArg, GlobalVarDecl, VarDecl, VarDeclAssign, 
     LValue, FuncCall, Assignment, AddAssignment, SubAssignment, MulAssignment, 
@@ -14,7 +14,7 @@ class Parser():
         self.pg = ParserGenerator(
             # A list of all token names accepted by the parser.
             ['INT', 'LONGINT', 'BYTE', 'STRING', 'IDENT', 'TPRINT', 'DOT', 'TRETURN', 'LPAREN', 'RPAREN',
-             'SEMICOLON', 'ADD', 'SUB', 'MUL', 'DIV',
+             'SEMICOLON', 'ADD', 'SUB', 'MUL', 'DIV', 'AND', 'OR',
              'TFN', 'COLON', 'LBRACE', 'RBRACE', 'COMMA', 'EQ', 'CEQ', 'ADDEQ', 'SUBEQ', 'MULEQ',
              'TIF', 'TELSE', 'TWHILE',
              'BOOLEQ', 'BOOLNEQ', 'BOOLGT', 'TTRUE', 'TFALSE'],
@@ -57,8 +57,17 @@ class Parser():
             name = p[1]
             declargs = p[3]
             rtype = Token('IDENT', 'void')
-            block = p[5]
+            block = p[6]
             spos = p[0].getsourcepos()
+            return FuncDecl(self.builder, self.module, spos, name, rtype, block, declargs)
+
+        @self.pg.production('func_decl : TFN IDENT LPAREN decl_args RPAREN LBRACE RBRACE')
+        def func_decl_retvoid_empty(p):
+            name = p[1]
+            declargs = p[3]
+            rtype = Token('IDENT', 'void')
+            spos = p[0].getsourcepos()
+            block = CodeBlock(self.builder, self.module, spos, None)
             return FuncDecl(self.builder, self.module, spos, name, rtype, block, declargs)
 
         @self.pg.production('func_decl_extern : TFN IDENT LPAREN decl_args RPAREN COLON typeexpr SEMICOLON')
@@ -191,6 +200,8 @@ class Parser():
         @self.pg.production('expr : expr SUB expr')
         @self.pg.production('expr : expr MUL expr')
         @self.pg.production('expr : expr DIV expr')
+        @self.pg.production('expr : expr AND expr')
+        @self.pg.production('expr : expr OR expr')
         @self.pg.production('expr : expr BOOLEQ expr')
         @self.pg.production('expr : expr BOOLNEQ expr')
         @self.pg.production('expr : expr BOOLGT expr')
@@ -207,6 +218,10 @@ class Parser():
                 return Mul(self.builder, self.module, spos, left, right)
             elif operator.gettokentype() == 'DIV':
                 return Div(self.builder, self.module, spos, left, right)
+            elif operator.gettokentype() == 'AND':
+                return And(self.builder, self.module, spos, left, right)
+            elif operator.gettokentype() == 'OR':
+                return Or(self.builder, self.module, spos, left, right)
             elif operator.gettokentype() == 'BOOLEQ':
                 return BooleanEq(self.builder, self.module, spos, left, right)
             elif operator.gettokentype() == 'BOOLNEQ':

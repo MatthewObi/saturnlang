@@ -12,7 +12,7 @@ with open('main.sat') as f:
 lexer = Lexer().get_lexer()
 tokens = lexer.lex(text_input)
 
-codegen = CodeGen('main.sat', opt_level=1)
+codegen = CodeGen('main.sat', opt_level=0)
 
 module = codegen.module
 builder = codegen.builder

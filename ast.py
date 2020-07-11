@@ -173,6 +173,18 @@ class Div(BinaryOp):
         return i
 
 
+class And(BinaryOp):
+    def eval(self):
+        i = self.builder.and_(self.left.eval(), self.right.eval())
+        return i
+
+
+class Or(BinaryOp):
+    def eval(self):
+        i = self.builder.or_(self.left.eval(), self.right.eval())
+        return i
+
+
 class BooleanEq(BinaryOp):
     def eval(self):
         if isinstance(self._get_type(), ir.IntType):
@@ -284,7 +296,10 @@ class CodeBlock():
         self.builder = builder
         self.module = module
         self.spos = spos
-        self.stmts = [stmt]
+        if stmt is not None:
+            self.stmts = [stmt]
+        else:
+            self.stmts = []
 
     def getsourcepos(self):
         return self.spos
@@ -413,7 +428,7 @@ class FuncDecl():
         self.builder.position_at_start(block)
         self.block.eval()
         if not self.builder.block.is_terminated:
-            if isinstance(self.builder.function.type.return_type, ir.VoidType):
+            if isinstance(self.builder.function.function_type.return_type, ir.VoidType):
                 self.builder.ret_void()
             else:
                 self.builder.ret(ir.Constant(ir.IntType(32), 0))
@@ -638,7 +653,8 @@ class IfStatement():
         self.builder.goto_block(then)
         self.builder.position_at_start(then)
         self.then.eval()
-        self.builder.branch(after)
+        if not then.is_terminated:
+            self.builder.branch(after)
         if self.el is not None:
             self.builder.goto_block(el)
             self.builder.position_at_start(el)

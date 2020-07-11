@@ -9,6 +9,13 @@ fn nan(n: float64): float64;
 fn floorf(n: float32): float32;
 fn floor(n: float64): float64;
 */
+fn factorial(x: int): int { 
+    if(x == 1) {
+        return 1;
+    }
+    return x * factorial(x-1);
+}
+
 fn square(n: int): int {
     return n * n;
 }
@@ -26,11 +33,19 @@ fn main(): int {
         j = 2;
         i-=1;
     }
+    k := j & 1;
+    if(k == 0) {
+        printf("j is odd!\n");
+    } else {
+        printf("j is even!\n");
+    }
     if(len > 5) {
         printf("String is greater than 5 characters!\n");
     }
     printf(str);
     printf("length: %d\n", len);
-    printf("%d squared = %d", len, square(len));
+    printf("%d squared = %d\n", len, square(len));
+    printf("3! = %d\n", factorial(3));
+    printf("5! = %d", factorial(5));
     return 0;
 }
