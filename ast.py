@@ -185,6 +185,12 @@ class Or(BinaryOp):
         return i
 
 
+class Xor(BinaryOp):
+    def eval(self):
+        i = self.builder.xor(self.left.eval(), self.right.eval())
+        return i
+
+
 class BooleanEq(BinaryOp):
     def eval(self):
         if isinstance(self._get_type(), ir.IntType):
