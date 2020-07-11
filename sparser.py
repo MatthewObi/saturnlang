@@ -2,10 +2,11 @@ from rply import ParserGenerator, Token
 from ast import ( 
     Program, CodeBlock, Statement, ReturnStatement, 
     Sum, Sub, Mul, Div, And, Or, Xor, Print, 
-    Number, Integer, Integer64, Byte, StringLiteral, 
+    Number, Integer, Integer64, Float, Double, Byte, StringLiteral, 
     FuncDecl, FuncDeclExtern, FuncArgList, FuncArg, GlobalVarDecl, VarDecl, VarDeclAssign, 
     LValue, FuncCall, Assignment, AddAssignment, SubAssignment, MulAssignment, 
-    Boolean, BooleanEq, BooleanNeq, BooleanGt, IfStatement, WhileStatement
+    Boolean, BooleanEq, BooleanNeq, BooleanGte, BooleanGt, BooleanLte, BooleanLt, 
+    IfStatement, WhileStatement
 )
 
 
@@ -13,11 +14,12 @@ class Parser():
     def __init__(self, module, builder):
         self.pg = ParserGenerator(
             # A list of all token names accepted by the parser.
-            ['INT', 'LONGINT', 'BYTE', 'STRING', 'IDENT', 'TPRINT', 'DOT', 'TRETURN', 'LPAREN', 'RPAREN',
+            ['INT', 'LONGINT', 'BYTE', 'FLOAT', 'DOUBLE', 'STRING', 
+             'IDENT', 'TPRINT', 'DOT', 'TRETURN', 'LPAREN', 'RPAREN',
              'SEMICOLON', 'ADD', 'SUB', 'MUL', 'DIV', 'AND', 'OR', 'XOR',
              'TFN', 'COLON', 'LBRACE', 'RBRACE', 'COMMA', 'EQ', 'CEQ', 'ADDEQ', 'SUBEQ', 'MULEQ',
              'TIF', 'TELSE', 'TWHILE',
-             'BOOLEQ', 'BOOLNEQ', 'BOOLGT', 'TTRUE', 'TFALSE'],
+             'BOOLEQ', 'BOOLNEQ', 'BOOLGT', 'BOOLLT', 'BOOLGTE', 'BOOLLTE', 'TTRUE', 'TFALSE'],
 
              precedence=[
                 ('left', ['ADD', 'SUB']),
@@ -205,7 +207,10 @@ class Parser():
         @self.pg.production('expr : expr XOR expr')
         @self.pg.production('expr : expr BOOLEQ expr')
         @self.pg.production('expr : expr BOOLNEQ expr')
+        @self.pg.production('expr : expr BOOLGTE expr')
         @self.pg.production('expr : expr BOOLGT expr')
+        @self.pg.production('expr : expr BOOLLTE expr')
+        @self.pg.production('expr : expr BOOLLT expr')
         def expr(p):
             left = p[0]
             right = p[2]
@@ -229,8 +234,14 @@ class Parser():
                 return BooleanEq(self.builder, self.module, spos, left, right)
             elif operator.gettokentype() == 'BOOLNEQ':
                 return BooleanNeq(self.builder, self.module, spos, left, right)
+            elif operator.gettokentype() == 'BOOLGTE':
+                return BooleanGte(self.builder, self.module, spos, left, right)
             elif operator.gettokentype() == 'BOOLGT':
                 return BooleanGt(self.builder, self.module, spos, left, right)
+            elif operator.gettokentype() == 'BOOLLTE':
+                return BooleanLte(self.builder, self.module, spos, left, right)
+            elif operator.gettokentype() == 'BOOLLT':
+                return BooleanLt(self.builder, self.module, spos, left, right)
 
         @self.pg.production('expr : lvalue LPAREN args RPAREN')
         def expr_func_call(p):
@@ -276,6 +287,8 @@ class Parser():
         @self.pg.production('number : INT')
         @self.pg.production('number : LONGINT')
         @self.pg.production('number : BYTE')
+        @self.pg.production('number : FLOAT')
+        @self.pg.production('number : DOUBLE')
         def number(p):
             spos = p[0].getsourcepos()
             if p[0].gettokentype() == 'INT':
@@ -284,6 +297,10 @@ class Parser():
                 return Integer64(self.builder, self.module, spos, p[0].value)
             elif p[0].gettokentype() == 'BYTE':
                 return Byte(self.builder, self.module, spos, p[0].value)
+            elif p[0].gettokentype() == 'FLOAT':
+                return Float(self.builder, self.module, spos, p[0].value)
+            elif p[0].gettokentype() == 'DOUBLE':
+                return Double(self.builder, self.module, spos, p[0].value)
         
         @self.pg.production('expr : STRING')
         def expr_string(p):
@@ -303,9 +320,9 @@ class Parser():
             else:
                 return Boolean(self.builder, self.module, spos, False)
 
-        # @self.pg.error
-        # def error_handle(token):
-        #     raise ValueError("Ran into a %s where it wasn't expected. (%s)" % (token.gettokentype(), token.getsourcepos()))
+        @self.pg.error
+        def error_handle(token):
+            raise ValueError("Ran into a %s where it wasn't expected. (%s)" % (token.gettokentype(), token.getsourcepos()))
 
     def get_parser(self):
         return self.pg.build()

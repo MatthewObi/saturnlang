@@ -191,46 +191,115 @@ class Xor(BinaryOp):
         return i
 
 
-class BooleanEq(BinaryOp):
-    def eval(self):
-        if isinstance(self._get_type(), ir.IntType):
-            i = self.builder.icmp_signed('==', self.left.eval(), self.right.eval())
-        elif isinstance(self._get_type(), ir.FloatType) or isinstance(self._get_type(), ir.DoubleType):
-            i = self.builder.fcmp_ordered('==', self.left.eval(), self.right.eval())
-        else:
-            i = self.builder.fcmp_ordered('==', self.left.eval(), self.right.eval())
-        return i
+class BoolCmpOp(BinaryOp):
+    def getcmptype(self):
+        if self.right._get_type() == self.left._get_type():
+            self.lhs = self.left.eval()
+            self.rhs = self.right.eval()
+            return self.left._get_type()
+        if isinstance(self.left._get_type(), ir.DoubleType):
+            if isinstance(self.right._get_type(), ir.FloatType):
+                self.lhs = self.left.eval()
+                self.rhs = self.builder.fpext(self.right.eval(), ir.DoubleType())
+                return self.left._get_type()
+            if isinstance(self.right._get_type(), ir.IntType):
+                self.lhs = self.left.eval()
+                self.rhs = self.builder.sitofp(self.right.eval(), ir.DoubleType())
+                return self.left._get_type()
+        elif isinstance(self.left._get_type(), ir.IntType):
+            if isinstance(self.right._get_type(), ir.FloatType) or isinstance(self.right._get_type(), ir.DoubleType):
+                self.lhs = self.builder.sitofp(self.right.eval(), self.left._get_type())
+                self.rhs = self.right.eval()
+                return self.right._get_type()
+            elif isinstance(self.right._get_type(), ir.IntType):
+                if str(self.right._get_type()) == 'i1' or str(self.left._get_type()) == 'i1':
+                    raise RuntimeError("Cannot do comparison between booleans and integers. (%s,%s) (At %s)" % (self.left._get_type(), self.right._get_type(), self.spos))
+                if self.left._get_type().width > self.right._get_type().width:
+                    print('Warning: Automatic integer promotion for comparison (%s,%s) (At line %d, col %d)' % (self.left._get_type(), self.right._get_type(), self.spos.lineno, self.spos.colno))
+                    self.lhs = self.left.eval()
+                    self.rhs = self.builder.sext(self.right.eval(), self.left._get_type())
+                    return self.left._get_type()
+                else:
+                    print('Warning: Automatic integer promotion for comparison (%s,%s) (At %s)' % (self.left._get_type(), self.right._get_type(), self.spos))
+                    self.rhs = self.right.eval()
+                    self.lhs = self.builder.sext(self.left.eval(), self.right._get_type())
+                    return self.right._get_type()
+        raise RuntimeError("Ouch. Types for comparison cannot be matched. (%s,%s) (At %s)" % (self.left._get_type(), self.right._get_type(), self.spos))
 
     def _get_type(self):
         return ir.IntType(1)
 
 
-class BooleanNeq(BinaryOp):
+class BooleanEq(BoolCmpOp):
     def eval(self):
-        if isinstance(self._get_type(), ir.IntType):
-            i = self.builder.icmp_signed('!=', self.left.eval(), self.right.eval())
-        elif isinstance(self._get_type(), ir.FloatType) or isinstance(self._get_type(), ir.DoubleType):
-            i = self.builder.fcmp_ordered('!=', self.left.eval(), self.right.eval())
+        cmpty = self.getcmptype()
+        if isinstance(cmpty, ir.IntType):
+            i = self.builder.icmp_signed('==', self.lhs, self.rhs)
+        elif isinstance(cmpty, ir.FloatType) or isinstance(cmpty, ir.DoubleType):
+            i = self.builder.fcmp_ordered('==', self.lhs, self.rhs)
         else:
-            i = self.builder.fcmp_ordered('!=', self.left.eval(), self.right.eval())
+            i = self.builder.fcmp_ordered('==', self.lhs, self.rhs)
         return i
 
-    def _get_type(self):
-        return ir.IntType(1)
 
-
-class BooleanGt(BinaryOp):
+class BooleanNeq(BoolCmpOp):
     def eval(self):
-        if isinstance(self._get_type(), ir.IntType):
-            i = self.builder.icmp_signed('>', self.left.eval(), self.right.eval())
-        elif isinstance(self._get_type(), ir.FloatType) or isinstance(self._get_type(), ir.DoubleType):
-            i = self.builder.fcmp_ordered('>', self.left.eval(), self.right.eval())
+        cmpty = self.getcmptype()
+        if isinstance(cmpty, ir.IntType):
+            i = self.builder.icmp_signed('!=', self.lhs, self.rhs)
+        elif isinstance(cmpty, ir.FloatType) or isinstance(cmpty, ir.DoubleType):
+            i = self.builder.fcmp_ordered('!=', self.lhs, self.rhs)
         else:
-            i = self.builder.fcmp_ordered('>', self.left.eval(), self.right.eval())
+            i = self.builder.fcmp_ordered('!=', self.lhs, self.rhs)
         return i
 
-    def _get_type(self):
-        return ir.IntType(1)
+
+class BooleanGt(BoolCmpOp):
+    def eval(self):
+        cmpty = self.getcmptype()
+        if isinstance(cmpty, ir.IntType):
+            i = self.builder.icmp_signed('>', self.lhs, self.rhs)
+        elif isinstance(cmpty, ir.FloatType) or isinstance(cmpty, ir.DoubleType):
+            i = self.builder.fcmp_ordered('>', self.lhs, self.rhs)
+        else:
+            i = self.builder.fcmp_ordered('>', self.lhs, self.rhs)
+        return i
+
+
+class BooleanLt(BoolCmpOp):
+    def eval(self):
+        cmpty = self.getcmptype()
+        if isinstance(cmpty, ir.IntType):
+            i = self.builder.icmp_signed('<', self.lhs, self.rhs)
+        elif isinstance(cmpty, ir.FloatType) or isinstance(cmpty, ir.DoubleType):
+            i = self.builder.fcmp_ordered('<', self.lhs, self.rhs)
+        else:
+            i = self.builder.fcmp_ordered('<', self.lhs, self.rhs)
+        return i
+
+
+class BooleanGte(BoolCmpOp):
+    def eval(self):
+        cmpty = self.getcmptype()
+        if isinstance(cmpty, ir.IntType):
+            i = self.builder.icmp_signed('>=', self.lhs, self.rhs)
+        elif isinstance(cmpty, ir.FloatType) or isinstance(cmpty, ir.DoubleType):
+            i = self.builder.fcmp_ordered('>=', self.lhs, self.rhs)
+        else:
+            i = self.builder.fcmp_ordered('>=', self.lhs, self.rhs)
+        return i
+
+
+class BooleanLte(BoolCmpOp):
+    def eval(self):
+        cmpty = self.getcmptype()
+        if isinstance(cmpty, ir.IntType):
+            i = self.builder.icmp_signed('<=', self.lhs, self.rhs)
+        elif isinstance(cmpty, ir.FloatType) or isinstance(cmpty, ir.DoubleType):
+            i = self.builder.fcmp_ordered('<=', self.lhs, self.rhs)
+        else:
+            i = self.builder.fcmp_ordered('<=', self.lhs, self.rhs)
+        return i
 
 
 class Assignment():
@@ -502,16 +571,16 @@ class VarDecl():
         ptr = self.builder.alloca(vartype, name=self.name.value)
         scope = get_inner_scope()
         scope[self.name.value] = ptr
-        dbglv = self.module.add_debug_info("DILocalVariable", {
-            "name":self.name.value, 
-            "arg":0, 
-            "scope":self.builder.dbgsub
-        })
-        dbgexpr = self.module.add_debug_info("DIExpression", {})
-        self.builder.call(
-            self.module.get_global("llvm.dbg.addr"), 
-            [ptr, dbglv, dbgexpr]
-        )
+        # dbglv = self.module.add_debug_info("DILocalVariable", {
+        #     "name":self.name.value, 
+        #     "arg":0, 
+        #     "scope":self.builder.dbgsub
+        # })
+        # dbgexpr = self.module.add_debug_info("DIExpression", {})
+        # self.builder.call(
+        #     self.module.get_global("llvm.dbg.addr"), 
+        #     [ptr, dbglv, dbgexpr]
+        # )
         if self.initval is not None:
             self.builder.store(self.initval.eval(), ptr)
         return ptr
@@ -565,6 +634,8 @@ class LValue(Expr):
         ptr = check_name_in_scope(name)
         if ptr is None:
             ptr = self.module.get_global(name)
+        if ptr.type.is_pointer:
+            return ptr.type.pointee
         return ptr.type
 
     def get_name(self):

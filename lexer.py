@@ -37,7 +37,6 @@ class Lexer():
         self.lexer.add('SEMICOLON', r'\;')
         self.lexer.add('CC', r'\:\:')
         self.lexer.add('COLON', r'\:')
-        self.lexer.add('DOT', r'\.')
         self.lexer.add('COMMA', r',')
         # Mod Operators
         self.lexer.add('ADDEQ', r'\+=')
@@ -45,8 +44,6 @@ class Lexer():
         self.lexer.add('MULEQ', r'\*=')
         self.lexer.add('DIVEQ', r'\/=')
         # Operators
-        self.lexer.add('ADD', r'\+')
-        self.lexer.add('SUB', r'\-')
         self.lexer.add('MUL', r'\*')
         self.lexer.add('DIV', r'\/')
         
@@ -73,11 +70,15 @@ class Lexer():
         self.lexer.add('IDENT', r'[_A-Za-z]\w*')
         
         # Number
-        self.lexer.add('LONGINT', r'\d+L')
-        self.lexer.add('BYTE', r'\d+b')
-        self.lexer.add('INT', r'\d+')
-        self.lexer.add('FLOAT', r'[+-]?([0-9]+([.][0-9]*)?|[.][0-9]+)f')
-        self.lexer.add('DOUBLE', r'[+-]?([0-9]+([.][0-9]*)?|[.][0-9]+)')
+        self.lexer.add('FLOAT', r'[+-]?([0-9]+(\.[0-9]*)|\.[0-9]+)f')
+        self.lexer.add('DOUBLE', r'[+-]?([0-9]+([.][0-9]*)|\.[0-9]+)')
+        self.lexer.add('LONGINT', r'[+-]?\d+L')
+        self.lexer.add('BYTE', r'[+-]?\d+b')
+        self.lexer.add('INT', r'[+-]?\d+')
+        
+        self.lexer.add('DOT', r'\.')
+        self.lexer.add('ADD', r'\+')
+        self.lexer.add('SUB', r'\-')
 
         # String literal
         self.lexer.add('CSTRING', r'c\"(([^\"\\]|\\.)*)\"')
