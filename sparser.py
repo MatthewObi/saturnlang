@@ -1,7 +1,7 @@
 from rply import ParserGenerator, Token
 from ast import ( 
     Program, CodeBlock, Statement, ReturnStatement, 
-    Sum, Sub, Mul, Div, And, Or, Print, 
+    Sum, Sub, Mul, Div, And, Or, Xor, Print, 
     Number, Integer, Integer64, Byte, StringLiteral, 
     FuncDecl, FuncDeclExtern, FuncArgList, FuncArg, GlobalVarDecl, VarDecl, VarDeclAssign, 
     LValue, FuncCall, Assignment, AddAssignment, SubAssignment, MulAssignment, 
@@ -14,7 +14,7 @@ class Parser():
         self.pg = ParserGenerator(
             # A list of all token names accepted by the parser.
             ['INT', 'LONGINT', 'BYTE', 'STRING', 'IDENT', 'TPRINT', 'DOT', 'TRETURN', 'LPAREN', 'RPAREN',
-             'SEMICOLON', 'ADD', 'SUB', 'MUL', 'DIV', 'AND', 'OR',
+             'SEMICOLON', 'ADD', 'SUB', 'MUL', 'DIV', 'AND', 'OR', 'XOR',
              'TFN', 'COLON', 'LBRACE', 'RBRACE', 'COMMA', 'EQ', 'CEQ', 'ADDEQ', 'SUBEQ', 'MULEQ',
              'TIF', 'TELSE', 'TWHILE',
              'BOOLEQ', 'BOOLNEQ', 'BOOLGT', 'TTRUE', 'TFALSE'],
@@ -181,20 +181,20 @@ class Parser():
         def stmt_if(p):
             return p[0]
 
-        @self.pg.production('stmt : TWHILE LPAREN expr RPAREN LBRACE block RBRACE')
+        @self.pg.production('stmt : TWHILE expr LBRACE block RBRACE')
         def stmt_while(p):
             spos = p[0].getsourcepos()
-            return WhileStatement(self.builder, self.module, spos, p[2], p[5])
+            return WhileStatement(self.builder, self.module, spos, p[1], p[3])
 
-        @self.pg.production('if_stmt : TIF LPAREN expr RPAREN LBRACE block RBRACE')
+        @self.pg.production('if_stmt : TIF expr LBRACE block RBRACE')
         def if_stmt(p):
             spos = p[0].getsourcepos()
-            return IfStatement(self.builder, self.module, spos, p[2], p[5])
+            return IfStatement(self.builder, self.module, spos, p[1], p[3])
 
-        @self.pg.production('if_stmt : TIF LPAREN expr RPAREN LBRACE block RBRACE TELSE LBRACE block RBRACE')
+        @self.pg.production('if_stmt : TIF expr LBRACE block RBRACE TELSE LBRACE block RBRACE')
         def if_stmt_else(p):
             spos = p[0].getsourcepos()
-            return IfStatement(self.builder, self.module, spos, p[2], p[5], el=p[9])
+            return IfStatement(self.builder, self.module, spos, p[1], p[3], el=p[7])
 
         @self.pg.production('expr : expr ADD expr')
         @self.pg.production('expr : expr SUB expr')
@@ -202,6 +202,7 @@ class Parser():
         @self.pg.production('expr : expr DIV expr')
         @self.pg.production('expr : expr AND expr')
         @self.pg.production('expr : expr OR expr')
+        @self.pg.production('expr : expr XOR expr')
         @self.pg.production('expr : expr BOOLEQ expr')
         @self.pg.production('expr : expr BOOLNEQ expr')
         @self.pg.production('expr : expr BOOLGT expr')
@@ -222,6 +223,8 @@ class Parser():
                 return And(self.builder, self.module, spos, left, right)
             elif operator.gettokentype() == 'OR':
                 return Or(self.builder, self.module, spos, left, right)
+            elif operator.gettokentype() == 'XOR':
+                return Xor(self.builder, self.module, spos, left, right)
             elif operator.gettokentype() == 'BOOLEQ':
                 return BooleanEq(self.builder, self.module, spos, left, right)
             elif operator.gettokentype() == 'BOOLNEQ':
