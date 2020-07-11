@@ -1,0 +1,5 @@
+package cstring;
+
+fn strlen(str: cstring): int;
+fn strcmp(lhs: cstring, rhs: cstring): int;
+fn strcpy(dest: cstring, src: cstring): cstring;

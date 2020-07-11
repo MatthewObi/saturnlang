@@ -1,14 +1,7 @@
-fn strlen(str: cstring): int;
-/*
-fn strcmp(lhs: cstring, rhs: cstring): int;
-fn strcpy(dest: cstring, src: cstring): cstring;
+package main;
+import cstring;
+import cmath;
 
-fn abs(n: int): int;
-fn nanf(n: float32): float32;
-fn nan(n: float64): float64;
-fn floorf(n: float32): float32;
-fn floor(n: float64): float64;
-*/
 fn factorial(x: int): int { 
     if x < 2 {
         return 1;
@@ -25,7 +18,8 @@ fn main(): int {
     len := strlen(str);
     i := 10;
     j := 2;
-    f := 1.5;
+    f := -1.5;
+    f = floor(f);
     if f > 0 {
         f = 2.0;
     }

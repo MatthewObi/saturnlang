@@ -366,6 +366,40 @@ class Program():
             stmt.eval()
 
 
+class PackageDecl():
+    def __init__(self, builder, module, spos, lvalue):
+        self.builder = builder
+        self.module = module
+        self.spos = spos
+        self.lvalue = lvalue
+
+    def eval(self):
+        pass
+
+
+class ImportDecl():
+    def __init__(self, builder, module, spos, lvalue):
+        self.builder = builder
+        self.module = module
+        self.spos = spos
+        self.lvalue = lvalue
+
+    def eval(self):
+        from sparser import Parser
+        from lexer import Lexer
+        text_input = ""
+        with open('./packages/' + self.lvalue.get_name() + '/main.sat') as f:
+            text_input = f.read()
+
+        lexer = Lexer().get_lexer()
+        tokens = lexer.lex(text_input)
+        pg = Parser(self.module, self.builder)
+        pg.parse()
+        parser = pg.get_parser()
+        parser.parse(tokens).eval()
+
+
+
 class CodeBlock():
     def __init__(self, builder, module, spos, stmt):
         self.builder = builder

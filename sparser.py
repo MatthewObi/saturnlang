@@ -1,6 +1,7 @@
 from rply import ParserGenerator, Token
 from ast import ( 
     Program, CodeBlock, Statement, ReturnStatement, 
+    PackageDecl, ImportDecl,
     Sum, Sub, Mul, Div, And, Or, Xor, Print, 
     Number, Integer, Integer64, Float, Double, Byte, StringLiteral, 
     FuncDecl, FuncDeclExtern, FuncArgList, FuncArg, GlobalVarDecl, VarDecl, VarDeclAssign, 
@@ -14,7 +15,8 @@ class Parser():
     def __init__(self, module, builder):
         self.pg = ParserGenerator(
             # A list of all token names accepted by the parser.
-            ['INT', 'LONGINT', 'BYTE', 'FLOAT', 'DOUBLE', 'STRING', 
+            ['TPACKAGE', 'TIMPORT',
+             'INT', 'LONGINT', 'BYTE', 'FLOAT', 'DOUBLE', 'STRING', 
              'IDENT', 'TPRINT', 'DOT', 'TRETURN', 'LPAREN', 'RPAREN',
              'SEMICOLON', 'ADD', 'SUB', 'MUL', 'DIV', 'AND', 'OR', 'XOR',
              'TFN', 'COLON', 'LBRACE', 'RBRACE', 'COMMA', 'EQ', 'CEQ', 'ADDEQ', 'SUBEQ', 'MULEQ',
@@ -42,6 +44,8 @@ class Parser():
         @self.pg.production('gstmt : func_decl')
         @self.pg.production('gstmt : func_decl_extern')
         @self.pg.production('gstmt : gvar_decl')
+        @self.pg.production('gstmt : pack_decl')
+        @self.pg.production('gstmt : import_decl')
         def gstmt(p):
            return p[0]
 
@@ -114,6 +118,16 @@ class Parser():
             initval = p[4]
             spos = p[0].getsourcepos()
             return GlobalVarDecl(self.builder, self.module, spos, name, vtype, initval)
+
+        @self.pg.production('pack_decl : TPACKAGE lvalue SEMICOLON')
+        def pack_decl(p):
+            spos = p[0].getsourcepos()
+            return PackageDecl(self.builder, self.module, spos, p[1])
+
+        @self.pg.production('import_decl : TIMPORT lvalue SEMICOLON')
+        def pack_decl(p):
+            spos = p[0].getsourcepos()
+            return ImportDecl(self.builder, self.module, spos, p[1])
 
         @self.pg.production('block : block stmt')
         @self.pg.production('block : stmt')
