@@ -61,9 +61,6 @@ class CodeGen():
             "size": 8,
             "encoding": ir.DIToken("DW_ATE_boolean")
         })
-        # func_type = ir.FunctionType(int32, [], False)
-        # base_func = ir.Function(self.module, func_type, name="main")
-        # block = base_func.append_basic_block(name="entry")
         self.builder = ir.IRBuilder()
 
     def _create_execution_engine(self):
@@ -106,7 +103,7 @@ class CodeGen():
         """
         # Create a LLVM module object from the IR
         llvm_ir = str(self.module)
-        mod = self.binding.parse_assembly(llvm_ir)
+        mod = self.binding.parse_assembly(llvm_ir.replace('target triple = ', 'source_filename = "%s"\ntarget triple = ' % self.filename))
         mod.name = self.module.name
         mod.verify()
         if self.opt_level > 0:
@@ -142,4 +139,4 @@ class CodeGen():
 
     def save_ir(self, filename, ir):
         with open(filename, 'w') as output_file:
-            output_file.write(str(ir).replace('<string>', self.filename))
+            output_file.write(str(ir))

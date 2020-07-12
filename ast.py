@@ -1,5 +1,6 @@
 from llvmlite import ir
 from rply import Token
+from typesys import Type, types
 
 SCOPE = []
 
@@ -33,7 +34,7 @@ class Expr():
         return self.spos
 
     def _get_type(self):
-        return ir.VoidType()
+        return types['void'].irtype
 
 class Number(Expr):
     def __init__(self, builder, module, spos, value):
@@ -44,12 +45,12 @@ class Number(Expr):
         self.type = self._get_type()
     
     def _get_type(self):
-        return ir.FloatType()
+        return types['int'].irtype
 
 
 class Integer(Number):
     def _get_type(self):
-        return ir.IntType(32)
+        return types['int'].irtype
 
     def eval(self):
         i = ir.Constant(self.type, int(self.value))
@@ -58,7 +59,7 @@ class Integer(Number):
 
 class Integer64(Number):
     def _get_type(self):
-        return ir.IntType(64)
+        return types['int64'].irtype
 
     def eval(self):
         val = self.value.strip('L')
@@ -68,7 +69,7 @@ class Integer64(Number):
 
 class Byte(Number):
     def _get_type(self):
-        return ir.IntType(8)
+        return types['int8'].irtype
     
     def eval(self):
         i = ir.Constant(self.type, int(self.value))
@@ -77,7 +78,7 @@ class Byte(Number):
 
 class Float(Number):
     def _get_type(self):
-        return ir.FloatType()
+        return types['float32'].irtype
 
     def eval(self):
         i = ir.Constant(self.type, float(self.value))
@@ -86,7 +87,7 @@ class Float(Number):
 
 class Double(Number):
     def _get_type(self):
-        return ir.DoubleType()
+        return types['float64'].irtype
 
     def eval(self):
         i = ir.Constant(self.type, float(self.value))
@@ -102,7 +103,7 @@ class StringLiteral(Expr):
         self.type = ir.IntType(8).as_pointer()
 
     def _get_type(self):
-        return ir.IntType(8).as_pointer()
+        return types['cstring'].irtype
 
     def get_reference(self):
         return self.value
@@ -128,7 +129,7 @@ class Boolean(Expr):
         self.value = value
 
     def _get_type(self):
-        return ir.IntType(1)
+        return types['bool'].irtype
 
     def eval(self):
         i = ir.Constant(ir.IntType(1), self.value)
@@ -139,7 +140,7 @@ class BinaryOp(Expr):
     def _get_type(self):
         if self.left._get_type() == self.right._get_type():
             return self.left._get_type()
-        return ir.IntType(32)
+        return types['int'].irtype
 
     def __init__(self, builder, module, spos, left, right):
         self.builder = builder
@@ -227,7 +228,7 @@ class BoolCmpOp(BinaryOp):
         raise RuntimeError("Ouch. Types for comparison cannot be matched. (%s,%s) (At %s)" % (self.left._get_type(), self.right._get_type(), self.spos))
 
     def _get_type(self):
-        return ir.IntType(1)
+        return types['bool'].irtype
 
 
 class BooleanEq(BoolCmpOp):
@@ -325,7 +326,7 @@ class AddAssignment(Assignment):
     def eval(self):
         name = self.lvalue.get_name()
         ptr = check_name_in_scope(name)
-        if name is None:
+        if ptr is None:
             ptr = self.module.get_global(self.lvalue.get_name())
         value = self.builder.load(ptr)
         res = self.builder.add(value, self.expr.eval())
@@ -336,7 +337,7 @@ class SubAssignment(Assignment):
     def eval(self):
         name = self.lvalue.get_name()
         ptr = check_name_in_scope(name)
-        if name is None:
+        if ptr is None:
             ptr = self.module.get_global(self.lvalue.get_name())
         value = self.builder.load(ptr)
         res = self.builder.sub(value, self.expr.eval())
@@ -347,7 +348,7 @@ class MulAssignment(Assignment):
     def eval(self):
         name = self.lvalue.get_name()
         ptr = check_name_in_scope(name)
-        if name is None:
+        if ptr is None:
             ptr = self.module.get_global(self.lvalue.get_name())
         value = self.builder.load(ptr)
         res = self.builder.mul(value, self.expr.eval())
@@ -426,25 +427,9 @@ class CodeBlock():
 
 
 def get_type_by_name(builder, module, name):
-    if name == "void":
-        return ir.VoidType()
-    if name == "int32":
-        return ir.IntType(32)
-    if name == "int64":
-        return ir.IntType(64)
-    if name == "int":
-        return ir.IntType(32)
-    if name == "bool":
-        return ir.IntType(1)
-    if name == "float32":
-        return ir.FloatType()
-    if name == "float64":
-        return ir.DoubleType()
-    if name == "float16":
-        return ir.HalfType()
-    if name == "cstring":
-        return ir.IntType(8).as_pointer()
-    return ir.IntType(32)
+    if name in types.keys():
+        return types[name].irtype
+    return types["int"].irtype
 
 def from_type_get_name(builder, module, t):
     if t == ir.IntType(32):
