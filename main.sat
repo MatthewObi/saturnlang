@@ -20,7 +20,7 @@ fn main(): int {
     j := 2;
     f := -1.5;
     f = floor(f);
-    if f > 0 {
+    if f > 0 && f < 3 {
         f = 2.0;
     }
     while i > 0 {

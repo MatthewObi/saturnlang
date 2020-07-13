@@ -192,6 +192,18 @@ class Xor(BinaryOp):
         return i
 
 
+class BoolAnd(BinaryOp):
+    def eval(self):
+        i = self.builder.and_(self.left.eval(), self.right.eval())
+        return i
+
+
+class BoolOr(BinaryOp):
+    def eval(self):
+        i = self.builder.or_(self.left.eval(), self.right.eval())
+        return i
+
+
 class BoolCmpOp(BinaryOp):
     def getcmptype(self):
         if self.right._get_type() == self.left._get_type():
@@ -375,7 +387,7 @@ class PackageDecl():
         self.lvalue = lvalue
 
     def eval(self):
-        pass
+        self.builder.package = self.lvalue.get_name()
 
 
 class ImportDecl():

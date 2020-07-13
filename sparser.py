@@ -2,7 +2,7 @@ from rply import ParserGenerator, Token
 from ast import ( 
     Program, CodeBlock, Statement, ReturnStatement, 
     PackageDecl, ImportDecl,
-    Sum, Sub, Mul, Div, And, Or, Xor, Print, 
+    Sum, Sub, Mul, Div, And, Or, Xor, BoolAnd, BoolOr, Print, 
     Number, Integer, Integer64, Float, Double, Byte, StringLiteral, 
     FuncDecl, FuncDeclExtern, FuncArgList, FuncArg, GlobalVarDecl, VarDecl, VarDeclAssign, 
     LValue, FuncCall, Assignment, AddAssignment, SubAssignment, MulAssignment, 
@@ -18,12 +18,15 @@ class Parser():
             ['TPACKAGE', 'TIMPORT',
              'INT', 'LONGINT', 'BYTE', 'FLOAT', 'DOUBLE', 'STRING', 
              'IDENT', 'TPRINT', 'DOT', 'TRETURN', 'LPAREN', 'RPAREN',
-             'SEMICOLON', 'ADD', 'SUB', 'MUL', 'DIV', 'AND', 'OR', 'XOR',
+             'SEMICOLON', 'ADD', 'SUB', 'MUL', 'DIV', 'AND', 'OR', 'XOR', 'BOOLAND', 'BOOLOR',
              'TFN', 'COLON', 'LBRACE', 'RBRACE', 'COMMA', 'EQ', 'CEQ', 'ADDEQ', 'SUBEQ', 'MULEQ',
              'TIF', 'TELSE', 'TWHILE',
              'BOOLEQ', 'BOOLNEQ', 'BOOLGT', 'BOOLLT', 'BOOLGTE', 'BOOLLTE', 'TTRUE', 'TFALSE'],
 
              precedence=[
+                ('left', ['BOOLOR']),
+                ('left', ['BOOLAND']),
+                ('left', ['BOOLEQ', 'BOOLNEQ', 'BOOLGT', 'BOOLLT', 'BOOLGTE', 'BOOLLTE']),
                 ('left', ['ADD', 'SUB']),
                 ('left', ['MUL', 'DIV'])
             ]
@@ -125,7 +128,7 @@ class Parser():
             return PackageDecl(self.builder, self.module, spos, p[1])
 
         @self.pg.production('import_decl : TIMPORT lvalue SEMICOLON')
-        def pack_decl(p):
+        def import_decl(p):
             spos = p[0].getsourcepos()
             return ImportDecl(self.builder, self.module, spos, p[1])
 
@@ -219,6 +222,8 @@ class Parser():
         @self.pg.production('expr : expr AND expr')
         @self.pg.production('expr : expr OR expr')
         @self.pg.production('expr : expr XOR expr')
+        @self.pg.production('expr : expr BOOLAND expr')
+        @self.pg.production('expr : expr BOOLOR expr')
         @self.pg.production('expr : expr BOOLEQ expr')
         @self.pg.production('expr : expr BOOLNEQ expr')
         @self.pg.production('expr : expr BOOLGTE expr')
@@ -256,6 +261,10 @@ class Parser():
                 return BooleanLte(self.builder, self.module, spos, left, right)
             elif operator.gettokentype() == 'BOOLLT':
                 return BooleanLt(self.builder, self.module, spos, left, right)
+            elif operator.gettokentype() == 'BOOLAND':
+                return BoolAnd(self.builder, self.module, spos, left, right)
+            elif operator.gettokentype() == 'BOOLOR':
+                return BoolOr(self.builder, self.module, spos, left, right)
 
         @self.pg.production('expr : lvalue LPAREN args RPAREN')
         def expr_func_call(p):
