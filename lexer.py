@@ -27,6 +27,10 @@ class Lexer():
         # Parenthesis
         self.lexer.add('LPAREN', r'\(')
         self.lexer.add('RPAREN', r'\)')
+        # Bracket
+        self.lexer.add('LBRACKET', r'\[')
+        self.lexer.add('RBRACKET', r'\]')
+
         # Braces
         self.lexer.add('LBRACE', r'\{')
         self.lexer.add('RBRACE', r'\}')

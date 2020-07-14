@@ -25,6 +25,9 @@ def pop_inner_scope():
     SCOPE.pop(-1)
 
 class Expr():
+    """
+    An expression. Base class for integer and float constants.
+    """
     def __init__(self, builder, module, spos):
         self.builder = builder
         self.module = module
@@ -33,23 +36,29 @@ class Expr():
     def getsourcepos(self):
         return self.spos
 
-    def _get_type(self):
+    def get_ir_type(self):
         return types['void'].irtype
 
 class Number(Expr):
+    """
+    A number constant. Base class for integer and float constants.
+    """
     def __init__(self, builder, module, spos, value):
         self.builder = builder
         self.module = module
         self.spos = spos
         self.value = value
-        self.type = self._get_type()
+        self.type = self.get_ir_type()
     
-    def _get_type(self):
+    def get_ir_type(self):
         return types['int'].irtype
 
 
 class Integer(Number):
-    def _get_type(self):
+    """
+    A 32-bit integer constant. (int)
+    """
+    def get_ir_type(self):
         return types['int'].irtype
 
     def eval(self):
@@ -58,7 +67,10 @@ class Integer(Number):
 
 
 class Integer64(Number):
-    def _get_type(self):
+    """
+    A 64-bit integer constant. (int64)
+    """
+    def get_ir_type(self):
         return types['int64'].irtype
 
     def eval(self):
@@ -68,8 +80,11 @@ class Integer64(Number):
 
 
 class Byte(Number):
-    def _get_type(self):
-        return types['int8'].irtype
+    """
+    An 8-bit unsigned integer constant. (byte)
+    """
+    def get_ir_type(self):
+        return types['byte'].irtype
     
     def eval(self):
         i = ir.Constant(self.type, int(self.value))
@@ -77,7 +92,10 @@ class Byte(Number):
 
 
 class Float(Number):
-    def _get_type(self):
+    """
+    A single-precision float constant. (float32)
+    """
+    def get_ir_type(self):
         return types['float32'].irtype
 
     def eval(self):
@@ -86,7 +104,10 @@ class Float(Number):
 
 
 class Double(Number):
-    def _get_type(self):
+    """
+    A double-precision float constant. (float64)
+    """
+    def get_ir_type(self):
         return types['float64'].irtype
 
     def eval(self):
@@ -95,6 +116,9 @@ class Double(Number):
 
 
 class StringLiteral(Expr):
+    """
+    A null terminated string literal. (cstring)
+    """
     def __init__(self, builder, module, spos, value):
         self.builder = builder
         self.module = module
@@ -102,7 +126,7 @@ class StringLiteral(Expr):
         self.value = value
         self.type = ir.IntType(8).as_pointer()
 
-    def _get_type(self):
+    def get_ir_type(self):
         return types['cstring'].irtype
 
     def get_reference(self):
@@ -122,13 +146,16 @@ class StringLiteral(Expr):
 
 
 class Boolean(Expr):
+    """
+    A boolean constant. (bool)
+    """
     def __init__(self, builder, module, spos, value: bool):
         self.builder = builder
         self.module = module
         self.spos = spos
         self.value = value
 
-    def _get_type(self):
+    def get_ir_type(self):
         return types['bool'].irtype
 
     def eval(self):
@@ -137,9 +164,13 @@ class Boolean(Expr):
 
 
 class BinaryOp(Expr):
-    def _get_type(self):
-        if self.left._get_type() == self.right._get_type():
-            return self.left._get_type()
+    """
+    A base class for binary operations.\n
+    left OP right
+    """
+    def get_ir_type(self):
+        if self.left.get_ir_type() == self.right.get_ir_type():
+            return self.left.get_ir_type()
         return types['int'].irtype
 
     def __init__(self, builder, module, spos, left, right):
@@ -151,54 +182,90 @@ class BinaryOp(Expr):
 
 
 class Sum(BinaryOp):
+    """
+    An add binary operation.\n
+    left + right
+    """
     def eval(self):
         i = self.builder.add(self.left.eval(), self.right.eval())
         return i
 
 
 class Sub(BinaryOp):
+    """
+    A subtraction binary operation.\n
+    left - right
+    """
     def eval(self):
         i = self.builder.sub(self.left.eval(), self.right.eval())
         return i
 
 
 class Mul(BinaryOp):
+    """
+    A multiply binary operation.\n
+    left * right
+    """
     def eval(self):
         i = self.builder.mul(self.left.eval(), self.right.eval())
         return i
 
 
 class Div(BinaryOp):
+    """
+    A division binary operation.\n
+    left / right
+    """
     def eval(self):
         i = self.builder.sdiv(self.left.eval(), self.right.eval())
         return i
 
 
 class Mod(BinaryOp):
+    """
+    A modulus binary operation.\n
+    left % right
+    """
     def eval(self):
         i = self.builder.srem(self.left.eval(), self.right.eval())
         return i
 
 
 class And(BinaryOp):
+    """
+    An and bitwise binary operation.\n
+    left & right
+    """
     def eval(self):
         i = self.builder.and_(self.left.eval(), self.right.eval())
         return i
 
 
 class Or(BinaryOp):
+    """
+    An or bitwise binary operation.\n
+    left | right
+    """
     def eval(self):
         i = self.builder.or_(self.left.eval(), self.right.eval())
         return i
 
 
 class Xor(BinaryOp):
+    """
+    An xor bitwise binary operation.\n
+    left ^ right
+    """
     def eval(self):
         i = self.builder.xor(self.left.eval(), self.right.eval())
         return i
 
 
 class BoolAnd(BinaryOp):
+    """
+    Boolean and '&&' operator.\n
+    left && right
+    """
     def eval(self):
         begin = self.builder.basic_block
         rhs = self.builder.append_basic_block(self.module.get_unique_name("land.rhs"))
@@ -218,6 +285,10 @@ class BoolAnd(BinaryOp):
 
 
 class BoolOr(BinaryOp):
+    """
+    Boolean and '||' operator.\n
+    left || right
+    """
     def eval(self):
         begin = self.builder.basic_block
         rhs = self.builder.append_basic_block(self.module.get_unique_name("lor.rhs"))
@@ -237,45 +308,52 @@ class BoolOr(BinaryOp):
 
 
 class BoolCmpOp(BinaryOp):
+    """
+    Base class for boolean comparison binary operations.
+    """
     def getcmptype(self):
-        if self.right._get_type() == self.left._get_type():
+        if self.right.get_ir_type() == self.left.get_ir_type():
             self.lhs = self.left.eval()
             self.rhs = self.right.eval()
-            return self.left._get_type()
-        if isinstance(self.left._get_type(), ir.DoubleType):
-            if isinstance(self.right._get_type(), ir.FloatType):
+            return self.left.get_ir_type()
+        if isinstance(self.left.get_ir_type(), ir.DoubleType):
+            if isinstance(self.right.get_ir_type(), ir.FloatType):
                 self.lhs = self.left.eval()
                 self.rhs = self.builder.fpext(self.right.eval(), ir.DoubleType())
-                return self.left._get_type()
-            if isinstance(self.right._get_type(), ir.IntType):
+                return self.left.get_ir_type()
+            if isinstance(self.right.get_ir_type(), ir.IntType):
                 self.lhs = self.left.eval()
                 self.rhs = self.builder.sitofp(self.right.eval(), ir.DoubleType())
-                return self.left._get_type()
-        elif isinstance(self.left._get_type(), ir.IntType):
-            if isinstance(self.right._get_type(), ir.FloatType) or isinstance(self.right._get_type(), ir.DoubleType):
-                self.lhs = self.builder.sitofp(self.right.eval(), self.left._get_type())
+                return self.left.get_ir_type()
+        elif isinstance(self.left.get_ir_type(), ir.IntType):
+            if isinstance(self.right.get_ir_type(), ir.FloatType) or isinstance(self.right.get_ir_type(), ir.DoubleType):
+                self.lhs = self.builder.sitofp(self.right.eval(), self.left.get_ir_type())
                 self.rhs = self.right.eval()
-                return self.right._get_type()
-            elif isinstance(self.right._get_type(), ir.IntType):
-                if str(self.right._get_type()) == 'i1' or str(self.left._get_type()) == 'i1':
-                    raise RuntimeError("Cannot do comparison between booleans and integers. (%s,%s) (At %s)" % (self.left._get_type(), self.right._get_type(), self.spos))
-                if self.left._get_type().width > self.right._get_type().width:
-                    print('Warning: Automatic integer promotion for comparison (%s,%s) (At line %d, col %d)' % (self.left._get_type(), self.right._get_type(), self.spos.lineno, self.spos.colno))
+                return self.right.get_ir_type()
+            elif isinstance(self.right.get_ir_type(), ir.IntType):
+                if str(self.right.get_ir_type()) == 'i1' or str(self.left.get_ir_type()) == 'i1':
+                    raise RuntimeError("Cannot do comparison between booleans and integers. (%s,%s) (At %s)" % (self.left.get_ir_type(), self.right.get_ir_type(), self.spos))
+                if self.left.get_ir_type().width > self.right.get_ir_type().width:
+                    print('Warning: Automatic integer promotion for comparison (%s,%s) (At line %d, col %d)' % (self.left.get_ir_type(), self.right.get_ir_type(), self.spos.lineno, self.spos.colno))
                     self.lhs = self.left.eval()
-                    self.rhs = self.builder.sext(self.right.eval(), self.left._get_type())
-                    return self.left._get_type()
+                    self.rhs = self.builder.sext(self.right.eval(), self.left.get_ir_type())
+                    return self.left.get_ir_type()
                 else:
-                    print('Warning: Automatic integer promotion for comparison (%s,%s) (At %s)' % (self.left._get_type(), self.right._get_type(), self.spos))
+                    print('Warning: Automatic integer promotion for comparison (%s,%s) (At %s)' % (self.left.get_ir_type(), self.right.get_ir_type(), self.spos))
                     self.rhs = self.right.eval()
-                    self.lhs = self.builder.sext(self.left.eval(), self.right._get_type())
-                    return self.right._get_type()
-        raise RuntimeError("Ouch. Types for comparison cannot be matched. (%s,%s) (At %s)" % (self.left._get_type(), self.right._get_type(), self.spos))
+                    self.lhs = self.builder.sext(self.left.eval(), self.right.get_ir_type())
+                    return self.right.get_ir_type()
+        raise RuntimeError("Ouch. Types for comparison cannot be matched. (%s,%s) (At %s)" % (self.left.get_ir_type(), self.right.get_ir_type(), self.spos))
 
-    def _get_type(self):
+    def get_ir_type(self):
         return types['bool'].irtype
 
 
 class BooleanEq(BoolCmpOp):
+    """
+    Comparison equal '==' operator.\n
+    left == right
+    """
     def eval(self):
         cmpty = self.getcmptype()
         if isinstance(cmpty, ir.IntType):
@@ -288,6 +366,10 @@ class BooleanEq(BoolCmpOp):
 
 
 class BooleanNeq(BoolCmpOp):
+    """
+    Comparison not equal '!=' operator.\n
+    left != right
+    """
     def eval(self):
         cmpty = self.getcmptype()
         if isinstance(cmpty, ir.IntType):
@@ -300,6 +382,10 @@ class BooleanNeq(BoolCmpOp):
 
 
 class BooleanGt(BoolCmpOp):
+    """
+    Comparison greater than '>' operator.\n
+    left > right
+    """
     def eval(self):
         cmpty = self.getcmptype()
         if isinstance(cmpty, ir.IntType):
@@ -312,6 +398,10 @@ class BooleanGt(BoolCmpOp):
 
 
 class BooleanLt(BoolCmpOp):
+    """
+    Comparison less than '<' operator.\n
+    left < right
+    """
     def eval(self):
         cmpty = self.getcmptype()
         if isinstance(cmpty, ir.IntType):
@@ -324,6 +414,10 @@ class BooleanLt(BoolCmpOp):
 
 
 class BooleanGte(BoolCmpOp):
+    """
+    Comparison greater than or equal '>=' operator.\n
+    left >= right
+    """
     def eval(self):
         cmpty = self.getcmptype()
         if isinstance(cmpty, ir.IntType):
@@ -336,6 +430,10 @@ class BooleanGte(BoolCmpOp):
 
 
 class BooleanLte(BoolCmpOp):
+    """
+    Comparison greater than or equal '<=' operator.\n
+    left <= right
+    """
     def eval(self):
         cmpty = self.getcmptype()
         if isinstance(cmpty, ir.IntType):
@@ -348,6 +446,10 @@ class BooleanLte(BoolCmpOp):
 
 
 class Assignment():
+    """
+    Assignment statement to a defined variable.\n
+    lvalue = expr;
+    """
     def __init__(self, builder, module, spos, lvalue, expr):
         self.builder = builder
         self.module = module
@@ -367,6 +469,10 @@ class Assignment():
 
 
 class AddAssignment(Assignment):
+    """
+    Add assignment statement to a defined variable.\n
+    lvalue += expr; (lvalue = lvalue + expr;)
+    """
     def eval(self):
         name = self.lvalue.get_name()
         ptr = check_name_in_scope(name)
@@ -378,6 +484,10 @@ class AddAssignment(Assignment):
 
 
 class SubAssignment(Assignment):
+    """
+    Sub assignment statement to a defined variable.\n
+    lvalue -= expr; (lvalue = lvalue - expr;)
+    """
     def eval(self):
         name = self.lvalue.get_name()
         ptr = check_name_in_scope(name)
@@ -389,6 +499,10 @@ class SubAssignment(Assignment):
 
 
 class MulAssignment(Assignment):
+    """
+    Multiply assignment statement to a defined variable.\n
+    lvalue *= expr; (lvalue = lvalue * expr;)
+    """
     def eval(self):
         name = self.lvalue.get_name()
         ptr = check_name_in_scope(name)
@@ -400,6 +514,9 @@ class MulAssignment(Assignment):
 
 
 class Program():
+    """
+    Base node for AST
+    """
     def __init__(self, stmt):
         self.stmts = [stmt]
 
@@ -423,6 +540,9 @@ class PackageDecl():
 
 
 class ImportDecl():
+    """
+    A statement that reads and imports another package.
+    """
     def __init__(self, builder, module, spos, lvalue):
         self.builder = builder
         self.module = module
@@ -446,6 +566,9 @@ class ImportDecl():
 
 
 class CodeBlock():
+    """
+    A block of multiple statements with an enclosing scope.
+    """
     def __init__(self, builder, module, spos, stmt):
         self.builder = builder
         self.module = module
@@ -471,6 +594,9 @@ class CodeBlock():
 
 
 def get_type_by_name(builder, module, name):
+    """
+    Searches the types dictionary and returns the irtype of the semantic type of that name.
+    """
     if name in types.keys():
         return types[name].irtype
     return types["int"].irtype
@@ -488,12 +614,16 @@ def from_type_get_name(builder, module, t):
 
 
 class FuncArg():
+    """
+    An definition of a function parameter.\n
+    name : rtype, 
+    """
     def __init__(self, builder, module, spos, name, atype):
         self.builder = builder
         self.module = module
         self.spos = spos
         self.name = name
-        self.atype = get_type_by_name(builder, module, str(atype.value))
+        self.atype = atype.get_ir_type()
 
     def getsourcepos(self):
         return self.spos
@@ -506,6 +636,9 @@ class FuncArg():
 
 
 class FuncArgList():
+    """
+    A list of arguments for a function.
+    """
     def __init__(self, builder, module, spos, arg=None):
         if arg is not None:
             self.args = [arg]
@@ -536,6 +669,10 @@ class FuncArgList():
 
 
 class FuncDecl():
+    """
+    A declaration and definition of a function.\n
+    fn name(decl_args): rtype { block }
+    """
     def __init__(self, builder, module, spos, name, rtype, block, decl_args):
         self.builder = builder
         self.module = module
@@ -550,7 +687,7 @@ class FuncDecl():
 
     def eval(self):
         push_new_scope()
-        rtype = get_type_by_name(self.builder, self.module, self.rtype.value)
+        rtype = self.rtype.get_ir_type()
         argtypes = self.decl_args.get_arg_type_list()
         fnty = ir.FunctionType(rtype, argtypes)
         fn = ir.Function(self.module, fnty, self.name.value)
@@ -574,6 +711,10 @@ class FuncDecl():
 
 
 class FuncDeclExtern():
+    """
+    A declaration of an externally defined function.\n
+    fn name(decl_args) : rtype; 
+    """
     def __init__(self, builder, module, spos, name, rtype, decl_args):
         self.builder = builder
         self.module = module
@@ -587,7 +728,7 @@ class FuncDeclExtern():
 
     def eval(self):
         push_new_scope()
-        rtype = get_type_by_name(self.builder, self.module, self.rtype.value)
+        rtype = self.rtype.get_ir_type()
         argtypes = self.decl_args.get_arg_type_list()
         fnty = ir.FunctionType(rtype, argtypes)
         fn = ir.Function(self.module, fnty, self.name.value)
@@ -596,6 +737,11 @@ class FuncDeclExtern():
 
 
 class GlobalVarDecl():
+    """
+    A global variable declaration statement.\n
+    name : vtype;\n
+    name : vtype = initval;
+    """
     def __init__(self, builder, module, spos, name, vtype, initval=None):
         self.name = name
         self.vtype = vtype
@@ -618,6 +764,11 @@ class GlobalVarDecl():
 
 
 class VarDecl():
+    """
+    A local varible declaration statement.\n
+    name : vtype;\n
+    name : vtype = initval;
+    """
     def __init__(self, builder, module, spos, name, vtype, initval=None):
         self.name = name
         self.vtype = vtype
@@ -630,7 +781,7 @@ class VarDecl():
         return self.spos
 
     def eval(self):
-        vartype = get_type_by_name(self.builder, self.module, str(self.vtype.value))
+        vartype = self.vtype.get_ir_type()
         ptr = self.builder.alloca(vartype, name=self.name.value)
         scope = get_inner_scope()
         scope[self.name.value] = ptr
@@ -650,6 +801,10 @@ class VarDecl():
 
 
 class VarDeclAssign():
+    """
+    An automatic variable declaration and assignment statement. Uses type inference.\n
+    name := initval;
+    """
     def __init__(self, builder, module, spos, name, initval):
         self.name = name
         self.builder = builder
@@ -661,7 +816,7 @@ class VarDeclAssign():
         return self.spos
 
     def eval(self):
-        vartype = self.initval._get_type()
+        vartype = self.initval.get_ir_type()
         ptr = self.builder.alloca(vartype, name=self.name.value)
         scope = get_inner_scope()
         scope[self.name.value] = ptr
@@ -683,7 +838,32 @@ class VarDeclAssign():
         return ptr
 
 
+class TypeExpr():
+    """
+    Expression representing a Saturn type.
+    """
+    def __init__(self, builder, module, spos, lvalue):
+        self.builder = builder
+        self.module = module
+        self.spos = spos
+        self.lvalue = lvalue
+        self.type = types[lvalue.get_name()]
+        self.base_type = types[lvalue.get_name()]
+
+    def get_ir_type(self):
+        return self.type.irtype
+
+    def add_pointer_qualifier(self):
+        self.type = self.type.get_pointer_to()
+
+    def add_array_qualifier(self, size):
+        self.type = self.type.get_array_of(int(size.value))
+
+
 class LValue(Expr):
+    """
+    Expression representing a named value in memory.
+    """
     def __init__(self, builder, module, spos, name, lhs=None):
         self.builder = builder
         self.module = module
@@ -692,7 +872,7 @@ class LValue(Expr):
         self.name = name
         self.value = None
 
-    def _get_type(self):
+    def get_ir_type(self):
         name = self.get_name()
         ptr = check_name_in_scope(name)
         if ptr is None:
@@ -716,6 +896,13 @@ class LValue(Expr):
                 s += "."
                 i = i + 1
         return s
+
+    def get_pointer(self):
+        name = self.get_name()
+        ptr = check_name_in_scope(name)
+        if ptr is None:
+            ptr = self.module.get_global(name)
+        return ptr
     
     def eval(self):
         name = self.get_name()
@@ -731,6 +918,10 @@ class LValue(Expr):
 
 
 class FuncCall(Expr):
+    """
+    Function call expression.\n
+    lvalue(args)
+    """
     def __init__(self, builder, module, spos, lvalue, args):
         self.builder = builder
         self.module = module
@@ -738,7 +929,7 @@ class FuncCall(Expr):
         self.lvalue = lvalue
         self.args = args
 
-    def _get_type(self):
+    def get_ir_type(self):
         return self.module.get_global(self.lvalue.get_name()).ftype.return_type
 
     def eval(self):
@@ -760,6 +951,10 @@ class Statement():
 
 
 class ReturnStatement(Statement):
+    """
+    Return statement.\n
+    return value;
+    """
     def eval(self):
         if self.value is not None:
             self.builder.ret(self.value.eval())
@@ -768,6 +963,11 @@ class ReturnStatement(Statement):
 
 
 class IfStatement():
+    """
+    If statement.\n
+    if boolexpr { then }\n
+    if boolexpr { then } else { el }
+    """
     def __init__(self, builder, module, spos, boolexpr, then, elseif=[], el=None):
         self.builder = builder
         self.module = module
@@ -805,6 +1005,10 @@ class IfStatement():
 
 
 class WhileStatement():
+    """
+    While loop statement.\n
+    while boolexpr { loop }
+    """
     def __init__(self, builder, module, spos, boolexpr, loop):
         self.builder = builder
         self.module = module

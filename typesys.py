@@ -1,6 +1,14 @@
 from llvmlite import ir
 
 class Type():
+    """
+    A semantic type in Saturn.\n
+    name: identifier for type.\n
+    irtype: the underlying llvm type of this semantic type.\n
+    tclass: a category for how the type is treated semantically.\n
+    qualifiers: adds special qualifiers to the base type (pointers, arrays, const, immut...)\n
+    traits: special instances that change how a type is treated by the compiler.
+    """
     def __init__(self, name, irtype, tclass, qualifiers=[], traits=[]):
         self.name = name
         self.tclass = tclass
@@ -9,7 +17,7 @@ class Type():
         self.traits = traits
 
     def make_array(self, size):
-        self.qualifiers.append(('array', 5))
+        self.qualifiers.append(('array', size))
 
     def get_array_of(self, size):
         return Type(self.name, 
@@ -21,12 +29,26 @@ class Type():
 
     def make_pointer(self):
         self.qualifiers.append(('ptr',))
+        self.irtype = self.irtype.as_pointer()
 
     def get_pointer_to(self):
         return Type(self.name, 
             self.irtype.as_pointer(), 
             self.tclass, 
             qualifiers=self.qualifiers + [('ptr',)],
+            traits=self.traits
+        )
+
+    def get_deference_of(self):
+        ql = self.qualifiers.copy()
+        ql.reverse()
+        for i in range(len(ql)):
+            if ql[i][0] == 'ptr':
+                ql.pop(i)
+        return Type(self.name, 
+            self.irtype.pointee, 
+            self.tclass, 
+            qualifiers=ql,
             traits=self.traits
         )
 
@@ -74,8 +96,20 @@ class Type():
     def is_unsigned(self):
         return self.tclass == 'uint'
 
-    def is_integer_class(self):
+    def is_integer(self):
         return self.tclass == 'int' or self.tclass == 'uint'
+
+    def is_float(self):
+        return self.tclass == 'float'
+
+    def is_number(self):
+        return self.is_float() or self.is_integer()
+
+    def is_string(self):
+        return self.tclass == 'string'
+
+    def is_iterable(self):
+        return self.is_array() or self.is_string()
 
     def __str__(self):
         s = str()
@@ -111,6 +145,9 @@ types = {
 }
 
 class FuncType():
+    """
+    A semantic function type in Saturn.
+    """
     def __init__(self, name, rtype, atypes=[]):
         self.name = name
         self.rtype = rtype

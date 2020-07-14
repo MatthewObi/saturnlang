@@ -3,7 +3,7 @@ from ast import (
     Program, CodeBlock, Statement, ReturnStatement, 
     PackageDecl, ImportDecl,
     Sum, Sub, Mul, Div, Mod, And, Or, Xor, BoolAnd, BoolOr, Print, 
-    Number, Integer, Integer64, Float, Double, Byte, StringLiteral, 
+    Number, Integer, Integer64, Float, Double, Byte, StringLiteral, TypeExpr,
     FuncDecl, FuncDeclExtern, FuncArgList, FuncArg, GlobalVarDecl, VarDecl, VarDeclAssign, 
     LValue, FuncCall, Assignment, AddAssignment, SubAssignment, MulAssignment, 
     Boolean, BooleanEq, BooleanNeq, BooleanGte, BooleanGt, BooleanLte, BooleanLt, 
@@ -17,7 +17,7 @@ class Parser():
             # A list of all token names accepted by the parser.
             ['TPACKAGE', 'TIMPORT',
              'INT', 'LONGINT', 'BYTE', 'FLOAT', 'DOUBLE', 'STRING', 
-             'IDENT', 'TPRINT', 'DOT', 'TRETURN', 'LPAREN', 'RPAREN',
+             'IDENT', 'TPRINT', 'DOT', 'TRETURN', 'LPAREN', 'RPAREN', 'LBRACKET', 'RBRACKET',
              'SEMICOLON', 'ADD', 'SUB', 'MUL', 'DIV', 'MOD', 'AND', 'OR', 'XOR', 'BOOLAND', 'BOOLOR',
              'TFN', 'COLON', 'LBRACE', 'RBRACE', 'COMMA', 'EQ', 'CEQ', 'ADDEQ', 'SUBEQ', 'MULEQ',
              'TIF', 'TELSE', 'TWHILE',
@@ -192,9 +192,22 @@ class Parser():
             spos = p[0].getsourcepos()
             return MulAssignment(self.builder, self.module, spos, p[0], p[2])
 
-        @self.pg.production('typeexpr : IDENT')
+        @self.pg.production('typeexpr : lvalue')
+        @self.pg.production('typeexpr : MUL typeexpr')
+        @self.pg.production('typeexpr : LBRACKET INT RBRACKET typeexpr')
         def typeexpr(p):
-            return p[0]
+            spos = p[0].getsourcepos()
+            if len(p) == 1:
+                return TypeExpr(self.builder, self.module, spos, p[0])
+            else:
+                if p[0].gettokentype() == 'MUL':
+                    p[1].add_pointer_qualifier()
+                    return p[1]
+                else:
+                    size = p[1]
+                    p[3].add_array_qualifier(size)
+                    return p[3]
+
 
         @self.pg.production('stmt : if_stmt')
         def stmt_if(p):
