@@ -79,6 +79,7 @@ class Lexer():
         self.lexer.add('DOT', r'\.')
         self.lexer.add('ADD', r'\+')
         self.lexer.add('SUB', r'\-')
+        self.lexer.add('MOD', r'\%')
 
         # String literal
         self.lexer.add('CSTRING', r'c\"(([^\"\\]|\\.)*)\"')

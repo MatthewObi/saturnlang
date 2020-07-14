@@ -2,7 +2,7 @@ from rply import ParserGenerator, Token
 from ast import ( 
     Program, CodeBlock, Statement, ReturnStatement, 
     PackageDecl, ImportDecl,
-    Sum, Sub, Mul, Div, And, Or, Xor, BoolAnd, BoolOr, Print, 
+    Sum, Sub, Mul, Div, Mod, And, Or, Xor, BoolAnd, BoolOr, Print, 
     Number, Integer, Integer64, Float, Double, Byte, StringLiteral, 
     FuncDecl, FuncDeclExtern, FuncArgList, FuncArg, GlobalVarDecl, VarDecl, VarDeclAssign, 
     LValue, FuncCall, Assignment, AddAssignment, SubAssignment, MulAssignment, 
@@ -18,7 +18,7 @@ class Parser():
             ['TPACKAGE', 'TIMPORT',
              'INT', 'LONGINT', 'BYTE', 'FLOAT', 'DOUBLE', 'STRING', 
              'IDENT', 'TPRINT', 'DOT', 'TRETURN', 'LPAREN', 'RPAREN',
-             'SEMICOLON', 'ADD', 'SUB', 'MUL', 'DIV', 'AND', 'OR', 'XOR', 'BOOLAND', 'BOOLOR',
+             'SEMICOLON', 'ADD', 'SUB', 'MUL', 'DIV', 'MOD', 'AND', 'OR', 'XOR', 'BOOLAND', 'BOOLOR',
              'TFN', 'COLON', 'LBRACE', 'RBRACE', 'COMMA', 'EQ', 'CEQ', 'ADDEQ', 'SUBEQ', 'MULEQ',
              'TIF', 'TELSE', 'TWHILE',
              'BOOLEQ', 'BOOLNEQ', 'BOOLGT', 'BOOLLT', 'BOOLGTE', 'BOOLLTE', 'TTRUE', 'TFALSE'],
@@ -28,7 +28,7 @@ class Parser():
                 ('left', ['BOOLAND']),
                 ('left', ['BOOLEQ', 'BOOLNEQ', 'BOOLGT', 'BOOLLT', 'BOOLGTE', 'BOOLLTE']),
                 ('left', ['ADD', 'SUB']),
-                ('left', ['MUL', 'DIV'])
+                ('left', ['MUL', 'DIV', 'MOD'])
             ]
         )
         self.module = module
@@ -219,6 +219,7 @@ class Parser():
         @self.pg.production('expr : expr SUB expr')
         @self.pg.production('expr : expr MUL expr')
         @self.pg.production('expr : expr DIV expr')
+        @self.pg.production('expr : expr MOD expr')
         @self.pg.production('expr : expr AND expr')
         @self.pg.production('expr : expr OR expr')
         @self.pg.production('expr : expr XOR expr')
@@ -243,6 +244,8 @@ class Parser():
                 return Mul(self.builder, self.module, spos, left, right)
             elif operator.gettokentype() == 'DIV':
                 return Div(self.builder, self.module, spos, left, right)
+            elif operator.gettokentype() == 'MOD':
+                return Mod(self.builder, self.module, spos, left, right)
             elif operator.gettokentype() == 'AND':
                 return And(self.builder, self.module, spos, left, right)
             elif operator.gettokentype() == 'OR':

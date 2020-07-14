@@ -174,6 +174,12 @@ class Div(BinaryOp):
         return i
 
 
+class Mod(BinaryOp):
+    def eval(self):
+        i = self.builder.srem(self.left.eval(), self.right.eval())
+        return i
+
+
 class And(BinaryOp):
     def eval(self):
         i = self.builder.and_(self.left.eval(), self.right.eval())
@@ -194,14 +200,40 @@ class Xor(BinaryOp):
 
 class BoolAnd(BinaryOp):
     def eval(self):
-        i = self.builder.and_(self.left.eval(), self.right.eval())
-        return i
+        begin = self.builder.basic_block
+        rhs = self.builder.append_basic_block(self.module.get_unique_name("land.rhs"))
+        end = self.builder.append_basic_block(self.module.get_unique_name("land.end"))
+        bool1 = self.left.eval()
+        self.builder.cbranch(bool1, rhs, end)
+        self.builder.goto_block(rhs)
+        self.builder.position_at_start(rhs)
+        bool2 = self.right.eval()
+        self.builder.branch(end)
+        self.builder.goto_block(end)
+        self.builder.position_at_start(end)
+        phi = self.builder.phi(types["bool"].irtype, 'land')
+        phi.add_incoming(bool1, begin)
+        phi.add_incoming(bool2, rhs)
+        return phi
 
 
 class BoolOr(BinaryOp):
     def eval(self):
-        i = self.builder.or_(self.left.eval(), self.right.eval())
-        return i
+        begin = self.builder.basic_block
+        rhs = self.builder.append_basic_block(self.module.get_unique_name("lor.rhs"))
+        end = self.builder.append_basic_block(self.module.get_unique_name("lor.end"))
+        bool1 = self.left.eval()
+        self.builder.cbranch(bool1, end, rhs)
+        self.builder.goto_block(rhs)
+        self.builder.position_at_start(rhs)
+        bool2 = self.right.eval()
+        self.builder.branch(end)
+        self.builder.goto_block(end)
+        self.builder.position_at_start(end)
+        phi = self.builder.phi(types["bool"].irtype, 'lor')
+        phi.add_incoming(bool1, begin)
+        phi.add_incoming(bool2, rhs)
+        return phi
 
 
 class BoolCmpOp(BinaryOp):

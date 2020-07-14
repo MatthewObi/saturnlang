@@ -3,7 +3,7 @@ import cstring;
 import cmath;
 
 fn factorial(x: int): int { 
-    if x < 2 {
+    if x == 1 || x == 0 {
         return 1;
     }
     return x * factorial(x - 1);
@@ -31,7 +31,7 @@ fn main(): int {
         j = 2;
         i-=1;
     }
-    k := j & 1;
+    k := j % 2;
     if k == 0 {
         printf("j is even!\n");
     } else {
