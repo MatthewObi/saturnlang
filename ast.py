@@ -552,15 +552,23 @@ class ImportDecl():
     def eval(self):
         from sparser import Parser
         from lexer import Lexer
-        text_input = ""
+        from cachedmodule import CachedModule, cachedmods
+
         path = './packages/' + self.lvalue.get_name() + '/main.sat'
-        with open(path) as f:
-            text_input = f.read()
+        if path not in cachedmods.keys():
+            text_input = ""
+            with open(path) as f:
+                text_input = f.read()
+            
+            cmod = CachedModule(path, text_input)
+            cachedmods[path] = cmod
+            
+        cmod = cachedmods[path]
 
         lexer = Lexer().get_lexer()
-        tokens = lexer.lex(text_input)
+        tokens = lexer.lex(cmod.text_input)
 
-        self.builder.filestack.append(text_input)
+        self.builder.filestack.append(cmod.text_input)
         self.builder.filestack_idx += 1
 
         self.module.filestack.append(path)

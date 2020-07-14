@@ -368,6 +368,11 @@ class Parser():
         def error_handle(token):
             text_input = self.builder.filestack[self.builder.filestack_idx]
             lines = text_input.splitlines()
+            if token.getsourcepos() is None:
+                raise RuntimeError("%s (?:?) Ran into a(n) %s where it wasn't expected." % (
+                    self.module.filestack[self.module.filestack_idx],
+                    token.gettokentype(), 
+                ))
             lineno = token.getsourcepos().lineno
             if lineno > 1:
                 line1 = lines[lineno - 2]
@@ -376,7 +381,7 @@ class Parser():
             else:
                 line1 = lines[lineno - 1]
                 print("%s\n%s^" % (line1, "~" * (token.getsourcepos().colno - 1)))
-            raise ValueError("%s (%d:%d) Ran into a(n) %s where it wasn't expected." % (
+            raise RuntimeError("%s (%d:%d) Ran into a(n) %s where it wasn't expected." % (
                 self.module.filestack[self.module.filestack_idx],
                 token.getsourcepos().lineno,
                 token.getsourcepos().colno,

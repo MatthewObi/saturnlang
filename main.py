@@ -1,6 +1,7 @@
 from lexer import Lexer
 from sparser import Parser
 from codegen import CodeGen
+from cachedmodule import CachedModule, cachedmods
 
 import sys
 import os
@@ -15,39 +16,52 @@ for f in glob.glob("*.sat"):
     files.append(f)
 
 for ff in files:
+    print("Building %s..." % ff)
     evalfiles = files.copy()
     evalfiles.remove(ff)
 
-    text_input = ""
-    with open(ff) as f:
-        text_input = f.read()
+    if ff not in cachedmods.keys():
+        text_input = ""
+        with open(ff) as f:
+            text_input = f.read()
+        
+        cff = CachedModule(ff, text_input)
+        cachedmods[ff] = cff
+
+    cmod = cachedmods[ff]
 
     lexer = Lexer().get_lexer()
-    tokens = lexer.lex(text_input)
+    tokens = lexer.lex(cmod.text_input)
 
     codegen = CodeGen(ff, opt_level=opt_level)
 
     module = codegen.module
     builder = codegen.builder
 
-    builder.filestack = [text_input]
+    builder.filestack = [cmod.text_input]
     builder.filestack_idx = 0
 
     module.filestack = [ff]
     module.filestack_idx = 0
 
-    pg = Parser(module, builder)
+    pg = Parser(module, builder, False)
     pg.parse()
 
     for evalf in evalfiles:
-        ev_text_input = ""
-        with open(evalf) as f:
-            ev_text_input = f.read()
+        if evalf not in cachedmods.keys():
+            ev_text_input = ""
+            with open(evalf) as f:
+                ev_text_input = f.read()
+            
+            cff = CachedModule(ff, ev_text_input)
+            cachedmods[evalf] = cff
 
-        ev_lexer = Lexer().get_lexer()
-        ev_tokens = ev_lexer.lex(ev_text_input)
+        ev_mod = cachedmods[evalf]
 
-        builder.filestack.append(ev_text_input)
+        evlexer = Lexer().get_lexer()
+        evtokens = evlexer.lex(ev_mod.text_input)
+
+        builder.filestack.append(ev_mod.text_input)
         builder.filestack_idx += 1
 
         module.filestack.append(evalf)
@@ -56,7 +70,7 @@ for ff in files:
         ev_pg = Parser(module, builder, True)
         ev_pg.parse()
         ev_parser = ev_pg.get_parser()
-        ev_parser.parse(ev_tokens).eval()
+        ev_parser.parse(evtokens).eval()
 
         builder.filestack.pop(-1)
         builder.filestack_idx -= 1
