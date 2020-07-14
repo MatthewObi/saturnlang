@@ -12,7 +12,7 @@ from ast import (
 
 
 class Parser():
-    def __init__(self, module, builder):
+    def __init__(self, module, builder, decl_mode=False):
         self.pg = ParserGenerator(
             # A list of all token names accepted by the parser.
             ['TPACKAGE', 'TIMPORT',
@@ -33,6 +33,7 @@ class Parser():
         )
         self.module = module
         self.builder = builder
+        self.decl_mode = decl_mode
 
     def parse(self):
         @self.pg.production('program : program gstmt')
@@ -59,7 +60,9 @@ class Parser():
             rtype = p[6]
             block = p[8]
             spos = p[0].getsourcepos()
-            return FuncDecl(self.builder, self.module, spos, name, rtype, block, declargs)
+            if not self.decl_mode:
+                return FuncDecl(self.builder, self.module, spos, name, rtype, block, declargs)
+            return FuncDeclExtern(self.builder, self.module, spos, name, rtype, declargs)
 
         @self.pg.production('func_decl : TFN IDENT LPAREN decl_args RPAREN LBRACE block RBRACE')
         def func_decl_retvoid(p):
@@ -68,7 +71,9 @@ class Parser():
             rtype = Token('IDENT', 'void')
             block = p[6]
             spos = p[0].getsourcepos()
-            return FuncDecl(self.builder, self.module, spos, name, rtype, block, declargs)
+            if not self.decl_mode:
+                return FuncDecl(self.builder, self.module, spos, name, rtype, block, declargs)
+            return FuncDeclExtern(self.builder, self.module, spos, name, rtype, declargs)
 
         @self.pg.production('func_decl : TFN IDENT LPAREN decl_args RPAREN LBRACE RBRACE')
         def func_decl_retvoid_empty(p):
@@ -361,7 +366,22 @@ class Parser():
 
         @self.pg.error
         def error_handle(token):
-            raise ValueError("Ran into a %s where it wasn't expected. (%s)" % (token.gettokentype(), token.getsourcepos()))
+            text_input = self.builder.filestack[self.builder.filestack_idx]
+            lines = text_input.splitlines()
+            lineno = token.getsourcepos().lineno
+            if lineno > 1:
+                line1 = lines[lineno - 2]
+                line2 = lines[lineno - 1]
+                print("%s\n%s\n%s^" % (line1, line2, "~" * (token.getsourcepos().colno - 1)))
+            else:
+                line1 = lines[lineno - 1]
+                print("%s\n%s^" % (line1, "~" * (token.getsourcepos().colno - 1)))
+            raise ValueError("%s (%d:%d) Ran into a(n) %s where it wasn't expected." % (
+                self.module.filestack[self.module.filestack_idx],
+                token.getsourcepos().lineno,
+                token.getsourcepos().colno,
+                token.gettokentype(), 
+            ))
 
     def get_parser(self):
         return self.pg.build()

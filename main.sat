@@ -2,17 +2,6 @@ package main;
 import cstring;
 import cmath;
 
-fn factorial(x: int): int { 
-    if x == 1 || x == 0 {
-        return 1;
-    }
-    return x * factorial(x - 1);
-}
-
-fn square(n: int): int {
-    return n * n;
-}
-
 fn main(): int {
     arrofints : [4]int;
     ptrtoint : *int;

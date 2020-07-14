@@ -553,13 +553,28 @@ class ImportDecl():
         from sparser import Parser
         from lexer import Lexer
         text_input = ""
-        with open('./packages/' + self.lvalue.get_name() + '/main.sat') as f:
+        path = './packages/' + self.lvalue.get_name() + '/main.sat'
+        with open(path) as f:
             text_input = f.read()
 
         lexer = Lexer().get_lexer()
         tokens = lexer.lex(text_input)
+
+        self.builder.filestack.append(text_input)
+        self.builder.filestack_idx += 1
+
+        self.module.filestack.append(path)
+        self.module.filestack_idx += 1
+
         pg = Parser(self.module, self.builder)
         pg.parse()
+
+        self.builder.filestack.pop(-1)
+        self.builder.filestack_idx -= 1
+
+        self.module.filestack.pop(-1)
+        self.module.filestack_idx -= 1
+
         parser = pg.get_parser()
         parser.parse(tokens).eval()
 
@@ -690,6 +705,27 @@ class FuncDecl():
         rtype = self.rtype.get_ir_type()
         argtypes = self.decl_args.get_arg_type_list()
         fnty = ir.FunctionType(rtype, argtypes)
+        try:
+            self.module.get_global(self.name.value)
+            text_input = self.builder.filestack[self.builder.filestack_idx]
+            lines = text_input.splitlines()
+            lineno = self.name.getsourcepos().lineno
+            colno = self.name.getsourcepos().colno
+            if lineno > 1:
+                line1 = lines[lineno - 2]
+                line2 = lines[lineno - 1]
+                print("%s\n%s\n%s^" % (line1, line2, "~" * (colno - 1)))
+            else:
+                line1 = lines[lineno - 1]
+                print("%s\n%s^" % (line1, "~" * (colno - 1)))
+            raise RuntimeError("%s (%d:%d): Redefining global value, %s, as function." % (
+                self.module.filestack[self.module.filestack_idx],
+                lineno,
+                colno,
+                self.name.value
+            ))
+        except(KeyError):
+            pass
         fn = ir.Function(self.module, fnty, self.name.value)
         fn.args = tuple(self.decl_args.get_arg_list(fn))
         block = fn.append_basic_block("entry")
@@ -847,6 +883,14 @@ class TypeExpr():
         self.module = module
         self.spos = spos
         self.lvalue = lvalue
+        lname = self.lvalue.get_name()
+        if lname not in types.keys():
+            raise RuntimeError("%s (%d:%d): Undefined type, %s, used in typeexpr." % (
+                self.module.filestack[self.module.filestack_idx],
+                self.spos.lineno,
+                self.spos.colno,
+                lname
+            ))
         self.type = types[lvalue.get_name()]
         self.base_type = types[lvalue.get_name()]
 
@@ -858,6 +902,9 @@ class TypeExpr():
 
     def add_array_qualifier(self, size):
         self.type = self.type.get_array_of(int(size.value))
+
+    def is_pointer(self):
+        return self.type.is_pointer()
 
 
 class LValue(Expr):
