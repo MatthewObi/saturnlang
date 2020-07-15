@@ -10,14 +10,26 @@ import glob
 opt_level = 0
 
 files = []
+eval_files = []
 llfiles = []
+linkfiles = []
 
 for f in glob.glob("*.sat"):
-    files.append(f)
+    mod_t = os.path.getmtime(f)
+    objf = f.replace('.sat', '.o')
+    if not os.path.exists(objf):
+        files.append(f)
+        eval_files.append(f)
+        continue
+    obj_t = os.path.getmtime(objf)
+    if mod_t > obj_t:
+        files.append(f)
+    eval_files.append(f)
 
 for ff in files:
-    print("Building %s..." % ff)
-    evalfiles = files.copy()
+    ffll = ff.rstrip('.sat')
+    print("satc -o %s.ll %s" % (ffll, ff))
+    evalfiles = eval_files.copy()
     evalfiles.remove(ff)
 
     if ff not in cachedmods.keys():
@@ -92,9 +104,20 @@ for llf in llfiles:
     print('llc -filetype=obj -O2 -o %s %s' % (llf + '.o', ll))
     os.system('llc -filetype=obj -O2 -o %s %s' % (llf + '.o', ll))
 
+
+modifiedobjs = []
+exe_t = os.path.getmtime('main.exe')
+for f in glob.glob("*.o"):
+    obj_t = os.path.getmtime(f)
+    linkfiles.append(f)
+    if obj_t > exe_t:
+        modifiedobjs.append(f)
+if len(modifiedobjs) == 0:
+    print('Project up to date. Nothing to do.')
+    exit(0)
+
 linkcmd = 'lld-link -out:main.exe -defaultlib:libcmt -libpath:"C:/Program Files (x86)/Microsoft Visual Studio/2019/Community/VC/Tools/MSVC/14.26.28801/lib/x64" -libpath:"C:/Program Files (x86)/Windows Kits/10/Lib/10.0.18362.0/ucrt/x64" -libpath:"C:/Program Files (x86)/Windows Kits/10/Lib/10.0.18362.0/um/x64" -nologo '
-for llf in llfiles:
-    lls = llf + '.o'
-    linkcmd += '"%s" ' % lls
+for llf in linkfiles:
+    linkcmd += '"%s" ' % llf
 print(linkcmd)
 os.system(linkcmd)
