@@ -9,6 +9,8 @@ fn main(): int {
     len := strlen(str);
     i := 10;
     j := 2;
+    ptrtoint = &j;
+    ptr2 := &i;
     f := -1.5;
     f = floor(f);
     if f > 0 && f < 3 {

@@ -166,6 +166,101 @@ class Boolean(Expr):
         i = ir.Constant(self.get_type().irtype, self.value)
         return i
 
+        
+class LValue(Expr):
+    """
+    Expression representing a named value in memory.
+    """
+    def __init__(self, builder, module, spos, name, lhs=None):
+        self.builder = builder
+        self.module = module
+        self.spos = spos
+        self.lhs = lhs
+        self.name = name
+        self.value = None
+
+    def get_type(self):
+        name = self.get_name()
+        ptr = check_name_in_scope(name)
+        if ptr is None:
+            ptr = self.module.sglobals[name]
+        if ptr.type.is_pointer():
+            return ptr.type.get_deference_of()
+        return ptr.type
+
+    def get_ir_type(self):
+        name = self.get_name()
+        ptr = check_name_in_scope(name).irvalue
+        if ptr is None:
+            ptr = self.module.get_global(name)
+        if ptr.type.is_pointer:
+            return ptr.type.pointee
+        return ptr.type
+
+    def get_name(self):
+        l = self.lhs
+        ll = [self]
+        s = ""
+        while l is not None:
+            ll.append(l)
+            l = l.lhs
+        ll.reverse()
+        i = 1
+        for l in ll:
+            s += l.name
+            if i < len(ll):
+                s += "."
+                i = i + 1
+        return s
+
+    def get_pointer(self):
+        name = self.get_name()
+        ptr = check_name_in_scope(name)
+        if ptr is None:
+            ptr = self.module.sglobals[name]
+        return ptr
+    
+    def eval(self):
+        name = self.get_name()
+        ptr = check_name_in_scope(name)
+        if ptr is None:
+            ptr = self.module.sglobals[name]
+        return self.builder.load(ptr.irvalue)
+
+
+class PrefixOp(Expr):
+    """
+    A base class for unary prefix operations.\n
+    OP right
+    """
+    def get_type(self):
+        return self.right.get_type()
+
+    def __init__(self, builder, module, spos, right):
+        self.builder = builder
+        self.module = module
+        self.spos = spos
+        self.right = right
+
+
+class AddressOf(PrefixOp):
+    """
+    An address of prefix operation.\n
+    &right
+    """
+    def get_type(self):
+        return self.right.get_type().get_pointer_to()
+
+    def eval(self):
+        if not isinstance(self.right, LValue):
+            lineno = self.right.getsourcepos().lineno
+            colno = self.right.getsourcepos().colno
+            throw_saturn_error(self.builder, self.module, lineno, colno, 
+                "Cannot take the address of a non-lvalue."
+            )
+        ptr = self.right.get_pointer()
+        return ptr.irvalue
+
 
 class BinaryOp(Expr):
     """
@@ -1024,73 +1119,7 @@ class TypeExpr():
         self.type = self.type.get_array_of(int(size.value))
 
     def is_pointer(self):
-        return self.type.is_pointer()
-
-
-class LValue(Expr):
-    """
-    Expression representing a named value in memory.
-    """
-    def __init__(self, builder, module, spos, name, lhs=None):
-        self.builder = builder
-        self.module = module
-        self.spos = spos
-        self.lhs = lhs
-        self.name = name
-        self.value = None
-
-    def get_type(self):
-        name = self.get_name()
-        ptr = check_name_in_scope(name)
-        if ptr is None:
-            ptr = self.module.sglobals[name]
-        if ptr.type.is_pointer():
-            return ptr.type.get_deference_of()
-        return ptr.type
-
-    def get_ir_type(self):
-        name = self.get_name()
-        ptr = check_name_in_scope(name).irvalue
-        if ptr is None:
-            ptr = self.module.get_global(name)
-        if ptr.type.is_pointer:
-            return ptr.type.pointee
-        return ptr.type
-
-    def get_name(self):
-        l = self.lhs
-        ll = [self]
-        s = ""
-        while l is not None:
-            ll.append(l)
-            l = l.lhs
-        ll.reverse()
-        i = 1
-        for l in ll:
-            s += l.name
-            if i < len(ll):
-                s += "."
-                i = i + 1
-        return s
-
-    def get_pointer(self):
-        name = self.get_name()
-        ptr = check_name_in_scope(name)
-        if ptr is None:
-            ptr = self.module.sglobals[name]
-        return ptr
-    
-    def eval(self):
-        name = self.get_name()
-        ptr = check_name_in_scope(name)
-        if ptr is None:
-            ptr = self.module.sglobals[name]
-        return self.builder.load(ptr.irvalue)
-        # if ptr.type.irtype.is_pointer:
-        #     return self.builder.load(ptr.irvalue)
-        # else:
-        #     return ptr.irvalue
-            
+        return self.type.is_pointer()     
 
 
 class FuncCall(Expr):

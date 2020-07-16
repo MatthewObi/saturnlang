@@ -3,6 +3,7 @@ from ast import (
     Program, CodeBlock, Statement, ReturnStatement, 
     PackageDecl, ImportDecl,
     Sum, Sub, Mul, Div, Mod, And, Or, Xor, BoolAnd, BoolOr, Print, 
+    AddressOf,
     Number, Integer, Integer64, Float, Double, Byte, StringLiteral, TypeExpr,
     FuncDecl, FuncDeclExtern, FuncArgList, FuncArg, GlobalVarDecl, VarDecl, VarDeclAssign, 
     LValue, FuncCall, Assignment, AddAssignment, SubAssignment, MulAssignment, 
@@ -232,6 +233,14 @@ class Parser():
         def if_stmt_else(p):
             spos = p[0].getsourcepos()
             return IfStatement(self.builder, self.module, spos, p[1], p[3], el=p[7])
+
+        @self.pg.production('expr : AND expr')
+        def expr_unary(p):
+            right = p[1]
+            operator = p[0]
+            spos = p[0].getsourcepos()
+            if operator.gettokentype() == 'AND':
+                return AddressOf(self.builder, self.module, spos, right)
 
         @self.pg.production('expr : expr ADD expr')
         @self.pg.production('expr : expr SUB expr')
