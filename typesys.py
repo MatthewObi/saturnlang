@@ -82,7 +82,9 @@ class Type():
         return trait in self.traits
 
     def is_array(self):
-        return self.qualifiers[-1][0] == 'array'
+        if len(self.qualifiers) > 0:
+            return self.qualifiers[-1][0] == 'array'
+        return False
 
     def is_pointer(self):
         return ('ptr',) in self.qualifiers or self.name == 'cstring'

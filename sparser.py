@@ -3,7 +3,7 @@ from ast import (
     Program, CodeBlock, Statement, ReturnStatement, 
     PackageDecl, ImportDecl,
     Sum, Sub, Mul, Div, Mod, And, Or, Xor, BoolAnd, BoolOr, Print, 
-    AddressOf,
+    AddressOf, DerefOf,
     Number, Integer, Integer64, Float, Double, Byte, StringLiteral, TypeExpr,
     FuncDecl, FuncDeclExtern, FuncArgList, FuncArg, GlobalVarDecl, VarDecl, VarDeclAssign, 
     LValue, FuncCall, Assignment, AddAssignment, SubAssignment, MulAssignment, 
@@ -178,22 +178,22 @@ class Parser():
             spos = p[0].getsourcepos()
             return VarDeclAssign(self.builder, self.module, spos, p[0], p[2])
 
-        @self.pg.production('stmt : lvalue EQ expr SEMICOLON')
+        @self.pg.production('stmt : lvalue_expr EQ expr SEMICOLON')
         def stmt_assign(p):
             spos = p[0].getsourcepos()
             return Assignment(self.builder, self.module, spos, p[0], p[2])
 
-        @self.pg.production('stmt : lvalue ADDEQ expr SEMICOLON')
+        @self.pg.production('stmt : lvalue_expr ADDEQ expr SEMICOLON')
         def stmt_assign_add(p):
             spos = p[0].getsourcepos()
             return AddAssignment(self.builder, self.module, spos, p[0], p[2])
 
-        @self.pg.production('stmt : lvalue SUBEQ expr SEMICOLON')
+        @self.pg.production('stmt : lvalue_expr SUBEQ expr SEMICOLON')
         def stmt_assign_sub(p):
             spos = p[0].getsourcepos()
             return SubAssignment(self.builder, self.module, spos, p[0], p[2])
 
-        @self.pg.production('stmt : lvalue MULEQ expr SEMICOLON')
+        @self.pg.production('stmt : lvalue_expr MULEQ expr SEMICOLON')
         def stmt_assign_mul(p):
             spos = p[0].getsourcepos()
             return MulAssignment(self.builder, self.module, spos, p[0], p[2])
@@ -329,7 +329,17 @@ class Parser():
             else:
                 return LValue(self.builder, self.module, spos, p[2], p[0].value)
 
-        @self.pg.production('expr : lvalue')
+        @self.pg.production('lvalue_expr : lvalue')
+        @self.pg.production('lvalue_expr : MUL lvalue')
+        def lvalue_expr(p):
+            spos = p[0].getsourcepos()
+            if len(p) == 1:
+                return p[0]
+            else:
+                if p[0].gettokentype() == 'MUL':
+                    return DerefOf(self.builder, self.module, spos, p[1])
+
+        @self.pg.production('expr : lvalue_expr')
         def expr_lvalue(p):
             return p[0]
 

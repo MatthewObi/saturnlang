@@ -2,6 +2,10 @@ package main;
 import cstring;
 import cmath;
 
+fn ptrfun(x: *int): void {
+    *x = 5;
+}
+
 fn main(): int {
     arrofints : [4]int;
     ptrtoint : *int;
@@ -11,6 +15,11 @@ fn main(): int {
     j := 2;
     ptrtoint = &j;
     ptr2 := &i;
+    printf("i = %d\n", i);
+    ptrfun(&i);
+    printf("i = %d\n", *ptr2);
+    t := *ptr2 + 5;
+    i = t;
     f := -1.5;
     f = floor(f);
     if f > 0 && f < 3 {

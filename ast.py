@@ -262,6 +262,33 @@ class AddressOf(PrefixOp):
         return ptr.irvalue
 
 
+class DerefOf(PrefixOp):
+    """
+    An dereference of prefix operation.\n
+    *right
+    """
+    def get_name(self):
+        return self.right.get_name()
+
+    def get_type(self):
+        return self.right.get_type()
+    
+    def get_pointer(self):
+        return Value("", self.get_type(), self.builder.load(self.right.get_pointer().irvalue))
+
+    def eval(self):
+        if not isinstance(self.right, LValue):
+            lineno = self.right.getsourcepos().lineno
+            colno = self.right.getsourcepos().colno
+            throw_saturn_error(self.builder, self.module, lineno, colno, 
+                "Cannot dereference a non-lvalue."
+            )
+        ptr = self.get_pointer()
+        #i = Value("", self.get_type(), self.builder.load(ptr.irvalue))
+        i = self.builder.load(ptr.irvalue)
+        return i
+
+
 class BinaryOp(Expr):
     """
     A base class for binary operations.\n
@@ -648,11 +675,10 @@ class Assignment():
         return self.spos
     
     def eval(self):
-        name = self.lvalue.get_name()
-        ptr = check_name_in_scope(name)
-        if ptr is None:
-            ptr = self.module.sglobals[self.lvalue.get_name()]
-        self.builder.store(self.expr.eval(), ptr.irvalue)
+        ptr = self.lvalue.get_pointer().irvalue
+        value = self.expr.eval()
+        #print("(%s) => (%s)" % (value, ptr))
+        self.builder.store(value, ptr)
 
 
 class AddAssignment(Assignment):
@@ -838,11 +864,22 @@ class FuncArg():
     def getsourcepos(self):
         return self.spos
     
-    def eval(self, func: ir.Function):
-        arg = Value(self.name.value, self.atype, ir.Argument(func, self.atype.irtype, name=self.name.value))
-        scope = get_inner_scope()
-        scope[self.name.value] = arg
-        return arg
+    def eval(self, func: ir.Function, decl=True):
+        arg = ir.Argument(func, self.atype.irtype, name=self.name.value)
+        if decl:
+            val = Value(self.name.value, self.atype, arg)
+            scope = get_inner_scope()
+            scope[self.name.value] = val
+            return val
+        else:
+            ptr = self.builder.alloca(self.atype.irtype, name=self.name.value)
+            self.builder.store(arg, ptr)
+            argval = Value(self.name.value, self.atype, arg)
+            val = Value(self.name.value, self.atype, ptr)
+            scope = get_inner_scope()
+            scope[self.name.value] = val
+            return argval
+
 
 
 class FuncArgList():
@@ -859,6 +896,12 @@ class FuncArgList():
         self.args.append(arg)
 
     def get_arg_list(self, func):
+        args = []
+        for arg in self.args:
+            args.append(arg.eval(func, False).irvalue)
+        return args
+
+    def get_decl_arg_list(self, func):
         args = []
         for arg in self.args:
             args.append(arg.eval(func).irvalue)
@@ -906,6 +949,7 @@ class FuncDecl():
         rtype = self.rtype
         argtypes = self.decl_args.get_arg_type_list()
         fnty = ir.FunctionType(rtype.get_ir_type(), argtypes)
+        #print("%s (%s)" % (self.name.value, fnty))
         sfnty = FuncType("", rtype, self.decl_args.get_arg_stype_list())
         try:
             self.module.get_global(self.name.value)
@@ -929,7 +973,6 @@ class FuncDecl():
         except(KeyError):
             pass
         fn = ir.Function(self.module, fnty, self.name.value)
-        fn.args = tuple(self.decl_args.get_arg_list(fn))
         self.module.sfunctys[self.name.value] = sfnty
         block = fn.append_basic_block("entry")
         # self.builder.dbgsub = self.module.add_debug_info("DISubprogram", {
@@ -940,6 +983,7 @@ class FuncDecl():
         #     "isDefinition":True
         # }, True)
         self.builder.position_at_start(block)
+        fn.args = tuple(self.decl_args.get_arg_list(fn))
         self.block.eval()
         if not self.builder.block.is_terminated:
             if isinstance(self.builder.function.function_type.return_type, ir.VoidType):
@@ -970,9 +1014,10 @@ class FuncDeclExtern():
         rtype = self.rtype.type
         argtypes = self.decl_args.get_arg_type_list()
         fnty = ir.FunctionType(rtype.irtype, argtypes)
+        #print("%s (%s)" % (self.name.value, fnty))
         sfnty = FuncType("", rtype, self.decl_args.get_arg_stype_list())
         fn = ir.Function(self.module, fnty, self.name.value)
-        fn.args = tuple(self.decl_args.get_arg_list(fn))
+        fn.args = tuple(self.decl_args.get_decl_arg_list(fn))
         self.module.sfunctys[self.name.value] = sfnty
         pop_inner_scope()
 
@@ -1061,7 +1106,7 @@ class VarDeclAssign():
         val = self.initval.eval()
         vartype = self.initval.get_type()
         if str(vartype.irtype) == 'void':
-            print("%s (%s)" % (str(vartype), str(vartype.irtype)))
+            #print("%s (%s)" % (str(vartype), str(vartype.irtype)))
             lineno = self.initval.getsourcepos().lineno
             colno = self.initval.getsourcepos().colno
             throw_saturn_error(self.builder, self.module, lineno, colno, 
