@@ -85,7 +85,7 @@ class Type():
         return self.qualifiers[-1][0] == 'array'
 
     def is_pointer(self):
-        return self.qualifiers[-1][0] == 'ptr'
+        return ('ptr',) in self.qualifiers or self.name == 'cstring'
 
     def is_const(self):
         return self.qualifiers[-1][0] == 'const'
@@ -127,12 +127,33 @@ class Type():
         s += self.name
         return s
 
+    def is_similar(self, other):
+        """
+        Checks whether the two values have similar types for the purpose of fundimental operations.
+        """
+        if self is other:
+            return True
+        if self.name == other.name:
+            if self.is_value() and other.is_value():
+                return True
+            if self.is_pointer() and other.is_pointer():
+                return True
+            if self.is_array() and other.is_array():
+                return True
+        return False
+
+    def is_convertable(self, other):
+        if self.tclass == other.tclass:
+            return True
+        return False
+
 types = {
     "void": Type("void", ir.VoidType(), 'void', traits=['TNoType']),
     "int": Type("int", ir.IntType(32), 'int', traits=['TIntAny']),
     "int32": Type("int32", ir.IntType(32), 'int'),
     "int64": Type("int64", ir.IntType(64), 'int'),
     "int16": Type("int16", ir.IntType(16), 'int'),
+    "int8": Type("int8", ir.IntType(8), 'int'),
     "byte": Type("byte", ir.IntType(8), 'uint'),
     "uint": Type("uint", ir.IntType(32), 'uint', traits=['TIntAny']),
     "uint64": Type("uint64", ir.IntType(64), 'uint'),
@@ -143,6 +164,18 @@ types = {
     "bool": Type("bool", ir.IntType(1), 'bool'),
     "cstring": Type("cstring", ir.IntType(8).as_pointer(), 'string', traits=['TOpaquePtr']),
 }
+
+class Value():
+    """
+    A saturn value.
+    """
+    def __init__(self, name, stype, irvalue):
+        self.name = name
+        self.type = stype
+        self.irvalue = irvalue
+
+    def is_const(self):
+        return self.type.is_const()
 
 class FuncType():
     """

@@ -1,6 +1,7 @@
 from llvmlite import ir
 from rply import Token
-from typesys import Type, types
+from typesys import Type, types, FuncType, Value
+from serror import throw_saturn_error
 
 SCOPE = []
 
@@ -36,8 +37,11 @@ class Expr():
     def getsourcepos(self):
         return self.spos
 
+    def get_type(self):
+        return types['void']
+
     def get_ir_type(self):
-        return types['void'].irtype
+        return self.get_type().irtype
 
 class Number(Expr):
     """
@@ -48,21 +52,21 @@ class Number(Expr):
         self.module = module
         self.spos = spos
         self.value = value
-        self.type = self.get_ir_type()
-    
-    def get_ir_type(self):
-        return types['int'].irtype
+        self.type = self.get_type()
+
+    def get_type(self):
+        return types['int']
 
 
 class Integer(Number):
     """
     A 32-bit integer constant. (int)
     """
-    def get_ir_type(self):
-        return types['int'].irtype
+    def get_type(self):
+        return types['int']
 
     def eval(self):
-        i = ir.Constant(self.type, int(self.value))
+        i = ir.Constant(self.type.irtype, int(self.value))
         return i
 
 
@@ -70,12 +74,12 @@ class Integer64(Number):
     """
     A 64-bit integer constant. (int64)
     """
-    def get_ir_type(self):
-        return types['int64'].irtype
+    def get_type(self):
+        return types['int64']
 
     def eval(self):
         val = self.value.strip('L')
-        i = ir.Constant(self.type, int(val))
+        i = ir.Constant(self.type.irtype, int(val))
         return i
 
 
@@ -83,11 +87,11 @@ class Byte(Number):
     """
     An 8-bit unsigned integer constant. (byte)
     """
-    def get_ir_type(self):
-        return types['byte'].irtype
+    def get_type(self):
+        return types['byte']
     
     def eval(self):
-        i = ir.Constant(self.type, int(self.value))
+        i = ir.Constant(self.type.irtype, int(self.value))
         return i
 
 
@@ -95,11 +99,11 @@ class Float(Number):
     """
     A single-precision float constant. (float32)
     """
-    def get_ir_type(self):
-        return types['float32'].irtype
+    def get_type(self):
+        return types['float32']
 
     def eval(self):
-        i = ir.Constant(self.type, float(self.value))
+        i = ir.Constant(self.type.irtype, float(self.value))
         return i
 
 
@@ -107,11 +111,11 @@ class Double(Number):
     """
     A double-precision float constant. (float64)
     """
-    def get_ir_type(self):
-        return types['float64'].irtype
+    def get_type(self):
+        return types['float64']
 
     def eval(self):
-        i = ir.Constant(self.type, float(self.value))
+        i = ir.Constant(self.type.irtype, float(self.value))
         return i
 
 
@@ -124,10 +128,10 @@ class StringLiteral(Expr):
         self.module = module
         self.spos = spos
         self.value = value
-        self.type = ir.IntType(8).as_pointer()
+        self.type = self.get_type()
 
-    def get_ir_type(self):
-        return types['cstring'].irtype
+    def get_type(self):
+        return types['cstring']
 
     def get_reference(self):
         return self.value
@@ -141,7 +145,7 @@ class StringLiteral(Expr):
         global_fmt.linkage = 'internal'
         global_fmt.global_constant = True
         global_fmt.initializer = c_fmt
-        self.value = self.builder.bitcast(global_fmt, self.type)
+        self.value = self.builder.bitcast(global_fmt, self.type.irtype)
         return self.value
 
 
@@ -155,11 +159,11 @@ class Boolean(Expr):
         self.spos = spos
         self.value = value
 
-    def get_ir_type(self):
-        return types['bool'].irtype
+    def get_type(self):
+        return types['bool']
 
     def eval(self):
-        i = ir.Constant(ir.IntType(1), self.value)
+        i = ir.Constant(self.get_type().irtype, self.value)
         return i
 
 
@@ -168,10 +172,10 @@ class BinaryOp(Expr):
     A base class for binary operations.\n
     left OP right
     """
-    def get_ir_type(self):
-        if self.left.get_ir_type() == self.right.get_ir_type():
-            return self.left.get_ir_type()
-        return types['int'].irtype
+    def get_type(self):
+        if self.left.get_type().is_similar(self.right.get_type()):
+            return self.left.get_type()
+        return types['void']
 
     def __init__(self, builder, module, spos, left, right):
         self.builder = builder
@@ -187,7 +191,19 @@ class Sum(BinaryOp):
     left + right
     """
     def eval(self):
-        i = self.builder.add(self.left.eval(), self.right.eval())
+        ty = self.get_type()
+        if ty.is_integer():
+            i = self.builder.add(self.left.eval(), self.right.eval())
+        elif ty.is_float():
+            i = self.builder.fadd(self.left.eval(), self.right.eval())
+        else:
+            lineno = self.spos.lineno
+            colno = self.spos.colno
+            throw_saturn_error(self.builder, self.module, lineno, colno, 
+                "Attempting to perform addition with two operands of incompatible types (%s and %s)." % (
+                str(self.left.get_type()),
+                str(self.right.get_type())
+            ))
         return i
 
 
@@ -197,7 +213,20 @@ class Sub(BinaryOp):
     left - right
     """
     def eval(self):
-        i = self.builder.sub(self.left.eval(), self.right.eval())
+        i = None
+        ty = self.get_type()
+        if ty.is_integer():
+            i = self.builder.sub(self.left.eval(), self.right.eval())
+        elif ty.is_float():
+            i = self.builder.fsub(self.left.eval(), self.right.eval())
+        else:
+            lineno = self.spos.lineno
+            colno = self.spos.colno
+            throw_saturn_error(self.builder, self.module, lineno, colno, 
+                "Attempting to perform subtraction with two operands of incompatible types (%s and %s)." % (
+                str(self.left.get_type()),
+                str(self.right.get_type())
+            ))
         return i
 
 
@@ -207,7 +236,20 @@ class Mul(BinaryOp):
     left * right
     """
     def eval(self):
-        i = self.builder.mul(self.left.eval(), self.right.eval())
+        i = None
+        ty = self.get_type()
+        if ty.is_float():
+            i = self.builder.fmul(self.left.eval(), self.right.eval())
+        elif ty.is_integer():
+            i = self.builder.mul(self.left.eval(), self.right.eval())
+        else:
+            lineno = self.spos.lineno
+            colno = self.spos.colno
+            throw_saturn_error(self.builder, self.module, lineno, colno, 
+                "Attempting to perform multiplication with two operands of incompatible types (%s and %s)." % (
+                str(self.left.get_type()),
+                str(self.right.get_type())
+            ))
         return i
 
 
@@ -217,7 +259,21 @@ class Div(BinaryOp):
     left / right
     """
     def eval(self):
-        i = self.builder.sdiv(self.left.eval(), self.right.eval())
+        i = None
+        ty = self.get_type()
+        if ty.is_unsigned():
+            i = self.builder.udiv(self.left.eval(), self.right.eval())
+        elif ty.is_integer():
+            i = self.builder.sdiv(self.left.eval(), self.right.eval())
+        elif ty.is_float():
+            i = self.builder.fdiv(self.left.eval(), self.right.eval())
+        else:
+            lineno = self.spos.lineno
+            colno = self.spos.colno
+            throw_saturn_error(self.builder, self.module, lineno, colno, "Attempting to perform division with two operands of incompatible types (%s and %s). Please cast one of the operands." % (
+                str(self.left.get_type()),
+                str(self.right.get_type())
+            ))
         return i
 
 
@@ -227,7 +283,21 @@ class Mod(BinaryOp):
     left % right
     """
     def eval(self):
-        i = self.builder.srem(self.left.eval(), self.right.eval())
+        i = None
+        ty = self.get_type()
+        if ty.is_unsigned():
+            i = self.builder.urem(self.left.eval(), self.right.eval())
+        elif ty.is_integer():
+            i = self.builder.srem(self.left.eval(), self.right.eval())
+        elif ty.is_float():
+            i = self.builder.frem(self.left.eval(), self.right.eval())
+        else:
+            lineno = self.spos.lineno
+            colno = self.spos.colno
+            throw_saturn_error(self.builder, self.module, lineno, colno, "Attempting to perform division with two operands of incompatible types (%s and %s). Please cast one of the operands." % (
+                str(self.left.get_type()),
+                str(self.right.get_type())
+            ))
         return i
 
 
@@ -237,7 +307,18 @@ class And(BinaryOp):
     left & right
     """
     def eval(self):
-        i = self.builder.and_(self.left.eval(), self.right.eval())
+        ty = self.get_type()
+        i = None
+        if ty.is_integer():
+            i = self.builder.and_(self.left.eval(), self.right.eval())
+        else:
+            lineno = self.spos.lineno
+            colno = self.spos.colno
+            throw_saturn_error(self.builder, self.module, lineno, colno, 
+            "Attempting to perform a binary and with at least one operand of a non-integer type (%s and %s)." % (
+                str(self.left.get_type()),
+                str(self.right.get_type())
+            ))
         return i
 
 
@@ -247,7 +328,18 @@ class Or(BinaryOp):
     left | right
     """
     def eval(self):
-        i = self.builder.or_(self.left.eval(), self.right.eval())
+        ty = self.get_type()
+        i = None
+        if ty.is_integer():
+            i = self.builder.or_(self.left.eval(), self.right.eval())
+        else:
+            lineno = self.spos.lineno
+            colno = self.spos.colno
+            throw_saturn_error(self.builder, self.module, lineno, colno, 
+            "Attempting to perform a binary or with at least one operand of a non-integer type (%s and %s)." % (
+                str(self.left.get_type()),
+                str(self.right.get_type())
+            ))
         return i
 
 
@@ -464,8 +556,8 @@ class Assignment():
         name = self.lvalue.get_name()
         ptr = check_name_in_scope(name)
         if ptr is None:
-            ptr = self.module.get_global(self.lvalue.get_name())
-        self.builder.store(self.expr.eval(), ptr)
+            ptr = self.module.sglobals[self.lvalue.get_name()]
+        self.builder.store(self.expr.eval(), ptr.irvalue)
 
 
 class AddAssignment(Assignment):
@@ -477,10 +569,10 @@ class AddAssignment(Assignment):
         name = self.lvalue.get_name()
         ptr = check_name_in_scope(name)
         if ptr is None:
-            ptr = self.module.get_global(self.lvalue.get_name())
-        value = self.builder.load(ptr)
+            ptr = self.module.sglobals[self.lvalue.get_name()]
+        value = self.builder.load(ptr.irvalue)
         res = self.builder.add(value, self.expr.eval())
-        self.builder.store(res, ptr)
+        self.builder.store(res, ptr.irvalue)
 
 
 class SubAssignment(Assignment):
@@ -492,10 +584,10 @@ class SubAssignment(Assignment):
         name = self.lvalue.get_name()
         ptr = check_name_in_scope(name)
         if ptr is None:
-            ptr = self.module.get_global(self.lvalue.get_name())
-        value = self.builder.load(ptr)
+            ptr = self.module.sglobals[self.lvalue.get_name()]
+        value = self.builder.load(ptr.irvalue)
         res = self.builder.sub(value, self.expr.eval())
-        self.builder.store(res, ptr)
+        self.builder.store(res, ptr.irvalue)
 
 
 class MulAssignment(Assignment):
@@ -507,10 +599,10 @@ class MulAssignment(Assignment):
         name = self.lvalue.get_name()
         ptr = check_name_in_scope(name)
         if ptr is None:
-            ptr = self.module.get_global(self.lvalue.get_name())
-        value = self.builder.load(ptr)
+            ptr = self.module.sglobals[self.lvalue.get_name()]
+        value = self.builder.load(ptr.irvalue)
         res = self.builder.mul(value, self.expr.eval())
-        self.builder.store(res, ptr)
+        self.builder.store(res, ptr.irvalue)
 
 
 class Program():
@@ -646,13 +738,13 @@ class FuncArg():
         self.module = module
         self.spos = spos
         self.name = name
-        self.atype = atype.get_ir_type()
+        self.atype = atype.type
 
     def getsourcepos(self):
         return self.spos
     
     def eval(self, func: ir.Function):
-        arg = ir.Argument(func, self.atype, name=self.name.value)
+        arg = Value(self.name.value, self.atype, ir.Argument(func, self.atype.irtype, name=self.name.value))
         scope = get_inner_scope()
         scope[self.name.value] = arg
         return arg
@@ -674,10 +766,16 @@ class FuncArgList():
     def get_arg_list(self, func):
         args = []
         for arg in self.args:
-            args.append(arg.eval(func))
+            args.append(arg.eval(func).irvalue)
         return args
 
     def get_arg_type_list(self):
+        atypes = []
+        for arg in self.args:
+            atypes.append(arg.atype.irtype)
+        return atypes
+
+    def get_arg_stype_list(self):
         atypes = []
         for arg in self.args:
             atypes.append(arg.atype)
@@ -710,9 +808,10 @@ class FuncDecl():
 
     def eval(self):
         push_new_scope()
-        rtype = self.rtype.get_ir_type()
+        rtype = self.rtype
         argtypes = self.decl_args.get_arg_type_list()
-        fnty = ir.FunctionType(rtype, argtypes)
+        fnty = ir.FunctionType(rtype.get_ir_type(), argtypes)
+        sfnty = FuncType("", rtype, self.decl_args.get_arg_stype_list())
         try:
             self.module.get_global(self.name.value)
             text_input = self.builder.filestack[self.builder.filestack_idx]
@@ -736,6 +835,7 @@ class FuncDecl():
             pass
         fn = ir.Function(self.module, fnty, self.name.value)
         fn.args = tuple(self.decl_args.get_arg_list(fn))
+        self.module.sfunctys[self.name.value] = sfnty
         block = fn.append_basic_block("entry")
         # self.builder.dbgsub = self.module.add_debug_info("DISubprogram", {
         #     "name":self.name.value, 
@@ -772,11 +872,13 @@ class FuncDeclExtern():
 
     def eval(self):
         push_new_scope()
-        rtype = self.rtype.get_ir_type()
+        rtype = self.rtype.type
         argtypes = self.decl_args.get_arg_type_list()
-        fnty = ir.FunctionType(rtype, argtypes)
+        fnty = ir.FunctionType(rtype.irtype, argtypes)
+        sfnty = FuncType("", rtype, self.decl_args.get_arg_stype_list())
         fn = ir.Function(self.module, fnty, self.name.value)
         fn.args = tuple(self.decl_args.get_arg_list(fn))
+        self.module.sfunctys[self.name.value] = sfnty
         pop_inner_scope()
 
 
@@ -800,6 +902,7 @@ class GlobalVarDecl():
     def eval(self):
         vartype = get_type_by_name(self.builder, self.module, str(self.vtype))
         gvar = ir.GlobalVariable(self.module, vartype, self.name.value)
+
         if self.initval:
             gvar.initializer = self.initval.eval()
         else:
@@ -825,8 +928,8 @@ class VarDecl():
         return self.spos
 
     def eval(self):
-        vartype = self.vtype.get_ir_type()
-        ptr = self.builder.alloca(vartype, name=self.name.value)
+        vartype = self.vtype.type
+        ptr = Value(self.name.value, vartype, self.builder.alloca(vartype.irtype, name=self.name.value))
         scope = get_inner_scope()
         scope[self.name.value] = ptr
         # dbglv = self.module.add_debug_info("DILocalVariable", {
@@ -860,8 +963,17 @@ class VarDeclAssign():
         return self.spos
 
     def eval(self):
-        vartype = self.initval.get_ir_type()
-        ptr = self.builder.alloca(vartype, name=self.name.value)
+        val = self.initval.eval()
+        vartype = self.initval.get_type()
+        if str(vartype.irtype) == 'void':
+            print("%s (%s)" % (str(vartype), str(vartype.irtype)))
+            lineno = self.initval.getsourcepos().lineno
+            colno = self.initval.getsourcepos().colno
+            throw_saturn_error(self.builder, self.module, lineno, colno, 
+                "Can't create variable of void type."
+            )
+        ptr = Value(self.name.value, vartype, self.builder.alloca(vartype.irtype, name=self.name.value))
+
         scope = get_inner_scope()
         scope[self.name.value] = ptr
         # dbglv = self.module.add_debug_info("DILocalVariable", {
@@ -878,7 +990,7 @@ class VarDeclAssign():
         #     [ptr, dbglv, dbgexpr]
         # )
         if self.initval is not None:
-            self.builder.store(self.initval.eval(), ptr)
+            self.builder.store(val, ptr.irvalue)
         return ptr
 
 
@@ -927,9 +1039,18 @@ class LValue(Expr):
         self.name = name
         self.value = None
 
-    def get_ir_type(self):
+    def get_type(self):
         name = self.get_name()
         ptr = check_name_in_scope(name)
+        if ptr is None:
+            ptr = self.module.sglobals[name]
+        if ptr.type.is_pointer():
+            return ptr.type.get_deference_of()
+        return ptr.type
+
+    def get_ir_type(self):
+        name = self.get_name()
+        ptr = check_name_in_scope(name).irvalue
         if ptr is None:
             ptr = self.module.get_global(name)
         if ptr.type.is_pointer:
@@ -956,19 +1077,19 @@ class LValue(Expr):
         name = self.get_name()
         ptr = check_name_in_scope(name)
         if ptr is None:
-            ptr = self.module.get_global(name)
+            ptr = self.module.sglobals[name]
         return ptr
     
     def eval(self):
         name = self.get_name()
         ptr = check_name_in_scope(name)
         if ptr is None:
-            ptr = self.module.get_global(name)
-        if ptr.type.is_pointer:
-            self.value = self.builder.load(ptr)
-        else:
-            self.value = ptr
-        return self.value
+            ptr = self.module.sglobals[name]
+        return self.builder.load(ptr.irvalue)
+        # if ptr.type.irtype.is_pointer:
+        #     return self.builder.load(ptr.irvalue)
+        # else:
+        #     return ptr.irvalue
             
 
 
@@ -983,6 +1104,9 @@ class FuncCall(Expr):
         self.spos = spos
         self.lvalue = lvalue
         self.args = args
+
+    def get_type(self):
+        return self.module.sfunctys[self.lvalue.get_name()].rtype
 
     def get_ir_type(self):
         return self.module.get_global(self.lvalue.get_name()).ftype.return_type

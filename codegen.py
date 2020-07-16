@@ -61,6 +61,8 @@ class CodeGen():
             "size": 8,
             "encoding": ir.DIToken("DW_ATE_boolean")
         })
+        self.module.sfunctys = {}
+        self.module.sglobals = {}
         self.builder = ir.IRBuilder()
 
     def _create_execution_engine(self):
@@ -71,6 +73,7 @@ class CodeGen():
         """
         target = self.binding.Target.from_default_triple()
         target_machine = target.create_target_machine()
+        self.target_machine = target_machine
         # And an execution engine with an empty backing module
         backing_mod = binding.parse_assembly("")
         engine = binding.create_mcjit_compiler(backing_mod, target_machine)
@@ -140,3 +143,8 @@ class CodeGen():
     def save_ir(self, filename, ir):
         with open(filename, 'w') as output_file:
             output_file.write(str(ir))
+
+    def save_obj(self, filename, ir):
+        obj = self.target_machine.emit_object(ir)
+        with open(filename, 'wb') as output_file:
+            output_file.write(obj)
