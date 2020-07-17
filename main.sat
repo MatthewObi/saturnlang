@@ -6,10 +6,31 @@ fn ptrfun(x: *int) {
     *x = 5;
 }
 
-fn main(): int {
+fn main(argc: int, argv: *cstring): int {
     arrofints : [4]int;
+    printf("argc = %d\n", argc);
     const PI := 3.141593;
     const TAU := PI * 2.0;
+
+    i := argc;
+    while i > 0 {
+        printf("argv[%d] = %s\n", i - 1, argv[i - 1]);
+        i -= 1;
+    }
+
+    arrofints[0] = 4;
+    arrofints[2] = 9;
+    arrofints[3] = arrofints[0] + arrofints[2];
+
+    arrayelptr := &arrofints[1];
+    *arrayelptr = 11;
+
+    x := 0;
+    while x < 4 {
+        printf("arrofints[%d] = %d\n", x, arrofints[x]);
+        x += 1;
+    }
+
     str := "Hello, world!\n";
     len := strlen(str);
     i := 10;

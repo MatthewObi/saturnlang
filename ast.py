@@ -228,6 +228,53 @@ class LValue(Expr):
         return self.builder.load(ptr.irvalue)
 
 
+class PostfixOp(Expr):
+    """
+    A base class for unary postfix operations.\n
+    left OP
+    """
+    def get_type(self):
+        return self.left.get_type()
+
+    def __init__(self, builder, module, spos, left, expr):
+        self.builder = builder
+        self.module = module
+        self.spos = spos
+        self.left = left
+        self.expr = expr
+
+
+class ElementOf(PostfixOp):
+    """
+    An element of postfix operation.\n
+    left[expr]
+    """
+    def get_type(self):
+        return self.left.get_type().get_element_of()
+
+    def get_pointer(self):
+        ptr = self.left.get_pointer()
+        if self.expr.get_type().is_integer():
+            leftty = self.left.get_type()
+            if leftty.is_pointer():
+                gep = self.builder.gep(self.left.eval(), [
+                    self.expr.eval()
+                ], True)
+                return Value("", ptr.type.get_deference_of(), gep)
+            else:
+                gep = self.builder.gep(ptr.irvalue, [
+                    ir.Constant(ir.IntType(32), 0),
+                    self.expr.eval()
+                ], True)
+                return Value("", ptr.type.get_element_of(), gep)
+            
+
+    def eval(self):
+        ptr = self.get_pointer()
+        lep = self.builder.load(ptr.irvalue)
+        return lep
+
+
 class PrefixOp(Expr):
     """
     A base class for unary prefix operations.\n
@@ -252,7 +299,8 @@ class AddressOf(PrefixOp):
         return self.right.get_type().get_pointer_to()
 
     def eval(self):
-        if not isinstance(self.right, LValue):
+        cantakeaddr = isinstance(self.right, LValue) or isinstance(self.right, ElementOf)
+        if not cantakeaddr:
             lineno = self.right.getsourcepos().lineno
             colno = self.right.getsourcepos().colno
             throw_saturn_error(self.builder, self.module, lineno, colno, 
@@ -1117,7 +1165,7 @@ class VarDecl():
         #     [ptr, dbglv, dbgexpr]
         # )
         if self.initval is not None:
-            self.builder.store(self.initval.eval(), ptr)
+            self.builder.store(self.initval.eval(), ptr.irvalue)
         return ptr
 
 

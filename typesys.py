@@ -45,8 +45,23 @@ class Type():
         for i in range(len(ql)):
             if ql[i][0] == 'ptr':
                 ql.pop(i)
+                break
         return Type(self.name, 
             self.irtype.pointee, 
+            self.tclass, 
+            qualifiers=ql,
+            traits=self.traits
+        )
+
+    def get_element_of(self):
+        ql = self.qualifiers.copy()
+        ql.reverse()
+        for i in range(len(ql)):
+            if ql[i][0] == 'array':
+                ql.pop(i)
+                break
+        return Type(self.name, 
+            self.irtype.element, 
             self.tclass, 
             qualifiers=ql,
             traits=self.traits

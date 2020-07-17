@@ -3,7 +3,7 @@ from ast import (
     Program, CodeBlock, Statement, ReturnStatement, 
     PackageDecl, ImportDecl,
     Sum, Sub, Mul, Div, Mod, And, Or, Xor, BoolAnd, BoolOr, Print, 
-    AddressOf, DerefOf,
+    AddressOf, DerefOf, ElementOf,
     Number, Integer, Integer64, Float, Double, Byte, StringLiteral, TypeExpr,
     FuncDecl, FuncDeclExtern, FuncArgList, FuncArg, GlobalVarDecl, VarDecl, VarDeclAssign, 
     LValue, FuncCall, Assignment, AddAssignment, SubAssignment, MulAssignment, 
@@ -348,13 +348,17 @@ class Parser():
 
         @self.pg.production('lvalue_expr : lvalue')
         @self.pg.production('lvalue_expr : MUL lvalue')
+        @self.pg.production('lvalue_expr : lvalue LBRACKET expr RBRACKET')
         def lvalue_expr(p):
             spos = p[0].getsourcepos()
             if len(p) == 1:
                 return p[0]
+            elif len(p) == 4:
+                return ElementOf(self.builder, self.module, spos, p[0], p[2])
             else:
                 if p[0].gettokentype() == 'MUL':
                     return DerefOf(self.builder, self.module, spos, p[1])
+                    
 
         @self.pg.production('expr : lvalue_expr')
         def expr_lvalue(p):
