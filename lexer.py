@@ -21,6 +21,9 @@ class Lexer():
         self.lexer.add('TCASE', r'case')
         self.lexer.add('TRETURN', r'return')
         self.lexer.add('TEXTERN', r'extern')
+        self.lexer.add('TCONST', r'const')
+        self.lexer.add('TIMMUT', r'immut')
+        self.lexer.add('TMUT', r'mut')
 
         self.lexer.add('TTRUE', r'true')
         self.lexer.add('TFALSE', r'false')

@@ -90,7 +90,14 @@ class Type():
         return ('ptr',) in self.qualifiers or self.name == 'cstring'
 
     def is_const(self):
-        return self.qualifiers[-1][0] == 'const'
+        if len(self.qualifiers) > 0:
+            return self.qualifiers[-1][0] == 'const'
+        return False
+
+    def is_immut(self):
+        if len(self.qualifiers) > 0:
+            return self.qualifiers[-1][0] == 'immut'
+        return False
 
     def is_value(self):
         return not (self.is_array() or self.is_pointer())

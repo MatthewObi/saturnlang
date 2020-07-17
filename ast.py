@@ -675,7 +675,14 @@ class Assignment():
         return self.spos
     
     def eval(self):
-        ptr = self.lvalue.get_pointer().irvalue
+        sptr = self.lvalue.get_pointer()
+        if sptr.type.is_const() or sptr.type.is_immut():
+            lineno = self.expr.getsourcepos().lineno
+            colno = self.expr.getsourcepos().colno
+            throw_saturn_error(self.builder, self.module, lineno, colno, 
+                "Cannot reassign to const variable, %s." % sptr.name
+            )
+        ptr = sptr.irvalue
         value = self.expr.eval()
         #print("(%s) => (%s)" % (value, ptr))
         self.builder.store(value, ptr)
@@ -687,10 +694,13 @@ class AddAssignment(Assignment):
     lvalue += expr; (lvalue = lvalue + expr;)
     """
     def eval(self):
-        name = self.lvalue.get_name()
-        ptr = check_name_in_scope(name)
-        if ptr is None:
-            ptr = self.module.sglobals[self.lvalue.get_name()]
+        ptr = self.lvalue.get_pointer()
+        if ptr.type.is_const() or ptr.type.is_immut():
+            lineno = self.expr.getsourcepos().lineno
+            colno = self.expr.getsourcepos().colno
+            throw_saturn_error(self.builder, self.module, lineno, colno, 
+                "Cannot reassign to const variable, %s." % ptr.name
+            )
         value = self.builder.load(ptr.irvalue)
         res = self.builder.add(value, self.expr.eval())
         self.builder.store(res, ptr.irvalue)
@@ -702,10 +712,13 @@ class SubAssignment(Assignment):
     lvalue -= expr; (lvalue = lvalue - expr;)
     """
     def eval(self):
-        name = self.lvalue.get_name()
-        ptr = check_name_in_scope(name)
-        if ptr is None:
-            ptr = self.module.sglobals[self.lvalue.get_name()]
+        ptr = self.lvalue.get_pointer()
+        if ptr.type.is_const() or ptr.type.is_immut():
+            lineno = self.expr.getsourcepos().lineno
+            colno = self.expr.getsourcepos().colno
+            throw_saturn_error(self.builder, self.module, lineno, colno, 
+                "Cannot reassign to const variable, %s." % ptr.name
+            )
         value = self.builder.load(ptr.irvalue)
         res = self.builder.sub(value, self.expr.eval())
         self.builder.store(res, ptr.irvalue)
@@ -717,12 +730,33 @@ class MulAssignment(Assignment):
     lvalue *= expr; (lvalue = lvalue * expr;)
     """
     def eval(self):
-        name = self.lvalue.get_name()
-        ptr = check_name_in_scope(name)
-        if ptr is None:
-            ptr = self.module.sglobals[self.lvalue.get_name()]
+        ptr = self.lvalue.get_pointer()
+        if ptr.type.is_const() or ptr.type.is_immut():
+            lineno = self.expr.getsourcepos().lineno
+            colno = self.expr.getsourcepos().colno
+            throw_saturn_error(self.builder, self.module, lineno, colno, 
+                "Cannot reassign to const variable, %s." % ptr.name
+            )
         value = self.builder.load(ptr.irvalue)
         res = self.builder.mul(value, self.expr.eval())
+        self.builder.store(res, ptr.irvalue)
+
+
+class DivAssignment(Assignment):
+    """
+    Division assignment statement to a defined variable.\n
+    lvalue /= expr; (lvalue = lvalue / expr;)
+    """
+    def eval(self):
+        ptr = self.lvalue.get_pointer()
+        if ptr.type.is_const() or ptr.type.is_immut():
+            lineno = self.expr.getsourcepos().lineno
+            colno = self.expr.getsourcepos().colno
+            throw_saturn_error(self.builder, self.module, lineno, colno, 
+                "Cannot reassign to const variable, %s." % ptr.name
+            )
+        value = self.builder.load(ptr.irvalue)
+        res = self.builder.sdiv(value, self.expr.eval())
         self.builder.store(res, ptr.irvalue)
 
 
@@ -1092,12 +1126,13 @@ class VarDeclAssign():
     An automatic variable declaration and assignment statement. Uses type inference.\n
     name := initval;
     """
-    def __init__(self, builder, module, spos, name, initval):
+    def __init__(self, builder, module, spos, name, initval, spec='none'):
         self.name = name
         self.builder = builder
         self.module = module
         self.spos = spos
         self.initval = initval
+        self.spec = spec
 
     def getsourcepos(self):
         return self.spos
@@ -1105,6 +1140,10 @@ class VarDeclAssign():
     def eval(self):
         val = self.initval.eval()
         vartype = self.initval.get_type()
+        if self.spec == 'const':
+            vartype = vartype.get_const_of()
+        elif self.spec == 'immut':
+            vartype = vartype.get_immut_of()
         if str(vartype.irtype) == 'void':
             #print("%s (%s)" % (str(vartype), str(vartype.irtype)))
             lineno = self.initval.getsourcepos().lineno

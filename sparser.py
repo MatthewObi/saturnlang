@@ -21,7 +21,7 @@ class Parser():
              'IDENT', 'TPRINT', 'DOT', 'TRETURN', 'LPAREN', 'RPAREN', 'LBRACKET', 'RBRACKET',
              'SEMICOLON', 'ADD', 'SUB', 'MUL', 'DIV', 'MOD', 'AND', 'OR', 'XOR', 'BOOLAND', 'BOOLOR',
              'TFN', 'COLON', 'LBRACE', 'RBRACE', 'COMMA', 'EQ', 'CEQ', 'ADDEQ', 'SUBEQ', 'MULEQ',
-             'TIF', 'TELSE', 'TWHILE',
+             'TIF', 'TELSE', 'TWHILE', 'TCONST', 'TIMMUT',
              'BOOLEQ', 'BOOLNEQ', 'BOOLGT', 'BOOLLT', 'BOOLGTE', 'BOOLLTE', 'TTRUE', 'TFALSE'],
 
              precedence=[
@@ -69,7 +69,11 @@ class Parser():
         def func_decl_retvoid(p):
             name = p[1]
             declargs = p[3]
-            rtype = Token('IDENT', 'void')
+            spostexpr = p[5].getsourcepos()
+            rtype = TypeExpr(self.builder, self.module, 
+                spostexpr, 
+                LValue(self.builder, self.module, spostexpr, "void")
+            )
             block = p[6]
             spos = p[0].getsourcepos()
             if not self.decl_mode:
@@ -80,7 +84,11 @@ class Parser():
         def func_decl_retvoid_empty(p):
             name = p[1]
             declargs = p[3]
-            rtype = Token('IDENT', 'void')
+            spostexpr = p[5].getsourcepos()
+            rtype = TypeExpr(self.builder, self.module, 
+                spostexpr, 
+                LValue(self.builder, self.module, spostexpr, "void")
+            )
             spos = p[0].getsourcepos()
             block = CodeBlock(self.builder, self.module, spos, None)
             return FuncDecl(self.builder, self.module, spos, name, rtype, block, declargs)
@@ -177,6 +185,15 @@ class Parser():
         def stmt_var_decl_ceq(p):
             spos = p[0].getsourcepos()
             return VarDeclAssign(self.builder, self.module, spos, p[0], p[2])
+
+        @self.pg.production('stmt : TCONST IDENT CEQ expr SEMICOLON')
+        @self.pg.production('stmt : TIMMUT IDENT CEQ expr SEMICOLON')
+        def stmt_var_decl_ceq_spec(p):
+            spos = p[0].getsourcepos()
+            if p[0].gettokentype() == 'TCONST':
+                return VarDeclAssign(self.builder, self.module, spos, p[1], p[3], 'const')
+            elif p[0].gettokentype() == 'TIMMUT':
+                return VarDeclAssign(self.builder, self.module, spos, p[1], p[3], 'immut')
 
         @self.pg.production('stmt : lvalue_expr EQ expr SEMICOLON')
         def stmt_assign(p):
