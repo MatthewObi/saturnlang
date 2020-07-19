@@ -1,18 +1,23 @@
 from lexer import Lexer
 from sparser import Parser
-from codegen import CodeGen
+from codegen import CodeGen, compile_target
 from cachedmodule import CachedModule, cachedmods
 
 import sys
 import os
 import glob
 
-opt_level = 0
+opt_level = 1
 
 files = []
 eval_files = []
 llfiles = []
 linkfiles = []
+
+if len(sys.argv) > 1:
+    if sys.argv[1] == '--clean':
+        for f in glob.glob("*.o"):
+            os.remove(f)
 
 for f in glob.glob("*.sat"):
     mod_t = os.path.getmtime(f)
@@ -116,7 +121,12 @@ if len(modifiedobjs) == 0:
     print('Project up to date. Nothing to do.')
     exit(0)
 
-linkcmd = 'lld-link -out:main.exe -defaultlib:libcmt -libpath:"C:/Program Files (x86)/Microsoft Visual Studio/2019/Community/VC/Tools/MSVC/14.26.28801/lib/x64" -libpath:"C:/Program Files (x86)/Windows Kits/10/Lib/10.0.18362.0/ucrt/x64" -libpath:"C:/Program Files (x86)/Windows Kits/10/Lib/10.0.18362.0/um/x64" -nologo '
+linkcmd = ''
+if compile_target == 'wasm':
+    linkcmd = 'wasm-ld -o main.wasm -entry main --export-all -L./test/sysroot/lib/wasm32-wasi -lc '
+elif compile_target == 'windows-x64':
+    linkcmd = 'lld-link -out:main.exe -defaultlib:libcmt -libpath:"C:/Program Files (x86)/Microsoft Visual Studio/2019/Community/VC/Tools/MSVC/14.26.28801/lib/x64" -libpath:"C:/Program Files (x86)/Windows Kits/10/Lib/10.0.18362.0/ucrt/x64" -libpath:"C:/Program Files (x86)/Windows Kits/10/Lib/10.0.18362.0/um/x64" -nologo '
+
 for llf in linkfiles:
     linkcmd += '"%s" ' % llf
 print(linkcmd)

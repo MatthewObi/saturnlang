@@ -6,6 +6,8 @@ int64 = ir.IntType(64)
 double = ir.DoubleType()
 void = ir.VoidType()
 
+compile_target = 'windows-x64'
+
 class CodeGen():
     def __init__(self, filename, opt_level):
         self.binding = binding
@@ -21,7 +23,10 @@ class CodeGen():
     def _config_llvm(self):
         # Config LLVM
         self.module = ir.Module(name=self.filename)
-        self.module.triple = "x86_64-pc-windows-msvc"
+        if compile_target == 'wasm':
+            self.module.triple = "wasm32-unknown-wasi"
+        else:
+            self.module.triple = "x86_64-pc-windows-msvc"
         self.module.di_file = self.module.add_debug_info("DIFile", {
             "filename": "main.sat",
             "directory": "saturn",

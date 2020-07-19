@@ -1032,7 +1032,7 @@ class FuncDecl():
         argtypes = self.decl_args.get_arg_type_list()
         fnty = ir.FunctionType(rtype.get_ir_type(), argtypes)
         #print("%s (%s)" % (self.name.value, fnty))
-        sfnty = FuncType("", rtype, self.decl_args.get_arg_stype_list())
+        sfnty = FuncType("", rtype.type, self.decl_args.get_arg_stype_list())
         try:
             self.module.get_global(self.name.value)
             text_input = self.builder.filestack[self.builder.filestack_idx]
