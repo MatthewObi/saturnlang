@@ -1,7 +1,7 @@
 from rply import ParserGenerator, Token
 from ast import ( 
     Program, CodeBlock, Statement, ReturnStatement, 
-    PackageDecl, ImportDecl,
+    PackageDecl, ImportDecl, TypeDecl, StructDeclBody, StructDecl,
     Sum, Sub, Mul, Div, Mod, And, Or, Xor, BoolAnd, BoolOr, Print, 
     AddressOf, DerefOf, ElementOf,
     Number, Integer, Integer64, Float, Double, Byte, StringLiteral, TypeExpr,
@@ -21,7 +21,7 @@ class Parser():
              'IDENT', 'TPRINT', 'DOT', 'TRETURN', 'LPAREN', 'RPAREN', 'LBRACKET', 'RBRACKET',
              'SEMICOLON', 'ADD', 'SUB', 'MUL', 'DIV', 'MOD', 'AND', 'OR', 'XOR', 'BOOLAND', 'BOOLOR',
              'TFN', 'COLON', 'LBRACE', 'RBRACE', 'COMMA', 'EQ', 'CEQ', 'ADDEQ', 'SUBEQ', 'MULEQ',
-             'TIF', 'TELSE', 'TWHILE', 'TCONST', 'TIMMUT',
+             'TIF', 'TELSE', 'TWHILE', 'TCONST', 'TIMMUT', 'TTYPE', 'TSTRUCT',
              'BOOLEQ', 'BOOLNEQ', 'BOOLGT', 'BOOLLT', 'BOOLGTE', 'BOOLLTE', 'TTRUE', 'TFALSE'],
 
              precedence=[
@@ -51,6 +51,7 @@ class Parser():
         @self.pg.production('gstmt : gvar_decl')
         @self.pg.production('gstmt : pack_decl')
         @self.pg.production('gstmt : import_decl')
+        @self.pg.production('gstmt : type_decl')
         def gstmt(p):
            return p[0]
 
@@ -145,6 +146,11 @@ class Parser():
         def import_decl(p):
             spos = p[0].getsourcepos()
             return ImportDecl(self.builder, self.module, spos, p[1])
+
+        @self.pg.production('type_decl : TTYPE lvalue COLON typeexpr SEMICOLON')
+        def type_decl(p):
+            spos = p[0].getsourcepos()
+            return TypeDecl(self.builder, self.module, spos, p[1], p[3])
 
         @self.pg.production('block : block stmt')
         @self.pg.production('block : stmt')

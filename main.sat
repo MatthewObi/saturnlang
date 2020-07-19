@@ -6,7 +6,9 @@ fn ptrfun(x: *int) {
     *x = 5;
 }
 
-fn main(argc: int, argv: *cstring): int {
+type CStringArray : *cstring;
+
+fn main(argc: int, argv: CStringArray): int {
     arrofints : [4]int;
     printf("argc = %d\n", argc);
     const PI := 3.141593;

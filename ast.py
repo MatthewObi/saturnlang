@@ -1254,6 +1254,36 @@ class TypeExpr():
         return self.type.is_pointer()     
 
 
+class TypeDecl():
+    def __init__(self, builder, module, spos, lvalue, ltype):
+        self.builder = builder
+        self.module = module
+        self.spos = spos
+        self.lvalue = lvalue
+        self.type = ltype
+        name = self.lvalue.get_name()
+        types[name] = self.type.type
+
+    def eval(self):
+        pass
+
+
+class StructDeclBody():
+    def __init__(self, builder, module, spos):
+        self.builder = builder
+        self.module = module
+        self.spos = spos
+        self.fields = []
+
+    def add(self, field):
+        self.fields.append(field)
+
+
+class StructDecl(TypeDecl):
+    def eval(self):
+        pass
+
+
 class FuncCall(Expr):
     """
     Function call expression.\n

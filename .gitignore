@@ -129,3 +129,4 @@ dmypy.json
 *.ll
 *.o
 *.exe
+wasmtest/

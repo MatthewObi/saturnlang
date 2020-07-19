@@ -25,8 +25,10 @@ class CodeGen():
         self.module = ir.Module(name=self.filename)
         if compile_target == 'wasm':
             self.module.triple = "wasm32-unknown-wasi"
-        else:
+        elif compile_target == 'windows-x64':
             self.module.triple = "x86_64-pc-windows-msvc"
+        elif compile_target == 'linux-x64':
+            self.module.triple = "x86_64-pc-linux-gcc"
         self.module.di_file = self.module.add_debug_info("DIFile", {
             "filename": "main.sat",
             "directory": "saturn",
