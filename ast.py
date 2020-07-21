@@ -1224,17 +1224,16 @@ class VarDecl():
         if self.initval is not None:
             self.builder.store(self.initval.eval(), ptr.irvalue)
         if vartype.is_struct():
+            bcast = self.builder.bitcast(ptr.irvalue, ir.IntType(8).as_pointer())
+            val = ir.Constant(ir.IntType(8), 0)
+            self.builder.call(self.module.memset, [
+                bcast,
+                val,
+                calc_sizeof_struct(self.builder, self.module, ptr.type.irtype),
+                ir.Constant(ir.IntType(1), 0),
+            ])
             if vartype.has_ctor():
                 self.builder.call(vartype.get_ctor(), [ptr.irvalue])
-            else:
-                bcast = self.builder.bitcast(ptr.irvalue, ir.IntType(8).as_pointer())
-                val = ir.Constant(ir.IntType(8), 0)
-                self.builder.call(self.module.memset, [
-                    bcast,
-                    val,
-                    ir.Constant(ir.IntType(32), 10),
-                    ir.Constant(ir.IntType(1), 0),
-                ])
         return ptr
 
 
@@ -1339,6 +1338,14 @@ class TypeDecl():
 
     def eval(self):
         pass
+
+
+def calc_sizeof_struct(builder, module, stype):
+    stypeptr = stype.as_pointer()
+    null = stypeptr(stypeptr.null)
+    gep = builder.gep(null, [ir.Constant(ir.IntType(32), 1)])
+    size = builder.ptrtoint(gep, ir.IntType(32))
+    return size
 
 
 class StructField():

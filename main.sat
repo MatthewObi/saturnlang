@@ -9,7 +9,7 @@ fn ptrfun(x: *int) {
 type CStringArray : *cstring;
 
 type Vector2 : struct {
-    x: int;
+    x: int = 7;
     y: int;
 }
 
