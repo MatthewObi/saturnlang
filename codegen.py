@@ -1,6 +1,7 @@
 from llvmlite import ir, binding
 
 char = ir.IntType(8)
+int8ptr = char.as_pointer()
 int32 = ir.IntType(32)
 int64 = ir.IntType(64)
 double = ir.DoubleType()
@@ -70,6 +71,7 @@ class CodeGen():
         })
         self.module.sfunctys = {}
         self.module.sglobals = {}
+        self.module.memset = self.module.declare_intrinsic('llvm.memset', [int8ptr, int32])
         self.builder = ir.IRBuilder()
 
     def _create_execution_engine(self):

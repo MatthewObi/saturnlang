@@ -156,7 +156,7 @@ class Parser():
         @self.pg.production('struct_decl : TTYPE lvalue COLON TSTRUCT LBRACE struct_decl_body RBRACE')
         def struct_decl(p):
             spos = p[0].getsourcepos()
-            return StructDecl(self.builder, self.module, spos, p[1], p[5])
+            return StructDecl(self.builder, self.module, spos, p[1], p[5], self.decl_mode)
 
         @self.pg.production('struct_decl_body : struct_decl_body struct_decl_field')
         @self.pg.production('struct_decl_body : struct_decl_field')
@@ -179,6 +179,11 @@ class Parser():
         def struct_decl_field(p):
             spos = p[0].getsourcepos()
             return StructField(self.builder, self.module, spos, p[0], p[2])
+
+        @self.pg.production('struct_decl_field : IDENT COLON typeexpr EQ expr SEMICOLON')
+        def struct_decl_field_init(p):
+            spos = p[0].getsourcepos()
+            return StructField(self.builder, self.module, spos, p[0], p[2], p[4])
 
         @self.pg.production('block : block stmt')
         @self.pg.production('block : stmt')

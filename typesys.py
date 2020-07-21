@@ -228,9 +228,13 @@ class StructType(Type):
         self.tclass = 'struct'
         self.qualifiers = qualifiers
         self.traits = traits
+        self.ctor = None
 
     def add_field(self, name, ftype, irvalue):
-        self.fields.append(Value(name.value, ftype, irvalue))
+        if irvalue is not None:
+            self.fields.append(Value(name.value, ftype, irvalue.eval()))
+        else:
+            self.fields.append(Value(name.value, ftype, None))
 
     def get_field_index(self, name):
         for i in range(len(self.fields)):
@@ -240,6 +244,23 @@ class StructType(Type):
 
     def get_field_type(self, index):
         return self.fields[index].type
+
+    def get_fields_with_init(self):
+        withinit = []
+        for f in self.fields:
+            if f.irvalue is not None:
+                withinit.append(f)
+        return withinit
+
+    def has_ctor(self):
+        return self.ctor is not None
+
+    def get_ctor(self):
+        return self.ctor
+
+    def add_ctor(self, ctor):
+        if not self.has_ctor():
+            self.ctor = ctor
     
     def get_pointer_to(self):
         return StructType(self.name, 

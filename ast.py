@@ -1223,6 +1223,18 @@ class VarDecl():
         # )
         if self.initval is not None:
             self.builder.store(self.initval.eval(), ptr.irvalue)
+        if vartype.is_struct():
+            if vartype.has_ctor():
+                self.builder.call(vartype.get_ctor(), [ptr.irvalue])
+            else:
+                bcast = self.builder.bitcast(ptr.irvalue, ir.IntType(8).as_pointer())
+                val = ir.Constant(ir.IntType(8), 0)
+                self.builder.call(self.module.memset, [
+                    bcast,
+                    val,
+                    ir.Constant(ir.IntType(32), 10),
+                    ir.Constant(ir.IntType(1), 0),
+                ])
         return ptr
 
 
@@ -1330,12 +1342,13 @@ class TypeDecl():
 
 
 class StructField():
-    def __init__(self, builder, module, spos, name, ftype):
+    def __init__(self, builder, module, spos, name, ftype, initvalue = None):
         self.builder = builder
         self.module = module
         self.spos = spos
         self.name = name
         self.ftype = ftype.type
+        self.initvalue = initvalue
 
     def getsourcepos(self):
         return self.spos
@@ -1369,16 +1382,18 @@ class StructDecl():
     A struct declaration expression.\n
     type lvalue : struct { body }
     """
-    def __init__(self, builder, module, spos, lvalue, body):
+    def __init__(self, builder, module, spos, lvalue, body, decl_mode):
         self.builder = builder
         self.module = module
         self.spos = spos
         self.lvalue = lvalue
         self.body = body
+        self.ctor = None
+        self.decl_mode = decl_mode
         name = self.lvalue.get_name()
         types[name] = StructType(name, self.module.context.get_identified_type(name), [])
         for fld in self.body.get_fields():
-            types[name].add_field(fld.name, fld.ftype, None)
+            types[name].add_field(fld.name, fld.ftype, fld.initvalue)
 
     def eval(self):
         name = self.lvalue.get_name()
@@ -1387,7 +1402,32 @@ class StructDecl():
             idstruct.set_body(*self.body.get_ir_types())
             types[name].irtype = idstruct
             for fld in self.body.get_fields():
-                types[name].add_field(fld.name, fld.ftype, None)
+                types[name].add_field(fld.name, fld.ftype, fld.initvalue)
+        initfs = types[name].get_fields_with_init()
+        if len(initfs) > 0:
+            push_new_scope()
+            structty = types[name]
+            structptr = structty.irtype.as_pointer()
+            fnty = ir.FunctionType(ir.VoidType(), [structptr])
+            fn = ir.Function(self.module, fnty, self.lvalue.get_name() + '.new')
+            self.ctor = fn
+            structty.add_ctor(fn)
+            #self.module.sfunctys[self.name.value] = sfnty
+            if not self.decl_mode:
+                fn.args = (ir.Argument(fn, structptr, name='this'),)
+                thisptr = fn.args[0]
+                block = fn.append_basic_block("entry")
+                self.builder.position_at_start(block)
+                for fld in initfs:
+                    gep = self.builder.gep(thisptr, [
+                        ir.Constant(ir.IntType(32), 0),
+                        ir.Constant(ir.IntType(32), structty.get_field_index(fld.name))
+                    ])
+                    self.builder.store(fld.irvalue, gep)
+                self.builder.ret_void()
+            pop_inner_scope()
+
+
 
 
 class FuncCall(Expr):
