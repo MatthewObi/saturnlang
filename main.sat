@@ -8,11 +8,25 @@ fn ptrfun(x: *int) {
 
 type CStringArray : *cstring;
 
+type Vector2 : struct {
+    x: int;
+    y: int;
+}
+
 fn main(argc: int, argv: CStringArray): int {
     arrofints : [4]int;
     printf("argc = %d\n", argc);
     const PI := 3.141593;
     const TAU := PI * 2.0;
+
+    v2: Vector2;
+    v2.x = 5;
+    v2.y = 14;
+
+    v2ptr := &v2;
+    v2ptr.x = 11;
+
+    printf("Vector2 (x: %d, y: %d)\n", v2.x, v2.y);
 
     i := argc;
     while i > 0 {

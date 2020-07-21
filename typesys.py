@@ -114,6 +114,9 @@ class Type():
             return self.qualifiers[-1][0] == 'immut'
         return False
 
+    def is_struct(self):
+        return False
+
     def is_value(self):
         return not (self.is_array() or self.is_pointer())
 
@@ -131,6 +134,9 @@ class Type():
 
     def is_string(self):
         return self.tclass == 'string'
+
+    def is_struct(self):
+        return self.tclass == 'struct'
 
     def is_iterable(self):
         return self.is_array() or self.is_string()
@@ -209,3 +215,64 @@ class FuncType():
         self.name = name
         self.rtype = rtype
         self.atypes = atypes
+
+
+class StructType(Type):
+    """
+    A structure type in Saturn.
+    """
+    def __init__(self, name, irtype, fields=[], qualifiers=[], traits={}):
+        self.name = name
+        self.irtype = irtype
+        self.fields = fields
+        self.tclass = 'struct'
+        self.qualifiers = qualifiers
+        self.traits = traits
+
+    def add_field(self, name, ftype, irvalue):
+        self.fields.append(Value(name.value, ftype, irvalue))
+
+    def get_field_index(self, name):
+        for i in range(len(self.fields)):
+            if self.fields[i].name == name:
+                return i
+        return -1
+
+    def get_field_type(self, index):
+        return self.fields[index].type
+    
+    def get_pointer_to(self):
+        return StructType(self.name, 
+            self.irtype.as_pointer(), 
+            self.fields, 
+            qualifiers=self.qualifiers + [('ptr',)],
+            traits=self.traits
+        )
+
+    def get_deference_of(self):
+        ql = self.qualifiers.copy()
+        ql.reverse()
+        for i in range(len(ql)):
+            if ql[i][0] == 'ptr':
+                ql.pop(i)
+                break
+        return StructType(self.name, 
+            self.irtype.pointee,
+            self.fields,
+            qualifiers=ql,
+            traits=self.traits
+        )
+
+    def get_element_of(self):
+        ql = self.qualifiers.copy()
+        ql.reverse()
+        for i in range(len(ql)):
+            if ql[i][0] == 'array':
+                ql.pop(i)
+                break
+        return StructType(self.name, 
+            self.irtype.element, 
+            self.fields, 
+            qualifiers=ql,
+            traits=self.traits
+        )

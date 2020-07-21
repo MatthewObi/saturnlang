@@ -1,6 +1,6 @@
 from llvmlite import ir
 from rply import Token
-from typesys import Type, types, FuncType, Value
+from typesys import Type, types, FuncType, StructType, Value
 from serror import throw_saturn_error
 
 SCOPE = []
@@ -209,7 +209,7 @@ class LValue(Expr):
         for l in ll:
             s += l.name
             if i < len(ll):
-                s += "."
+                s += "::"
                 i = i + 1
         return s
 
@@ -226,6 +226,63 @@ class LValue(Expr):
         if ptr is None:
             ptr = self.module.sglobals[name]
         return self.builder.load(ptr.irvalue)
+
+
+class LValueField(Expr):
+    def __init__(self, builder, module, spos, lvalue, fname):
+        self.builder = builder
+        self.module = module
+        self.spos = spos
+        self.fname = fname
+        self.lvalue = lvalue
+
+    def get_type(self):
+        stype = self.lvalue.get_type()
+        return stype.get_field_type(stype.get_field_index(self.fname))
+
+    def get_ir_type(self):
+        irtype = self.lvalue.get_ir_type()
+        stype = self.lvalue.get_type()
+        findex = stype.get_field_index(self.fname)
+        return irtype.gep(ir.Constant(ir.IntType(32), findex))
+
+    def get_name(self):
+        return self.lvalue.get_name()
+
+    def get_pointer(self):
+        stype = self.lvalue.get_type()
+        ptr = self.lvalue.get_pointer()
+        findex = stype.get_field_index(self.fname)
+        print('%s: %d' % (self.fname, findex))
+        gep = None
+        if not ptr.type.is_pointer():
+            gep = self.builder.gep(ptr.irvalue, [
+                ir.Constant(ir.IntType(32), 0),
+                ir.Constant(ir.IntType(32), findex)
+            ])
+        else:
+            ld = self.builder.load(ptr.irvalue)
+            gep = self.builder.gep(ld, [
+                ir.Constant(ir.IntType(32), 0),
+                ir.Constant(ir.IntType(32), findex)
+            ])
+        return Value(self.fname, stype.get_field_type(findex), gep)
+
+    def eval(self):
+        stype = self.lvalue.get_type()
+        # if not stype.is_struct() or not stype.is_pointer():
+        #     lineno = self.lvalue.getsourcepos().lineno
+        #     colno = self.lvalue.getsourcepos().colno
+        #     throw_saturn_error(self.builder, self.module, lineno, colno, 
+        #         "Cannot use field operator on a non-struct type."
+        #     )
+        ptr = self.lvalue.get_pointer()
+        findex = stype.get_field_index(self.fname)
+        gep = self.builder.gep(ptr.irvalue, [
+            ir.Constant(ir.IntType(32), 0),
+            ir.Constant(ir.IntType(32), findex)
+        ])
+        return self.builder.load(gep)
 
 
 class PostfixOp(Expr):
@@ -1255,6 +1312,10 @@ class TypeExpr():
 
 
 class TypeDecl():
+    """
+    A type declaration.\n
+    type lvalue : ltype;
+    """
     def __init__(self, builder, module, spos, lvalue, ltype):
         self.builder = builder
         self.module = module
@@ -1268,6 +1329,18 @@ class TypeDecl():
         pass
 
 
+class StructField():
+    def __init__(self, builder, module, spos, name, ftype):
+        self.builder = builder
+        self.module = module
+        self.spos = spos
+        self.name = name
+        self.ftype = ftype.type
+
+    def getsourcepos(self):
+        return self.spos
+
+
 class StructDeclBody():
     def __init__(self, builder, module, spos):
         self.builder = builder
@@ -1275,13 +1348,46 @@ class StructDeclBody():
         self.spos = spos
         self.fields = []
 
+    def getsourcepos(self):
+        return self.spos
+
+    def get_ir_types(self):
+        ir_types = []
+        for f in self.fields:
+            ir_types.append(f.ftype.irtype)
+        return ir_types
+
+    def get_fields(self):
+        return self.fields
+
     def add(self, field):
         self.fields.append(field)
 
 
-class StructDecl(TypeDecl):
+class StructDecl():
+    """
+    A struct declaration expression.\n
+    type lvalue : struct { body }
+    """
+    def __init__(self, builder, module, spos, lvalue, body):
+        self.builder = builder
+        self.module = module
+        self.spos = spos
+        self.lvalue = lvalue
+        self.body = body
+        name = self.lvalue.get_name()
+        types[name] = StructType(name, self.module.context.get_identified_type(name), [])
+        for fld in self.body.get_fields():
+            types[name].add_field(fld.name, fld.ftype, None)
+
     def eval(self):
-        pass
+        name = self.lvalue.get_name()
+        if self.module.context.get_identified_type(name).is_opaque:
+            idstruct = self.module.context.get_identified_type(name)
+            idstruct.set_body(*self.body.get_ir_types())
+            types[name].irtype = idstruct
+            for fld in self.body.get_fields():
+                types[name].add_field(fld.name, fld.ftype, None)
 
 
 class FuncCall(Expr):

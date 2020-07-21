@@ -7,7 +7,7 @@ import sys
 import os
 import glob
 
-opt_level = 1
+opt_level = 0
 
 files = []
 eval_files = []
@@ -18,6 +18,11 @@ if len(sys.argv) > 1:
     if sys.argv[1] == '--clean':
         for f in glob.glob("*.o"):
             os.remove(f)
+
+    if '-O1' in sys.argv:
+        opt_level = 1
+    if '-O2' in sys.argv:
+        opt_level = 2
 
 for f in glob.glob("*.sat"):
     mod_t = os.path.getmtime(f)

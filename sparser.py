@@ -1,12 +1,12 @@
 from rply import ParserGenerator, Token
 from ast import ( 
     Program, CodeBlock, Statement, ReturnStatement, 
-    PackageDecl, ImportDecl, TypeDecl, StructDeclBody, StructDecl,
+    PackageDecl, ImportDecl, TypeDecl, StructField, StructDeclBody, StructDecl,
     Sum, Sub, Mul, Div, Mod, And, Or, Xor, BoolAnd, BoolOr, Print, 
     AddressOf, DerefOf, ElementOf,
     Number, Integer, Integer64, Float, Double, Byte, StringLiteral, TypeExpr,
     FuncDecl, FuncDeclExtern, FuncArgList, FuncArg, GlobalVarDecl, VarDecl, VarDeclAssign, 
-    LValue, FuncCall, Assignment, AddAssignment, SubAssignment, MulAssignment, 
+    LValue, LValueField, FuncCall, Assignment, AddAssignment, SubAssignment, MulAssignment, 
     Boolean, BooleanEq, BooleanNeq, BooleanGte, BooleanGt, BooleanLte, BooleanLt, 
     IfStatement, WhileStatement
 )
@@ -20,7 +20,7 @@ class Parser():
              'INT', 'LONGINT', 'BYTE', 'FLOAT', 'DOUBLE', 'STRING', 
              'IDENT', 'TPRINT', 'DOT', 'TRETURN', 'LPAREN', 'RPAREN', 'LBRACKET', 'RBRACKET',
              'SEMICOLON', 'ADD', 'SUB', 'MUL', 'DIV', 'MOD', 'AND', 'OR', 'XOR', 'BOOLAND', 'BOOLOR',
-             'TFN', 'COLON', 'LBRACE', 'RBRACE', 'COMMA', 'EQ', 'CEQ', 'ADDEQ', 'SUBEQ', 'MULEQ',
+             'TFN', 'COLON', 'LBRACE', 'RBRACE', 'COMMA', 'CC', 'EQ', 'CEQ', 'ADDEQ', 'SUBEQ', 'MULEQ',
              'TIF', 'TELSE', 'TWHILE', 'TCONST', 'TIMMUT', 'TTYPE', 'TSTRUCT',
              'BOOLEQ', 'BOOLNEQ', 'BOOLGT', 'BOOLLT', 'BOOLGTE', 'BOOLLTE', 'TTRUE', 'TFALSE'],
 
@@ -52,6 +52,7 @@ class Parser():
         @self.pg.production('gstmt : pack_decl')
         @self.pg.production('gstmt : import_decl')
         @self.pg.production('gstmt : type_decl')
+        @self.pg.production('gstmt : struct_decl')
         def gstmt(p):
            return p[0]
 
@@ -151,6 +152,33 @@ class Parser():
         def type_decl(p):
             spos = p[0].getsourcepos()
             return TypeDecl(self.builder, self.module, spos, p[1], p[3])
+
+        @self.pg.production('struct_decl : TTYPE lvalue COLON TSTRUCT LBRACE struct_decl_body RBRACE')
+        def struct_decl(p):
+            spos = p[0].getsourcepos()
+            return StructDecl(self.builder, self.module, spos, p[1], p[5])
+
+        @self.pg.production('struct_decl_body : struct_decl_body struct_decl_field')
+        @self.pg.production('struct_decl_body : struct_decl_field')
+        @self.pg.production('struct_decl_body : ')
+        def struct_decl_body(p):
+            if len(p) == 2:
+                spos = p[0].getsourcepos()
+                p[0].add(p[1])
+                return p[0]
+            elif len(p) == 1:
+                spos = p[0].getsourcepos()
+                sdb = StructDeclBody(self.builder, self.module, spos)
+                sdb.add(p[0])
+                return sdb
+            else:
+                spos = None
+                return StructDeclBody(self.builder, self.module, spos)
+
+        @self.pg.production('struct_decl_field : IDENT COLON typeexpr SEMICOLON')
+        def struct_decl_field(p):
+            spos = p[0].getsourcepos()
+            return StructField(self.builder, self.module, spos, p[0], p[2])
 
         @self.pg.production('block : block stmt')
         @self.pg.production('block : stmt')
@@ -344,13 +372,18 @@ class Parser():
                 return p[0]
 
         @self.pg.production('lvalue : IDENT')
-        @self.pg.production('lvalue : lvalue DOT IDENT')
+        @self.pg.production('lvalue : lvalue CC IDENT')
         def lvalue(p):
             spos = p[0].getsourcepos()
             if(len(p) == 1):
                 return LValue(self.builder, self.module, spos, p[0].value)
             else:
-                return LValue(self.builder, self.module, spos, p[2], p[0].value)
+                return LValue(self.builder, self.module, spos, p[2].value, p[0])
+
+        @self.pg.production('lvalue : lvalue DOT IDENT')
+        def lvalue_dot(p):
+            spos = p[0].getsourcepos()
+            return LValueField(self.builder, self.module, spos, p[0], p[2].value)
 
         @self.pg.production('lvalue_expr : lvalue')
         @self.pg.production('lvalue_expr : MUL lvalue')
