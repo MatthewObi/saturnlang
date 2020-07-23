@@ -4,7 +4,8 @@ from ast import (
     PackageDecl, ImportDecl, TypeDecl, StructField, StructDeclBody, StructDecl,
     Sum, Sub, Mul, Div, Mod, And, Or, Xor, BoolAnd, BoolOr, Print, 
     AddressOf, DerefOf, ElementOf,
-    Number, Integer, Integer64, Float, Double, Byte, StringLiteral, TypeExpr,
+    Number, Integer, Integer64, Float, Double, Byte, StringLiteral, 
+    StructLiteralElement, StructLiteralBody, StructLiteral, TypeExpr,
     FuncDecl, FuncDeclExtern, FuncArgList, FuncArg, GlobalVarDecl, VarDecl, VarDeclAssign, 
     LValue, LValueField, FuncCall, Assignment, AddAssignment, SubAssignment, MulAssignment, 
     Boolean, BooleanEq, BooleanNeq, BooleanGte, BooleanGt, BooleanLte, BooleanLt, 
@@ -407,6 +408,38 @@ class Parser():
         @self.pg.production('expr : lvalue_expr')
         def expr_lvalue(p):
             return p[0]
+
+        @self.pg.production('expr : struct_literal')
+        def expr_struct_literal(p):
+            return p[0]
+
+        @self.pg.production('struct_literal : typeexpr LBRACE struct_literal_body RBRACE')
+        def struct_literal(p):
+            spos = p[1].getsourcepos()
+            return StructLiteral(self.builder, self.module, spos, p[0], p[2])
+
+        @self.pg.production('struct_literal_body : struct_literal_body COMMA struct_literal_element')
+        @self.pg.production('struct_literal_body : struct_literal_body COMMA')
+        @self.pg.production('struct_literal_body : struct_literal_element')
+        @self.pg.production('struct_literal_body : ')
+        def struct_literal_body(p):
+            if len(p) == 0:
+                return StructLiteralBody(self.builder, self.module, None)
+            elif len(p) == 1:
+                spos = p[0].getsourcepos()
+                body = StructLiteralBody(self.builder, self.module, spos)
+                body.add_field(p[0].name, p[0].expr)
+                return body
+            elif len(p) == 2:
+                return p[0]
+            else:
+                p[0].add_field(p[2].name, p[2].expr)
+                return p[0]
+
+        @self.pg.production('struct_literal_element : IDENT COLON expr')
+        def struct_literal_element(p):
+            spos = p[0].getsourcepos()
+            return StructLiteralElement(self.builder, self.module, spos, p[0], p[2])
 
         @self.pg.production('expr : number')
         def expr_number(p):

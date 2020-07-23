@@ -166,6 +166,49 @@ class Boolean(Expr):
         i = ir.Constant(self.get_type().irtype, self.value)
         return i
 
+
+class StructLiteralElement(Expr):
+    def __init__(self, builder, module, spos, name, expr):
+        self.builder = builder
+        self.module = module
+        self.spos = spos
+        self.name = name
+        self.expr = expr
+
+
+class StructLiteralBody():
+    def __init__(self, builder, module, spos):
+        self.builder = builder
+        self.module = module
+        self.spos = spos
+        self.values = {}
+
+    def add_field(self, name, expr):
+        self.values[name.value] = expr
+
+
+class StructLiteral(Expr):
+    """
+    A struct literal constant.
+    """
+    def __init__(self, builder, module, spos, stype, body):
+        self.builder = builder
+        self.module = module
+        self.spos = spos
+        self.stype = stype
+        self.body = body
+        self.type = self.get_type()
+
+    def get_type(self):
+        return self.stype.type
+
+    def eval(self):
+        membervals = []
+        for val in self.body.values.values():
+            membervals.append(val.eval())
+        c = ir.Constant(self.stype.get_ir_type(), membervals)
+        return c
+
         
 class LValue(Expr):
     """

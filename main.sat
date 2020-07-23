@@ -19,7 +19,7 @@ fn main(argc: int, argv: CStringArray): int {
     const PI := 3.141593;
     const TAU := PI * 2.0;
 
-    v2: Vector2;
+    v2 := Vector2 {x: 0, y: 11};
     printf("Vector2 (x: %d, y: %d)\n", v2.x, v2.y);
 
     v2.x = 5;
