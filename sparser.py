@@ -7,7 +7,7 @@ from ast import (
     Number, Integer, Integer64, Float, Double, Byte, StringLiteral, 
     StructLiteralElement, StructLiteralBody, StructLiteral, TypeExpr,
     FuncDecl, FuncDeclExtern, FuncArgList, FuncArg, GlobalVarDecl, VarDecl, VarDeclAssign, 
-    LValue, LValueField, FuncCall, Assignment, AddAssignment, SubAssignment, MulAssignment, 
+    LValue, LValueField, FuncCall, CastExpr, Assignment, AddAssignment, SubAssignment, MulAssignment, 
     Boolean, BooleanEq, BooleanNeq, BooleanGte, BooleanGt, BooleanLte, BooleanLt, 
     IfStatement, WhileStatement
 )
@@ -22,7 +22,7 @@ class Parser():
              'IDENT', 'TPRINT', 'DOT', 'TRETURN', 'LPAREN', 'RPAREN', 'LBRACKET', 'RBRACKET',
              'SEMICOLON', 'ADD', 'SUB', 'MUL', 'DIV', 'MOD', 'AND', 'OR', 'XOR', 'BOOLAND', 'BOOLOR',
              'TFN', 'COLON', 'LBRACE', 'RBRACE', 'COMMA', 'CC', 'EQ', 'CEQ', 'ADDEQ', 'SUBEQ', 'MULEQ',
-             'TIF', 'TELSE', 'TWHILE', 'TCONST', 'TIMMUT', 'TTYPE', 'TSTRUCT',
+             'TIF', 'TELSE', 'TWHILE', 'TCONST', 'TIMMUT', 'TTYPE', 'TSTRUCT', 'TCAST',
              'BOOLEQ', 'BOOLNEQ', 'BOOLGT', 'BOOLLT', 'BOOLGTE', 'BOOLLTE', 'TTRUE', 'TFALSE'],
 
              precedence=[
@@ -352,6 +352,13 @@ class Parser():
                 return BoolAnd(self.builder, self.module, spos, left, right)
             elif operator.gettokentype() == 'BOOLOR':
                 return BoolOr(self.builder, self.module, spos, left, right)
+
+        @self.pg.production('expr : TCAST BOOLLT typeexpr BOOLGT LPAREN expr RPAREN')
+        def expr_cast(p):
+            spos = p[0].getsourcepos()
+            ctype = p[2]
+            cexpr = p[5]
+            return CastExpr(self.builder, self.module, spos, ctype, cexpr)
 
         @self.pg.production('expr : lvalue LPAREN args RPAREN')
         def expr_func_call(p):

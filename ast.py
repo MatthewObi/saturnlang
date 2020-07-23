@@ -437,6 +437,60 @@ class DerefOf(PrefixOp):
         return i
 
 
+class CastExpr(Expr):
+    def __init__(self, builder, module, spos, ctype, expr):
+        self.builder = builder
+        self.module = module
+        self.spos = spos
+        self.ctype = ctype
+        self.expr = expr
+
+    def get_type(self):
+        return self.ctype.type
+
+    def eval(self):
+        cast = None
+        val = self.expr.eval()
+        exprt = self.expr.get_type()
+        castt = self.get_type()
+        if exprt.is_pointer():
+            if castt.is_pointer():
+                cast = self.builder.bitcast(val, castt.irtype)
+            elif castt.is_integer():
+                cast = self.builder.ptrtoint(val, castt.irtype)
+        elif exprt.is_integer():
+            if castt.is_integer():
+                if castt.get_integer_bits() < exprt.get_integer_bits():
+                    cast = self.builder.trunc(val, castt.irtype)
+                elif castt.get_integer_bits() > exprt.get_integer_bits():
+                    if castt.is_unsigned():
+                        cast = self.builder.zext(val, castt.irtype)
+                    else:
+                        cast = self.builder.sext(val, castt.irtype)
+                else:
+                    cast = val
+            elif castt.is_float():
+                if exprt.is_unsigned():
+                    cast = self.builder.uitofp(val, castt.irtype)
+                else:
+                    cast = self.builder.sitofp(val, castt.irtype)
+            elif castt.is_pointer():
+                cast = self.builder.inttoptr(val, castt.irtype)
+            else:
+                lineno = self.expr.getsourcepos().lineno
+                colno = self.expr.getsourcepos().colno
+                throw_saturn_error(self.builder, self.module, lineno, colno, 
+                    "Cannot cast from integer type to '%s'." % str(self.get_type())
+                )
+        else:
+            lineno = self.expr.getsourcepos().lineno
+            colno = self.expr.getsourcepos().colno
+            throw_saturn_error(self.builder, self.module, lineno, colno, 
+                "Cannot cast expression of type '%s' to '%s'." % (str(exprt), str(castt))
+            )
+        return cast
+
+
 class BinaryOp(Expr):
     """
     A base class for binary operations.\n
@@ -1466,6 +1520,7 @@ class StructDecl():
             if not self.decl_mode:
                 fn.args = (ir.Argument(fn, structptr, name='this'),)
                 thisptr = fn.args[0]
+                fn.attributes.add("alwaysinline")
                 block = fn.append_basic_block("entry")
                 self.builder.position_at_start(block)
                 for fld in initfs:

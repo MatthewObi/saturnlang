@@ -29,6 +29,8 @@ fn main(argc: int, argv: CStringArray): int {
     v2ptr.x = 11;
 
     printf("Vector2 (x: %d, y: %d)\n", v2.x, v2.y);
+    ptrint := cast<int>(&v2);
+    printf("v2ptr: 0x%X\n", ptrint);
 
     i := argc;
     while i > 0 {

@@ -15,6 +15,24 @@ class Type():
         self.irtype = irtype
         self.qualifiers = qualifiers
         self.traits = traits
+        self.bits = -1
+
+    def get_integer_bits(self):
+        if self.bits != -1:
+            return self.bits
+        if self.name == 'int' or self.name == 'int32' or self.name == 'uint' or self.name == 'uint32':
+            self.bits = 32
+            return 32
+        elif self.name == 'int64' or self.name == 'uint64':
+            self.bits = 64
+            return 64
+        elif self.name == 'byte' or self.name == 'int8':
+            self.bits = 8
+            return 8
+        elif self.name == 'int16' or self.name == 'uint16':
+            self.bits = 16
+            return 16
+        return -1
 
     def make_array(self, size):
         self.qualifiers.append(('array', size))
@@ -112,9 +130,6 @@ class Type():
     def is_immut(self):
         if len(self.qualifiers) > 0:
             return self.qualifiers[-1][0] == 'immut'
-        return False
-
-    def is_struct(self):
         return False
 
     def is_value(self):
