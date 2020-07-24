@@ -167,6 +167,49 @@ class Boolean(Expr):
         return i
 
 
+class ArrayLiteralElement(Expr):
+    def __init__(self, builder, module, spos, expr, index=-1):
+        self.builder = builder
+        self.module = module
+        self.spos = spos
+        self.expr = expr
+        self.index = index
+
+
+class ArrayLiteralBody():
+    def __init__(self, builder, module, spos):
+        self.builder = builder
+        self.module = module
+        self.spos = spos
+        self.values = []
+
+    def add_element(self, expr):
+        self.values.append( expr )
+
+
+class ArrayLiteral(Expr):
+    """
+    An array literal constant.
+    """
+    def __init__(self, builder, module, spos, atype, body):
+        self.builder = builder
+        self.module = module
+        self.spos = spos
+        self.atype = atype
+        self.body = body
+        self.type = self.get_type()
+
+    def get_type(self):
+        return self.atype.type.get_array_of(len(self.body.values))
+
+    def eval(self):
+        vals = []
+        for val in self.body.values:
+            vals.append(val.eval())
+        c = ir.Constant(self.get_type().irtype, vals)
+        return c
+
+
 class StructLiteralElement(Expr):
     def __init__(self, builder, module, spos, name, expr):
         self.builder = builder
@@ -296,7 +339,7 @@ class LValueField(Expr):
         stype = self.lvalue.get_type()
         ptr = self.lvalue.get_pointer()
         findex = stype.get_field_index(self.fname)
-        print('%s: %d' % (self.fname, findex))
+        #print('%s: %d' % (self.fname, findex))
         gep = None
         if not ptr.type.is_pointer():
             gep = self.builder.gep(ptr.irvalue, [
@@ -1321,14 +1364,16 @@ class VarDecl():
         if self.initval is not None:
             self.builder.store(self.initval.eval(), ptr.irvalue)
         if vartype.is_struct():
-            bcast = self.builder.bitcast(ptr.irvalue, ir.IntType(8).as_pointer())
-            val = ir.Constant(ir.IntType(8), 0)
-            self.builder.call(self.module.memset, [
-                bcast,
-                val,
-                calc_sizeof_struct(self.builder, self.module, ptr.type.irtype),
-                ir.Constant(ir.IntType(1), 0),
-            ])
+            c = ir.Constant(vartype.irtype, None)
+            self.builder.store(c, ptr.irvalue)
+            # bcast = self.builder.bitcast(ptr.irvalue, ir.IntType(8).as_pointer())
+            # val = ir.Constant(ir.IntType(8), 0)
+            # self.builder.call(self.module.memset, [
+            #     bcast,
+            #     val,
+            #     calc_sizeof_struct(self.builder, self.module, ptr.type.irtype),
+            #     ir.Constant(ir.IntType(1), 0),
+            # ])
             if vartype.has_ctor():
                 self.builder.call(vartype.get_ctor(), [ptr.irvalue])
         return ptr

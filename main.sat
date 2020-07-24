@@ -15,9 +15,12 @@ type Vector2 : struct {
 
 fn main(argc: int, argv: CStringArray): int {
     arrofints : [4]int;
+    array2 := []int {77, 44, 13, 39};
     printf("argc = %d\n", argc);
     const PI := 3.141593;
     const TAU := PI * 2.0;
+
+    emptyv2: Vector2;
 
     v2 := Vector2 {x: 0, y: 11};
     printf("Vector2 (x: %d, y: %d)\n", v2.x, v2.y);
@@ -48,6 +51,12 @@ fn main(argc: int, argv: CStringArray): int {
     x := 0;
     while x < 4 {
         printf("arrofints[%d] = %d\n", x, arrofints[x]);
+        x += 1;
+    }
+
+    x = 0;
+    while x < 4 {
+        printf("array2[%d] = %d\n", x, array2[x]);
         x += 1;
     }
 

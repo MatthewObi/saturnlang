@@ -27,6 +27,7 @@ class Lexer():
         self.lexer.add('TCONST', r'const')
         self.lexer.add('TIMMUT', r'immut')
         self.lexer.add('TMUT', r'mut')
+        self.lexer.add('TIN', r'in')
 
         self.lexer.add('TTRUE', r'true')
         self.lexer.add('TFALSE', r'false')

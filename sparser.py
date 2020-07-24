@@ -5,7 +5,8 @@ from ast import (
     Sum, Sub, Mul, Div, Mod, And, Or, Xor, BoolAnd, BoolOr, Print, 
     AddressOf, DerefOf, ElementOf,
     Number, Integer, Integer64, Float, Double, Byte, StringLiteral, 
-    StructLiteralElement, StructLiteralBody, StructLiteral, TypeExpr,
+    StructLiteralElement, StructLiteralBody, StructLiteral, 
+    ArrayLiteralElement, ArrayLiteralBody, ArrayLiteral, TypeExpr,
     FuncDecl, FuncDeclExtern, FuncArgList, FuncArg, GlobalVarDecl, VarDecl, VarDeclAssign, 
     LValue, LValueField, FuncCall, CastExpr, Assignment, AddAssignment, SubAssignment, MulAssignment, 
     Boolean, BooleanEq, BooleanNeq, BooleanGte, BooleanGt, BooleanLte, BooleanLt, 
@@ -420,6 +421,10 @@ class Parser():
         def expr_struct_literal(p):
             return p[0]
 
+        @self.pg.production('expr : array_literal')
+        def expr_array_literal(p):
+            return p[0]
+
         @self.pg.production('struct_literal : typeexpr LBRACE struct_literal_body RBRACE')
         def struct_literal(p):
             spos = p[1].getsourcepos()
@@ -447,6 +452,34 @@ class Parser():
         def struct_literal_element(p):
             spos = p[0].getsourcepos()
             return StructLiteralElement(self.builder, self.module, spos, p[0], p[2])
+
+        @self.pg.production('array_literal : LBRACKET RBRACKET typeexpr LBRACE array_literal_body RBRACE')
+        def array_literal(p):
+            spos = p[1].getsourcepos()
+            return ArrayLiteral(self.builder, self.module, spos, p[2], p[4])
+
+        @self.pg.production('array_literal_body : array_literal_body COMMA array_literal_element')
+        @self.pg.production('array_literal_body : array_literal_body COMMA')
+        @self.pg.production('array_literal_body : array_literal_element')
+        @self.pg.production('array_literal_body : ')
+        def array_literal_body(p):
+            if len(p) == 0:
+                return ArrayLiteralBody(self.builder, self.module, None)
+            elif len(p) == 1:
+                spos = p[0].getsourcepos()
+                body = ArrayLiteralBody(self.builder, self.module, spos)
+                body.add_element(p[0].expr)
+                return body
+            elif len(p) == 2:
+                return p[0]
+            else:
+                p[0].add_element(p[2].expr)
+                return p[0]
+
+        @self.pg.production('array_literal_element : expr')
+        def array_literal_element(p):
+            spos = p[0].getsourcepos()
+            return ArrayLiteralElement(self.builder, self.module, spos, p[0])
 
         @self.pg.production('expr : number')
         def expr_number(p):
