@@ -270,8 +270,8 @@ class LValue(Expr):
         ptr = check_name_in_scope(name)
         if ptr is None:
             ptr = self.module.sglobals[name]
-        if ptr.type.is_pointer():
-            return ptr.type.get_deference_of()
+        # if ptr.type.is_pointer():
+        #     return ptr.type.get_deference_of()
         return ptr.type
 
     def get_ir_type(self):
@@ -462,7 +462,7 @@ class DerefOf(PrefixOp):
         return self.right.get_name()
 
     def get_type(self):
-        return self.right.get_type()
+        return self.right.get_type().get_deference_of()
     
     def get_pointer(self):
         return Value("", self.get_type(), self.builder.load(self.right.get_pointer().irvalue))

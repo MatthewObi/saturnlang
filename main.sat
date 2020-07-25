@@ -32,7 +32,7 @@ fn main(argc: int, argv: CStringArray): int {
     v2ptr.x = 11;
 
     printf("Vector2 (x: %d, y: %d)\n", v2.x, v2.y);
-    ptrint := cast<int>(&v2);
+    ptrint := cast<int>(v2ptr);
     printf("v2ptr: 0x%X\n", ptrint);
 
     i := argc;
@@ -68,7 +68,7 @@ fn main(argc: int, argv: CStringArray): int {
     printf("i = %d\n", i);
     ptrfun(&i);
     printf("i = %d\n", *ptr2);
-    t := *ptr2 + 5;
+    t := (*ptr2) + 5;
     i = t;
     f := -1.5;
     f = floor(f);
