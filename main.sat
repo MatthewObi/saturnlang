@@ -13,6 +13,7 @@ type Vector2 : struct {
     y: int;
 }
 
+//main function
 fn main(argc: int, argv: CStringArray): int {
     arrofints : [4]int;
     array2 := []int {77, 44, 13, 39};

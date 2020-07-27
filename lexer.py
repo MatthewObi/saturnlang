@@ -6,7 +6,11 @@ class Lexer():
         self.lexer = LexerGenerator()
 
     def _add_tokens(self):
+        # C-style comments (multi-line)
         self.lexer.ignore(r'\/\*(\*(?!\/)|[^*])*\*\/')
+
+        # C++-style comments (single-line)
+        self.lexer.ignore(r'\/\/[^\n]')
 
         # Words
         self.lexer.add('TPRINT', r'printf')
