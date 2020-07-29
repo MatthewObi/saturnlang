@@ -148,6 +148,35 @@ class StringLiteral(Expr):
         self.value = self.builder.bitcast(global_fmt, self.type.irtype)
         return self.value
 
+class MultilineStringLiteral(Expr):
+    """
+    A multiline null terminated string literal. (cstring)
+    """
+    def __init__(self, builder, module, spos, value):
+        self.builder = builder
+        self.module = module
+        self.spos = spos
+        self.value = value
+        self.type = self.get_type()
+
+    def get_type(self):
+        return types['cstring']
+
+    def get_reference(self):
+        return self.value
+
+    def eval(self):
+        fmt = str(self.value).lstrip("R(\"").rstrip('\")R') + '\0'
+        fmt = fmt.replace('\\n', '\n')
+        c_fmt = ir.Constant(ir.ArrayType(ir.IntType(8), len(fmt)),
+                            bytearray(fmt.encode("utf8")))
+        global_fmt = ir.GlobalVariable(self.module, c_fmt.type, name=self.module.get_unique_name("str"))
+        global_fmt.linkage = 'internal'
+        global_fmt.global_constant = True
+        global_fmt.initializer = c_fmt
+        self.value = self.builder.bitcast(global_fmt, self.type.irtype)
+        return self.value
+
 
 class Boolean(Expr):
     """

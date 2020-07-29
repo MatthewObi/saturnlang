@@ -21,6 +21,13 @@ fn main(argc: int, argv: CStringArray): int {
     const PI := 3.141593;
     const TAU := PI * 2.0;
 
+    mymlstr := R("
+        Hello, world!
+        Hello
+        world
+        !
+    ")R;
+
     emptyv2: Vector2;
 
     v2 := Vector2 {x: 0, y: 11};

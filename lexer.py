@@ -10,7 +10,10 @@ class Lexer():
         self.lexer.ignore(r'\/\*(\*(?!\/)|[^*])*\*\/')
 
         # C++-style comments (single-line)
-        self.lexer.ignore(r'\/\/[^\n]')
+        self.lexer.ignore(r'\/\/[^\n]*')
+
+        # Multiline String literal
+        self.lexer.add('MLSTRING', r'R\(\"([\S\s]*)\"\)R')
 
         # Words
         self.lexer.add('TPRINT', r'printf')
@@ -31,7 +34,7 @@ class Lexer():
         self.lexer.add('TCONST', r'const')
         self.lexer.add('TIMMUT', r'immut')
         self.lexer.add('TMUT', r'mut')
-        self.lexer.add('TIN', r'in')
+        self.lexer.add('TIN', r'in\b')
 
         self.lexer.add('TTRUE', r'true')
         self.lexer.add('TFALSE', r'false')

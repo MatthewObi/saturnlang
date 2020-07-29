@@ -4,7 +4,7 @@ from ast import (
     PackageDecl, ImportDecl, TypeDecl, StructField, StructDeclBody, StructDecl,
     Sum, Sub, Mul, Div, Mod, And, Or, Xor, BoolAnd, BoolOr, Print, 
     AddressOf, DerefOf, ElementOf,
-    Number, Integer, Integer64, Float, Double, Byte, StringLiteral, 
+    Number, Integer, Integer64, Float, Double, Byte, StringLiteral, MultilineStringLiteral,
     StructLiteralElement, StructLiteralBody, StructLiteral, 
     ArrayLiteralElement, ArrayLiteralBody, ArrayLiteral, TypeExpr,
     FuncDecl, FuncDeclExtern, FuncArgList, FuncArg, GlobalVarDecl, VarDecl, VarDeclAssign, 
@@ -19,7 +19,7 @@ class Parser():
         self.pg = ParserGenerator(
             # A list of all token names accepted by the parser.
             ['TPACKAGE', 'TIMPORT',
-             'INT', 'LONGINT', 'BYTE', 'FLOAT', 'DOUBLE', 'STRING', 
+             'INT', 'LONGINT', 'BYTE', 'FLOAT', 'DOUBLE', 'STRING', 'MLSTRING',
              'IDENT', 'TPRINT', 'DOT', 'TRETURN', 'LPAREN', 'RPAREN', 'LBRACKET', 'RBRACKET',
              'SEMICOLON', 'ADD', 'SUB', 'MUL', 'DIV', 'MOD', 'AND', 'OR', 'XOR', 'BOOLAND', 'BOOLOR',
              'TFN', 'COLON', 'LBRACE', 'RBRACE', 'COMMA', 'CC', 'EQ', 'CEQ', 'ADDEQ', 'SUBEQ', 'MULEQ',
@@ -507,6 +507,11 @@ class Parser():
         def expr_string(p):
             spos = p[0].getsourcepos()
             return StringLiteral(self.builder, self.module, spos, p[0].value)
+
+        @self.pg.production('expr : MLSTRING')
+        def expr_mlstring(p):
+            spos = p[0].getsourcepos()
+            return MultilineStringLiteral(self.builder, self.module, spos, p[0].value)
 
         @self.pg.production('expr : boolexpr')
         def expr_bool(p):
