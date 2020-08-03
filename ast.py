@@ -1108,6 +1108,22 @@ class ImportDecl():
         parser.parse(tokens).eval()
 
 
+class CIncludeDecl():
+    """
+    A statement that reads and imports a C header file.
+    """
+    def __init__(self, builder, module, spos, string):
+        self.builder = builder
+        self.module = module
+        self.spos = spos
+        self.string = string
+
+    def eval(self):
+        """
+        TODO: Add C parsing functionality.
+        """
+        pass
+
 
 class CodeBlock():
     """
@@ -1724,6 +1740,110 @@ class WhileStatement():
         self.loop.eval()
         bexpr2 = self.boolexpr.eval()
         self.builder.cbranch(bexpr2, loop, after)
+        self.builder.goto_block(after)
+        self.builder.position_at_start(after)
+
+
+class SwitchCase():
+    """
+    Switch statement case
+    case expr: stmts
+    """
+    def __init__(self, builder, module, spos, expr, stmts=[]):
+        self.builder = builder
+        self.module = module
+        self.expr = expr
+        self.spos = spos
+        self.expr = expr
+        self.stmts = stmts
+
+    def getsourcepos(self):
+        return self.spos
+
+    def add_stmt(self, stmt):
+        self.stmts.append(stmt)
+
+    def eval(self):
+        for stmt in self.stmts:
+            stmt.eval()
+
+
+class SwitchDefaultCase(SwitchCase):
+    """
+    Switch statement case
+    case expr: stmts
+    """
+    def __init__(self, builder, module, spos, stmts=[]):
+        self.builder = builder
+        self.module = module
+        self.spos = spos
+        self.stmts = stmts
+
+
+class SwitchBody():
+    def __init__(self, builder, module, spos, cases=[], default_case=None):
+        self.builder = builder
+        self.module = module
+        self.spos = spos
+        self.cases = cases
+        self.default_case = default_case
+
+    def getsourcepos(self):
+        return self.spos
+
+    def add_case(self, case):
+        self.cases.append(case)
+
+    def set_default(self, case):
+        self.default_case = case
+
+
+class SwitchStatement():
+    """
+    While loop statement.\n
+    switch expr { case_stmt ... default_case_stmt }
+    """
+    def __init__(self, builder, module, spos, expr, body=None):
+        self.builder = builder
+        self.module = module
+        self.spos = spos
+        self.expr = expr
+        self.body = body
+
+    def getsourcepos(self):
+        return self.spos
+
+    def eval(self):
+        sexpr = self.expr.eval()
+        after = None
+        switch = None
+        default = None
+        if self.body.default_case is not None:
+            default = self.builder.append_basic_block(self.module.get_unique_name("switch.default"))
+            after = self.builder.append_basic_block(self.module.get_unique_name("switch.after"))
+            switch = self.builder.switch(sexpr, default)
+        else:
+            after = self.builder.append_basic_block(self.module.get_unique_name("switch.after"))
+            switch = self.builder.switch(sexpr, after)
+        prev_block = None
+        for case in self.body.cases:
+            case_expr = case.expr.eval()
+            case_block = self.builder.append_basic_block(self.module.get_unique_name("switch.case"))
+            switch.add_case(case_expr, case_block)
+            if prev_block is not None and not prev_block.is_terminated:
+                self.builder.branch(after)
+            self.builder.goto_block(case_block)
+            self.builder.position_at_start(case_block)
+            case.eval()
+            prev_block = case_block
+        if prev_block is not None and not prev_block.is_terminated:
+            self.builder.branch(after)
+        if default is not None:
+            self.builder.goto_block(default)
+            self.builder.position_at_start(default)
+            self.body.default_case.eval()
+            if not default.is_terminated:
+                self.builder.branch(after)
         self.builder.goto_block(after)
         self.builder.position_at_start(after)
 

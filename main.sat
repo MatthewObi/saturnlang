@@ -1,6 +1,7 @@
 package main;
 import cstring;
 import cmath;
+c_include "test.h";
 
 fn ptrfun(x: *int) {
     *x = 5;

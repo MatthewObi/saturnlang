@@ -1,8 +1,11 @@
 package main;
 
 fn factorial(x: int): int { 
-    if x == 1 || x == 0 {
-        return 1;
+    switch x {
+        case 0:
+        case 1:
+            return 1;
+        default:
+            return x * factorial(x - 1);
     }
-    return x * factorial(x - 1);
 }

@@ -1,7 +1,7 @@
 from rply import ParserGenerator, Token
 from ast import ( 
     Program, CodeBlock, Statement, ReturnStatement, 
-    PackageDecl, ImportDecl, TypeDecl, StructField, StructDeclBody, StructDecl,
+    PackageDecl, ImportDecl, CIncludeDecl, TypeDecl, StructField, StructDeclBody, StructDecl,
     Sum, Sub, Mul, Div, Mod, And, Or, Xor, BoolAnd, BoolOr, Print, 
     AddressOf, DerefOf, ElementOf,
     Number, Integer, Integer64, Float, Double, Byte, StringLiteral, MultilineStringLiteral,
@@ -10,20 +10,22 @@ from ast import (
     FuncDecl, FuncDeclExtern, FuncArgList, FuncArg, GlobalVarDecl, VarDecl, VarDeclAssign, 
     LValue, LValueField, FuncCall, CastExpr, Assignment, AddAssignment, SubAssignment, MulAssignment, 
     Boolean, BooleanEq, BooleanNeq, BooleanGte, BooleanGt, BooleanLte, BooleanLt, 
-    IfStatement, WhileStatement
+    IfStatement, WhileStatement, SwitchCase, SwitchDefaultCase, SwitchBody, SwitchStatement
 )
+from serror import throw_saturn_error
 
 
 class Parser():
     def __init__(self, module, builder, decl_mode=False):
         self.pg = ParserGenerator(
             # A list of all token names accepted by the parser.
-            ['TPACKAGE', 'TIMPORT',
+            ['TPACKAGE', 'TIMPORT', 'TCINCLUDE',
              'INT', 'LONGINT', 'BYTE', 'FLOAT', 'DOUBLE', 'STRING', 'MLSTRING',
              'IDENT', 'TPRINT', 'DOT', 'TRETURN', 'LPAREN', 'RPAREN', 'LBRACKET', 'RBRACKET',
              'SEMICOLON', 'ADD', 'SUB', 'MUL', 'DIV', 'MOD', 'AND', 'OR', 'XOR', 'BOOLAND', 'BOOLOR',
              'TFN', 'COLON', 'LBRACE', 'RBRACE', 'COMMA', 'CC', 'EQ', 'CEQ', 'ADDEQ', 'SUBEQ', 'MULEQ',
-             'TIF', 'TELSE', 'TWHILE', 'TCONST', 'TIMMUT', 'TTYPE', 'TSTRUCT', 'TCAST',
+             'TIF', 'TELSE', 'TWHILE', 'TSWITCH', 'TCASE', 'TDEFAULT', 
+             'TCONST', 'TIMMUT', 'TTYPE', 'TSTRUCT', 'TCAST',
              'BOOLEQ', 'BOOLNEQ', 'BOOLGT', 'BOOLLT', 'BOOLGTE', 'BOOLLTE', 'TTRUE', 'TFALSE'],
 
              precedence=[
@@ -53,6 +55,7 @@ class Parser():
         @self.pg.production('gstmt : gvar_decl')
         @self.pg.production('gstmt : pack_decl')
         @self.pg.production('gstmt : import_decl')
+        @self.pg.production('gstmt : c_include_decl')
         @self.pg.production('gstmt : type_decl')
         @self.pg.production('gstmt : struct_decl')
         def gstmt(p):
@@ -149,6 +152,11 @@ class Parser():
         def import_decl(p):
             spos = p[0].getsourcepos()
             return ImportDecl(self.builder, self.module, spos, p[1])
+
+        @self.pg.production('c_include_decl : TCINCLUDE STRING SEMICOLON')
+        def c_include_decl(p):
+            spos = p[0].getsourcepos()
+            return CIncludeDecl(self.builder, self.module, spos, p[1])
 
         @self.pg.production('type_decl : TTYPE lvalue COLON typeexpr SEMICOLON')
         def type_decl(p):
@@ -277,6 +285,10 @@ class Parser():
         def stmt_if(p):
             return p[0]
 
+        @self.pg.production('stmt : switch_stmt')
+        def stmt_switch(p):
+            return p[0]
+
         @self.pg.production('stmt : TWHILE expr LBRACE block RBRACE')
         def stmt_while(p):
             spos = p[0].getsourcepos()
@@ -291,6 +303,59 @@ class Parser():
         def if_stmt_else(p):
             spos = p[0].getsourcepos()
             return IfStatement(self.builder, self.module, spos, p[1], p[3], el=p[7])
+
+        @self.pg.production('switch_stmt : TSWITCH lvalue_expr LBRACE switch_body RBRACE')
+        @self.pg.production('switch_stmt : TSWITCH lvalue_expr LBRACE RBRACE')
+        def switch_stmt(p):
+            spos = p[0].getsourcepos()
+            if len(p) == 5:
+                return SwitchStatement(self.builder, self.module, spos, p[1], p[3])
+            else:
+                return SwitchStatement(self.builder, self.module, spos, p[1])
+
+        @self.pg.production('switch_body : switch_body case_expr')
+        @self.pg.production('switch_body : switch_body default_case_expr')
+        @self.pg.production('switch_body : case_expr')
+        @self.pg.production('switch_body : default_case_expr')
+        def switch_body(p):
+            spos = p[0].getsourcepos()
+            if len(p) == 2:
+                if isinstance(p[1], SwitchDefaultCase):
+                    if p[0].default_case is not None:
+                        throw_saturn_error(self.builder, self.module, spos.lineno, spos.colno, 
+                            "Cannot have more than one default case in a switch statement."
+                        )
+                    p[0].set_default(p[1])
+                    return p[0]
+                else:
+                    p[0].add_case(p[1])
+                    return p[0]
+            else:
+                if isinstance(p[0], SwitchDefaultCase):
+                    return SwitchBody(self.builder, self.module, spos, [], p[0])
+                else:
+                    return SwitchBody(self.builder, self.module, spos, [p[0]])
+
+        @self.pg.production('case_expr : case_expr stmt')
+        @self.pg.production('case_expr : TCASE expr COLON')
+        def case_expr(p):
+            if len(p) == 3:
+                spos = p[0].getsourcepos()
+                return SwitchCase(self.builder, self.module, spos, p[1])
+            else:
+                p[0].add_stmt(p[1])
+                return p[0]
+
+        @self.pg.production('default_case_expr : default_case_expr stmt')
+        @self.pg.production('default_case_expr : TDEFAULT COLON')
+        def default_case_expr(p):
+            if not isinstance(p[0], SwitchDefaultCase):
+                spos = p[0].getsourcepos()
+                return SwitchDefaultCase(self.builder, self.module, spos)
+            else:
+                p[0].add_stmt(p[1])
+                return p[0]
+
 
         @self.pg.production('expr : AND expr')
         def expr_unary(p):
