@@ -4,11 +4,12 @@ from ast import (
     PackageDecl, ImportDecl, CIncludeDecl, TypeDecl, StructField, StructDeclBody, StructDecl,
     Sum, Sub, Mul, Div, Mod, And, Or, Xor, BoolAnd, BoolOr, Print, 
     AddressOf, DerefOf, ElementOf,
-    Number, Integer, Integer64, Float, Double, Byte, StringLiteral, MultilineStringLiteral,
+    Number, Integer, UInteger, Integer64, UInteger64, Float, Double, Byte, StringLiteral, MultilineStringLiteral,
     StructLiteralElement, StructLiteralBody, StructLiteral, 
     ArrayLiteralElement, ArrayLiteralBody, ArrayLiteral, TypeExpr,
     FuncDecl, FuncDeclExtern, FuncArgList, FuncArg, GlobalVarDecl, VarDecl, VarDeclAssign, 
-    LValue, LValueField, FuncCall, CastExpr, Assignment, AddAssignment, SubAssignment, MulAssignment, 
+    MethodDecl, MethodDeclExtern,
+    LValue, LValueField, FuncCall, MethodCall, CastExpr, Assignment, AddAssignment, SubAssignment, MulAssignment, 
     Boolean, BooleanEq, BooleanNeq, BooleanGte, BooleanGt, BooleanLte, BooleanLt, 
     IfStatement, WhileStatement, SwitchCase, SwitchDefaultCase, SwitchBody, SwitchStatement
 )
@@ -20,7 +21,7 @@ class Parser():
         self.pg = ParserGenerator(
             # A list of all token names accepted by the parser.
             ['TPACKAGE', 'TIMPORT', 'TCINCLUDE',
-             'INT', 'LONGINT', 'BYTE', 'FLOAT', 'DOUBLE', 'STRING', 'MLSTRING',
+             'INT', 'UINT', 'LONGINT', 'ULONGINT', 'BYTE', 'FLOAT', 'DOUBLE', 'STRING', 'MLSTRING',
              'IDENT', 'TPRINT', 'DOT', 'TRETURN', 'LPAREN', 'RPAREN', 'LBRACKET', 'RBRACKET',
              'SEMICOLON', 'ADD', 'SUB', 'MUL', 'DIV', 'MOD', 'AND', 'OR', 'XOR', 'BOOLAND', 'BOOLOR',
              'TFN', 'COLON', 'LBRACE', 'RBRACE', 'COMMA', 'CC', 'EQ', 'CEQ', 'ADDEQ', 'SUBEQ', 'MULEQ',
@@ -53,6 +54,7 @@ class Parser():
         @self.pg.production('gstmt : func_decl')
         @self.pg.production('gstmt : func_decl_extern')
         @self.pg.production('gstmt : gvar_decl')
+        @self.pg.production('gstmt : method_decl')
         @self.pg.production('gstmt : pack_decl')
         @self.pg.production('gstmt : import_decl')
         @self.pg.production('gstmt : c_include_decl')
@@ -142,6 +144,18 @@ class Parser():
             initval = p[4]
             spos = p[0].getsourcepos()
             return GlobalVarDecl(self.builder, self.module, spos, name, vtype, initval)
+
+        @self.pg.production('method_decl : TFN LPAREN MUL lvalue RPAREN IDENT LPAREN decl_args RPAREN COLON typeexpr LBRACE block RBRACE')
+        def method_decl(p):
+            struct = p[3]
+            name = p[5]
+            declargs = p[7]
+            rtype = p[10]
+            block = p[12]
+            spos = p[0].getsourcepos()
+            if not self.decl_mode:
+                return MethodDecl(self.builder, self.module, spos, name, rtype, block, declargs, struct)
+            return MethodDeclExtern(self.builder, self.module, spos, name, rtype, declargs, struct)
 
         @self.pg.production('pack_decl : TPACKAGE lvalue SEMICOLON')
         def pack_decl(p):
@@ -426,11 +440,21 @@ class Parser():
             cexpr = p[5]
             return CastExpr(self.builder, self.module, spos, ctype, cexpr)
 
-        @self.pg.production('expr : lvalue LPAREN args RPAREN')
-        def expr_func_call(p):
+        @self.pg.production('func_call : lvalue LPAREN args RPAREN')
+        def func_call(p):
             name = p[0]
             spos = p[0].getsourcepos()
             return FuncCall(self.builder, self.module, spos, name, p[2])
+
+        @self.pg.production('func_call : lvalue LPAREN RPAREN')
+        def func_call_empty(p):
+            name = p[0]
+            spos = p[0].getsourcepos()
+            return FuncCall(self.builder, self.module, spos, name, [])
+
+        @self.pg.production('expr : func_call')
+        def expr_func_call(p):
+            return p[0]
 
         @self.pg.production('expr : TPRINT LPAREN args RPAREN')
         def expr_print_call(p):
@@ -476,7 +500,12 @@ class Parser():
             else:
                 if p[0].gettokentype() == 'MUL':
                     return DerefOf(self.builder, self.module, spos, p[1])
-                    
+
+        
+        @self.pg.production('lvalue_expr : lvalue DOT func_call')
+        def lvalue_expr_method(p):
+            spos = p[0].getsourcepos()
+            return MethodCall(self.builder, self.module, spos, p[0], p[2].lvalue, p[2].args)
 
         @self.pg.production('expr : lvalue_expr')
         def expr_lvalue(p):
@@ -551,7 +580,9 @@ class Parser():
             return p[0]
 
         @self.pg.production('number : INT')
+        @self.pg.production('number : UINT')
         @self.pg.production('number : LONGINT')
+        @self.pg.production('number : ULONGINT')
         @self.pg.production('number : BYTE')
         @self.pg.production('number : FLOAT')
         @self.pg.production('number : DOUBLE')
@@ -559,8 +590,12 @@ class Parser():
             spos = p[0].getsourcepos()
             if p[0].gettokentype() == 'INT':
                 return Integer(self.builder, self.module, spos, p[0].value)
+            elif p[0].gettokentype() == 'UINT':
+                return UInteger(self.builder, self.module, spos, p[0].value)
             elif p[0].gettokentype() == 'LONGINT':
                 return Integer64(self.builder, self.module, spos, p[0].value)
+            elif p[0].gettokentype() == 'ULONGINT':
+                return UInteger64(self.builder, self.module, spos, p[0].value)
             elif p[0].gettokentype() == 'BYTE':
                 return Byte(self.builder, self.module, spos, p[0].value)
             elif p[0].gettokentype() == 'FLOAT':

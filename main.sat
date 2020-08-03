@@ -1,7 +1,6 @@
 package main;
 import cstring;
 import cmath;
-c_include "test.h";
 
 fn ptrfun(x: *int) {
     *x = 5;
@@ -14,6 +13,19 @@ type Vector2 : struct {
     y: int;
 }
 
+type string: struct {
+    ptr: cstring;
+    len: uint;
+}
+
+fn(*Vector2) getX(): int {
+    return this.x;
+}
+
+fn(*Vector2) setX(newX : uint): void {
+    this.x = newX;
+}
+
 //main function
 fn main(argc: int, argv: CStringArray): int {
     arrofints : [4]int;
@@ -21,6 +33,13 @@ fn main(argc: int, argv: CStringArray): int {
     printf("argc = %d\n", argc);
     const PI := 3.141593;
     const TAU := PI * 2.0;
+
+    myv2: Vector2;
+    printf("myv2.x: %d\n", myv2.x);
+
+    myv2.setX(77u);
+    myv2x := myv2.getX();
+    printf("myv2.x: %d\n", myv2x);
 
     mymlstr := R("
         Hello, world!

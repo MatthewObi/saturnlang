@@ -27,6 +27,7 @@ class Lexer():
         self.lexer.add('TSWITCH', r'switch')
         self.lexer.add('TCASE', r'case')
         self.lexer.add('TDEFAULT', r'default')
+        self.lexer.add('TFALLTHROUGH', r'fallthrough')
         self.lexer.add('TRETURN', r'return')
         self.lexer.add('TEXTERN', r'extern')
         self.lexer.add('TTYPE', r'type')
@@ -92,8 +93,10 @@ class Lexer():
         # Number
         self.lexer.add('FLOAT', r'[+-]?([0-9]+(\.[0-9]*)|\.[0-9]+)f')
         self.lexer.add('DOUBLE', r'[+-]?([0-9]+([.][0-9]*)|\.[0-9]+)')
-        self.lexer.add('LONGINT', r'[+-]?\d+L')
+        self.lexer.add('LONGINT', r'[+-]?\d+l')
+        self.lexer.add('ULONGINT', r'[+-]?\d+ul')
         self.lexer.add('BYTE', r'[+-]?\d+b')
+        self.lexer.add('UINT', r'[+-]?\d+u')
         self.lexer.add('INT', r'[+-]?\d+')
         
         self.lexer.add('DOT', r'\.')

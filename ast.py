@@ -70,6 +70,19 @@ class Integer(Number):
         return i
 
 
+class UInteger(Number):
+    """
+    A 32-bit unsigned integer constant. (uint)
+    """
+    def get_type(self):
+        return types['uint']
+
+    def eval(self):
+        val = self.value.strip('u')
+        i = ir.Constant(self.type.irtype, int(val))
+        return i
+
+
 class Integer64(Number):
     """
     A 64-bit integer constant. (int64)
@@ -78,7 +91,20 @@ class Integer64(Number):
         return types['int64']
 
     def eval(self):
-        val = self.value.strip('L')
+        val = self.value.strip('l')
+        i = ir.Constant(self.type.irtype, int(val))
+        return i
+
+
+class UInteger64(Number):
+    """
+    A 64-bit unsigned integer constant. (uint64)
+    """
+    def get_type(self):
+        return types['uint64']
+
+    def eval(self):
+        val = self.value.strip('ul')
         i = ir.Constant(self.type.irtype, int(val))
         return i
 
@@ -128,6 +154,7 @@ class StringLiteral(Expr):
         self.module = module
         self.spos = spos
         self.value = value
+        self.raw_value = str(value).strip("\"") + '\0'
         self.type = self.get_type()
 
     def get_type(self):
@@ -137,7 +164,7 @@ class StringLiteral(Expr):
         return self.value
 
     def eval(self):
-        fmt = str(self.value).strip("\"") + '\0'
+        fmt = self.raw_value
         fmt = fmt.replace('\\n', '\n')
         c_fmt = ir.Constant(ir.ArrayType(ir.IntType(8), len(fmt)),
                             bytearray(fmt.encode("utf8")))
@@ -393,11 +420,19 @@ class LValueField(Expr):
         #     )
         ptr = self.lvalue.get_pointer()
         findex = stype.get_field_index(self.fname)
-        gep = self.builder.gep(ptr.irvalue, [
-            ir.Constant(ir.IntType(32), 0),
-            ir.Constant(ir.IntType(32), findex)
-        ])
-        return self.builder.load(gep)
+        if not ptr.type.is_pointer():
+            gep = self.builder.gep(ptr.irvalue, [
+                ir.Constant(ir.IntType(32), 0),
+                ir.Constant(ir.IntType(32), findex)
+            ])
+            return self.builder.load(gep)
+        else:
+            ld = self.builder.load(ptr.irvalue)
+            gep = self.builder.gep(ld, [
+                ir.Constant(ir.IntType(32), 0),
+                ir.Constant(ir.IntType(32), findex)
+            ])
+            return self.builder.load(gep)
 
 
 class PostfixOp(Expr):
@@ -1122,7 +1157,11 @@ class CIncludeDecl():
         """
         TODO: Add C parsing functionality.
         """
+        #import cparser
+        #path = str(self.string.value).strip('"')
+        #cparser.parse_c_file(self.builder, self.module, path)
         pass
+        
 
 
 class CodeBlock():
@@ -1218,6 +1257,9 @@ class FuncArgList():
 
     def add(self, arg):
         self.args.append(arg)
+
+    def prepend(self, arg):
+        self.args.insert(0, arg)
 
     def get_arg_list(self, func):
         args = []
@@ -1372,6 +1414,118 @@ class GlobalVarDecl():
         else:
             gvar.initializer = ir.Constant(vartype, 0)
         return gvar
+
+
+class MethodDecl():
+    """
+    A declaration and definition of a method.\n
+    fn(*struct) name(decl_args): rtype { block }
+    """
+    def __init__(self, builder, module, spos, name, rtype, block, decl_args, struct):
+        self.builder = builder
+        self.module = module
+        self.spos = spos
+        self.name = name
+        self.rtype = rtype
+        self.block = block
+        self.decl_args = decl_args
+        self.struct = struct
+        thisarg = FuncArg(
+            self.builder, self.module, self.struct.getsourcepos(), Token('IDENT', 'this'), 
+                TypeExpr(self.builder, self.module, self.struct.getsourcepos(), self.struct)
+        )
+        thisarg.atype = thisarg.atype.get_pointer_to()
+        self.decl_args.prepend(thisarg)
+
+
+    def getsourcepos(self):
+        return self.spos
+
+    def eval(self):
+        push_new_scope()
+        rtype = self.rtype
+        argtypes = self.decl_args.get_arg_type_list()
+        fnty = ir.FunctionType(rtype.get_ir_type(), argtypes)
+        #print("%s (%s)" % (self.name.value, fnty))
+        sfnty = FuncType("", rtype.type, self.decl_args.get_arg_stype_list())
+        try:
+            self.module.get_global(self.struct.get_name() + '.' + self.name.value)
+            text_input = self.builder.filestack[self.builder.filestack_idx]
+            lines = text_input.splitlines()
+            lineno = self.name.getsourcepos().lineno
+            colno = self.name.getsourcepos().colno
+            if lineno > 1:
+                line1 = lines[lineno - 2]
+                line2 = lines[lineno - 1]
+                print("%s\n%s\n%s^" % (line1, line2, "~" * (colno - 1)))
+            else:
+                line1 = lines[lineno - 1]
+                print("%s\n%s^" % (line1, "~" * (colno - 1)))
+            raise RuntimeError("%s (%d:%d): Redefining global value, %s, as function." % (
+                self.module.filestack[self.module.filestack_idx],
+                lineno,
+                colno,
+                self.name.value
+            ))
+        except(KeyError):
+            pass
+        name = self.struct.get_name() + '.' + self.name.value
+        fn = ir.Function(self.module, fnty, name)
+        self.module.sfunctys[name] = sfnty
+        block = fn.append_basic_block("entry")
+        # self.builder.dbgsub = self.module.add_debug_info("DISubprogram", {
+        #     "name": name, 
+        #     "file": self.module.di_file,
+        #     "line": self.spos.lineno,
+        #     #"column": self.spos.colno,
+        #     "isDefinition":True
+        # }, True)
+        self.builder.position_at_start(block)
+        fn.args = tuple(self.decl_args.get_arg_list(fn))
+        self.block.eval()
+        if not self.builder.block.is_terminated:
+            if isinstance(self.builder.function.function_type.return_type, ir.VoidType):
+                self.builder.ret_void()
+            else:
+                self.builder.ret(ir.Constant(ir.IntType(32), 0))
+        pop_inner_scope()
+
+
+class MethodDeclExtern():
+    """
+    A declaration of an externally defined method.\n
+    fn(*struct) name(decl_args) : rtype; 
+    """
+    def __init__(self, builder, module, spos, name, rtype, decl_args, struct):
+        self.builder = builder
+        self.module = module
+        self.spos = spos
+        self.name = name
+        self.rtype = rtype
+        self.decl_args = decl_args
+        self.struct = struct
+        thisarg = FuncArg(
+            self.builder, self.module, self.struct.getsourcepos(), Token('IDENT', 'this'), 
+                TypeExpr(self.builder, self.module, self.struct.getsourcepos(), self.struct)
+        )
+        thisarg.atype = thisarg.atype.get_pointer_to()
+        self.decl_args.prepend(thisarg)
+
+    def getsourcepos(self):
+        return self.spos
+
+    def eval(self):
+        push_new_scope()
+        rtype = self.rtype.type
+        argtypes = self.decl_args.get_arg_type_list()
+        fnty = ir.FunctionType(rtype.irtype, argtypes)
+        #print("%s (%s)" % (self.name.value, fnty))
+        sfnty = FuncType("", rtype, self.decl_args.get_arg_stype_list())
+        name = self.struct.get_name() + '.' + self.name.value
+        fn = ir.Function(self.module, fnty, name)
+        fn.args = tuple(self.decl_args.get_decl_arg_list(fn))
+        self.module.sfunctys[name] = sfnty
+        pop_inner_scope()
 
 
 class VarDecl():
@@ -1623,8 +1777,6 @@ class StructDecl():
             pop_inner_scope()
 
 
-
-
 class FuncCall(Expr):
     """
     Function call expression.\n
@@ -1648,6 +1800,33 @@ class FuncCall(Expr):
         for arg in self.args:
             args.append(arg.eval())
         return self.builder.call(self.module.get_global(self.lvalue.get_name()), args, self.lvalue.get_name())
+
+
+class MethodCall(Expr):
+    """
+    Method call expression.\n
+    callee.lvalue(args)
+    """
+    def __init__(self, builder, module, spos, callee, lvalue, args):
+        self.builder = builder
+        self.module = module
+        self.spos = spos
+        self.callee = callee
+        self.lvalue = lvalue
+        self.args = args
+
+    def get_type(self):
+        return self.module.sfunctys[self.callee.get_type().name + '.' + self.lvalue.get_name()].rtype
+
+    def get_ir_type(self):
+        return self.module.get_global(self.callee.get_type().name + '.' + self.lvalue.get_name()).ftype.return_type
+
+    def eval(self):
+        name = self.callee.get_type().name + '.' + self.lvalue.get_name()
+        args = [AddressOf(self.builder, self.module, self.spos, self.callee).eval()]
+        for arg in self.args:
+            args.append(arg.eval())
+        return self.builder.call(self.module.get_global(name), args, name)
 
 
 class Statement():
