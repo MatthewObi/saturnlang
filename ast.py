@@ -1571,8 +1571,6 @@ class VarDecl():
         #     self.module.get_global("llvm.dbg.addr"), 
         #     [ptr, dbglv, dbgexpr]
         # )
-        if self.initval is not None:
-            self.builder.store(self.initval.eval(), ptr.irvalue)
         if vartype.is_struct():
             c = ir.Constant(vartype.irtype, None)
             self.builder.store(c, ptr.irvalue)
@@ -1586,6 +1584,13 @@ class VarDecl():
             # ])
             if vartype.has_ctor():
                 self.builder.call(vartype.get_ctor(), [ptr.irvalue])
+            if self.initval is not None and vartype.has_operator('='):
+                method = vartype.operator['=']
+                pptr = ptr.irvalue
+                value = self.initval.eval()
+                self.builder.call(method, [pptr, value])
+        elif self.initval is not None:
+            self.builder.store(self.initval.eval(), ptr.irvalue)
         return ptr
 
 

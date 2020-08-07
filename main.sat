@@ -27,6 +27,10 @@ fn(*string) length(): uint {
     return this.len;
 }
 
+fn(*string) cstr(): cstring {
+    return this.ptr;
+}
+
 type Vector2 : struct {
     x: int = 7;
     y: int;
@@ -102,9 +106,8 @@ fn main(argc: int, argv: CStringArray): int {
         x += 1;
     }
 
-    strstruct: string;
-    strstruct = "Hello.";
-    printf("%s\n", strstruct.ptr);
+    strstruct: string = "Hello.";
+    printf("%s\n", strstruct.cstr());
 
     str := "Hello, world!\n";
     len := strlen(str);
