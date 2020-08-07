@@ -991,6 +991,13 @@ class Assignment():
             throw_saturn_error(self.builder, self.module, lineno, colno, 
                 "Cannot reassign to const variable, %s." % sptr.name
             )
+        if sptr.type.is_struct():
+            if sptr.type.has_operator('='):
+                method = sptr.type.operator['=']
+                ptr = sptr.irvalue
+                value = self.expr.eval()
+                self.builder.call(method, [ptr, value])
+                return
         ptr = sptr.irvalue
         value = self.expr.eval()
         #print("(%s) => (%s)" % (value, ptr))
@@ -1472,6 +1479,10 @@ class MethodDecl():
         name = self.struct.get_name() + '.' + self.name.value
         fn = ir.Function(self.module, fnty, name)
         self.module.sfunctys[name] = sfnty
+        if self.name.value == 'new':
+            types[self.struct.get_name()].add_ctor(fn)
+        elif self.name.value == 'operator.assign':
+            types[self.struct.get_name()].add_operator('=', fn)
         block = fn.append_basic_block("entry")
         # self.builder.dbgsub = self.module.add_debug_info("DISubprogram", {
         #     "name": name, 

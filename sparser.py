@@ -26,7 +26,7 @@ class Parser():
              'SEMICOLON', 'ADD', 'SUB', 'MUL', 'DIV', 'MOD', 'AND', 'OR', 'XOR', 'BOOLAND', 'BOOLOR',
              'TFN', 'COLON', 'LBRACE', 'RBRACE', 'COMMA', 'CC', 'EQ', 'CEQ', 'ADDEQ', 'SUBEQ', 'MULEQ',
              'TIF', 'TELSE', 'TWHILE', 'TSWITCH', 'TCASE', 'TDEFAULT', 
-             'TCONST', 'TIMMUT', 'TTYPE', 'TSTRUCT', 'TCAST',
+             'TCONST', 'TIMMUT', 'TTYPE', 'TSTRUCT', 'TCAST', 'TOPERATOR',
              'BOOLEQ', 'BOOLNEQ', 'BOOLGT', 'BOOLLT', 'BOOLGTE', 'BOOLLTE', 'TTRUE', 'TFALSE'],
 
              precedence=[
@@ -152,6 +152,18 @@ class Parser():
             declargs = p[7]
             rtype = p[10]
             block = p[12]
+            spos = p[0].getsourcepos()
+            if not self.decl_mode:
+                return MethodDecl(self.builder, self.module, spos, name, rtype, block, declargs, struct)
+            return MethodDeclExtern(self.builder, self.module, spos, name, rtype, declargs, struct)
+
+        @self.pg.production('method_decl : TFN LPAREN MUL lvalue RPAREN TOPERATOR EQ LPAREN decl_args RPAREN COLON typeexpr LBRACE block RBRACE')
+        def method_decl_assign(p):
+            struct = p[3]
+            name = Token('IDENT', 'operator.assign')
+            declargs = p[8]
+            rtype = p[11]
+            block = p[13]
             spos = p[0].getsourcepos()
             if not self.decl_mode:
                 return MethodDecl(self.builder, self.module, spos, name, rtype, block, declargs, struct)

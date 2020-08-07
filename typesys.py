@@ -244,6 +244,7 @@ class StructType(Type):
         self.qualifiers = qualifiers
         self.traits = traits
         self.ctor = None
+        self.operator = {}
 
     def add_field(self, name, ftype, irvalue):
         if irvalue is not None:
@@ -276,6 +277,13 @@ class StructType(Type):
     def add_ctor(self, ctor):
         if not self.has_ctor():
             self.ctor = ctor
+
+    def has_operator(self, op):
+        return op in self.operator
+
+    def add_operator(self, op, fn):
+        if not self.has_operator(op):
+            self.operator[op] = fn
     
     def get_pointer_to(self):
         return StructType(self.name, 

@@ -8,14 +8,28 @@ fn ptrfun(x: *int) {
 
 type CStringArray : *cstring;
 
+type string : struct {
+    ptr : cstring;
+    len : uint;
+}
+
+fn(*string) new(): void {
+    this.ptr = "";
+    this.len = 1;
+}
+
+fn(*string) operator=(str: cstring): void {
+    this.ptr = str;
+    this.len = strlen(str);
+}
+
+fn(*string) length(): uint {
+    return this.len;
+}
+
 type Vector2 : struct {
     x: int = 7;
     y: int;
-}
-
-type string: struct {
-    ptr: cstring;
-    len: uint;
 }
 
 fn(*Vector2) getX(): int {
@@ -87,6 +101,10 @@ fn main(argc: int, argv: CStringArray): int {
         printf("array2[%d] = %d\n", x, array2[x]);
         x += 1;
     }
+
+    strstruct: string;
+    strstruct = "Hello.";
+    printf("%s\n", strstruct.ptr);
 
     str := "Hello, world!\n";
     len := strlen(str);

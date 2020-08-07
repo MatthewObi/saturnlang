@@ -32,6 +32,7 @@ class Lexer():
         self.lexer.add('TEXTERN', r'extern')
         self.lexer.add('TTYPE', r'type')
         self.lexer.add('TSTRUCT', r'struct')
+        self.lexer.add('TOPERATOR', r'operator')
         self.lexer.add('TCAST', r'cast\b')
         self.lexer.add('TCONST', r'const\b')
         self.lexer.add('TIMMUT', r'immut')
