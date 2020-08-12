@@ -100,6 +100,8 @@ class Lexer():
         self.lexer.add('UINT', r'[+-]?\d+u')
         self.lexer.add('INT', r'[+-]?\d+')
         
+        self.lexer.add('ELIPSES', r'\.\.\.')
+        self.lexer.add('DOTDOT', r'\.\.')
         self.lexer.add('DOT', r'\.')
         self.lexer.add('ADD', r'\+')
         self.lexer.add('SUB', r'\-')

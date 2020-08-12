@@ -1582,13 +1582,14 @@ class VarDecl():
             #     calc_sizeof_struct(self.builder, self.module, ptr.type.irtype),
             #     ir.Constant(ir.IntType(1), 0),
             # ])
-            if vartype.has_ctor():
-                self.builder.call(vartype.get_ctor(), [ptr.irvalue])
             if self.initval is not None and vartype.has_operator('='):
                 method = vartype.operator['=']
                 pptr = ptr.irvalue
                 value = self.initval.eval()
                 self.builder.call(method, [pptr, value])
+                return
+            if vartype.has_ctor():
+                self.builder.call(vartype.get_ctor(), [ptr.irvalue])
         elif self.initval is not None:
             self.builder.store(self.initval.eval(), ptr.irvalue)
         return ptr
@@ -1937,6 +1938,101 @@ class WhileStatement():
         self.builder.cbranch(bexpr2, loop, after)
         self.builder.goto_block(after)
         self.builder.position_at_start(after)
+
+
+class IterExpr():
+    """
+    An expression representing an iteration.\n
+    a .. b \n
+    a .. b : c
+    """
+    def __init__(self, builder, module, spos, a, b, c=None):
+        self.builder = builder
+        self.module = module
+        self.spos = spos
+        self.a = a
+        self.b = b
+        self.c = c
+
+    def getsourcepos(self):
+        return self.spos
+
+    def get_type(self):
+        return self.a.get_type()
+
+    def get_ir_type(self):
+        return self.a.get_type().irtype
+
+    def eval_init(self):
+        return self.a.eval()
+    
+    def eval_loop_check(self, loopvar):
+        tocheck = self.b
+        inc = self.get_inc_amount()
+        print(inc)
+        if inc.constant > 0:
+            return BooleanLt(self.builder, self.module, self.spos, loopvar, tocheck).eval()
+        else:
+            return BooleanGt(self.builder, self.module, self.spos, loopvar, tocheck).eval()
+
+    def get_inc_amount(self):
+        if self.c is None:
+            return ir.Constant(self.get_ir_type(), 1)
+        return self.c.eval()
+
+    def eval_loop_inc(self, loopvar):
+        if self.c is not None:
+            AddAssignment(self.builder, self.module, self.spos, loopvar, self.c).eval()
+        else:
+            ptr = loopvar.get_pointer()
+            add = self.builder.add(self.builder.load(ptr.irvalue), ir.Constant(ir.IntType(32), 1))
+            self.builder.store(add, ptr.irvalue)
+
+
+class ForStatement():
+    """
+    For loop statement.\n
+    for it in itexpr { loop }
+    """
+    def __init__(self, builder, module, spos, it, itexpr, loop):
+        self.builder = builder
+        self.module = module
+        self.spos = spos
+        self.it = it
+        self.itexpr = itexpr
+        self.loop = loop
+
+    def getsourcepos(self):
+        return self.spos
+
+    def eval(self):
+        init = self.builder.append_basic_block(self.module.get_unique_name("for.init"))
+        self.builder.branch(init)
+        self.builder.goto_block(init)
+        self.builder.position_at_start(init)
+        push_new_scope()
+        name = self.it.get_name()
+        ty = self.itexpr.get_type()
+        ptr = Value(name, ty, self.builder.alloca(ty.irtype, name=name))
+        scope = get_inner_scope()
+        scope[name] = ptr
+        self.builder.store(self.itexpr.eval_init(), ptr.irvalue)
+        check = self.builder.append_basic_block(self.module.get_unique_name("for.check"))
+        loop = self.builder.append_basic_block(self.module.get_unique_name("for.loop"))
+        after = self.builder.append_basic_block(self.module.get_unique_name("after"))
+        self.builder.branch(check)
+        self.builder.goto_block(check)
+        self.builder.position_at_start(check)
+        checkval = self.itexpr.eval_loop_check(self.it)
+        self.builder.cbranch(checkval, loop, after)
+        self.builder.goto_block(loop)
+        self.builder.position_at_start(loop)
+        self.loop.eval()
+        self.itexpr.eval_loop_inc(self.it)
+        self.builder.branch(check)
+        self.builder.goto_block(after)
+        self.builder.position_at_start(after)
+        pop_inner_scope()
 
 
 class SwitchCase():

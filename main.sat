@@ -94,20 +94,22 @@ fn main(argc: int, argv: CStringArray): int {
     arrayelptr := &arrofints[1];
     *arrayelptr = 11;
 
-    x := 0;
-    while x < 4 {
+    for x in 0 .. 4 {
         printf("arrofints[%d] = %d\n", x, arrofints[x]);
-        x += 1;
     }
 
-    x = 0;
+    for x in 3 .. -1:-1 {
+        printf("arrofints[%d] = %d\n", x, arrofints[x]);
+    }
+
+    x := 0;
     while x < 4 {
         printf("array2[%d] = %d\n", x, array2[x]);
         x += 1;
     }
 
     strstruct: string = "Hello.";
-    printf("%s\n", strstruct.cstr());
+    printf("%s (length = %d)\n", strstruct.cstr(), strstruct.length());
 
     str := "Hello, world!\n";
     len := strlen(str);

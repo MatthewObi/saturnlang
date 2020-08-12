@@ -11,7 +11,8 @@ from ast import (
     MethodDecl, MethodDeclExtern,
     LValue, LValueField, FuncCall, MethodCall, CastExpr, Assignment, AddAssignment, SubAssignment, MulAssignment, 
     Boolean, BooleanEq, BooleanNeq, BooleanGte, BooleanGt, BooleanLte, BooleanLt, 
-    IfStatement, WhileStatement, SwitchCase, SwitchDefaultCase, SwitchBody, SwitchStatement
+    IfStatement, WhileStatement, SwitchCase, SwitchDefaultCase, SwitchBody, SwitchStatement,
+    ForStatement, IterExpr
 )
 from serror import throw_saturn_error
 
@@ -25,7 +26,7 @@ class Parser():
              'IDENT', 'TPRINT', 'DOT', 'TRETURN', 'LPAREN', 'RPAREN', 'LBRACKET', 'RBRACKET',
              'SEMICOLON', 'ADD', 'SUB', 'MUL', 'DIV', 'MOD', 'AND', 'OR', 'XOR', 'BOOLAND', 'BOOLOR',
              'TFN', 'COLON', 'LBRACE', 'RBRACE', 'COMMA', 'CC', 'EQ', 'CEQ', 'ADDEQ', 'SUBEQ', 'MULEQ',
-             'TIF', 'TELSE', 'TWHILE', 'TSWITCH', 'TCASE', 'TDEFAULT', 
+             'TIF', 'TELSE', 'TWHILE', 'TSWITCH', 'TCASE', 'TDEFAULT', 'TFOR', 'TIN', 'DOTDOT',
              'TCONST', 'TIMMUT', 'TTYPE', 'TSTRUCT', 'TCAST', 'TOPERATOR',
              'BOOLEQ', 'BOOLNEQ', 'BOOLGT', 'BOOLLT', 'BOOLGTE', 'BOOLLTE', 'TTRUE', 'TFALSE'],
 
@@ -320,6 +321,10 @@ class Parser():
             spos = p[0].getsourcepos()
             return WhileStatement(self.builder, self.module, spos, p[1], p[3])
 
+        @self.pg.production('stmt : for_stmt')
+        def stmt_for(p):
+            return p[0]
+
         @self.pg.production('if_stmt : TIF expr LBRACE block RBRACE')
         def if_stmt(p):
             spos = p[0].getsourcepos()
@@ -382,6 +387,20 @@ class Parser():
                 p[0].add_stmt(p[1])
                 return p[0]
 
+        @self.pg.production('for_stmt : TFOR lvalue TIN iter_expr LBRACE block RBRACE')
+        def for_stmt(p):
+            spos = p[0].getsourcepos()
+            return ForStatement(self.builder, self.module, spos, p[1], p[3], p[5])
+
+        @self.pg.production('iter_expr : number DOTDOT number')
+        @self.pg.production('iter_expr : number DOTDOT number COLON number')
+        def iter_expr_const(p):
+            if len(p) == 3:
+                spos = p[0].getsourcepos()
+                return IterExpr(self.builder, self.module, spos, p[0], p[2])
+            else:
+                spos = p[0].getsourcepos()
+                return IterExpr(self.builder, self.module, spos, p[0], p[2], p[4])
 
         @self.pg.production('expr : AND expr')
         def expr_unary(p):
