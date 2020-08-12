@@ -1944,15 +1944,18 @@ class IterExpr():
     """
     An expression representing an iteration.\n
     a .. b \n
-    a .. b : c
+    a .. b : c \n
+    a ... b \n
+    a ... b : c
     """
-    def __init__(self, builder, module, spos, a, b, c=None):
+    def __init__(self, builder, module, spos, a, b, c=None, inclusive=False):
         self.builder = builder
         self.module = module
         self.spos = spos
         self.a = a
         self.b = b
         self.c = c
+        self.inclusive = inclusive
 
     def getsourcepos(self):
         return self.spos
@@ -1969,10 +1972,13 @@ class IterExpr():
     def eval_loop_check(self, loopvar):
         tocheck = self.b
         inc = self.get_inc_amount()
-        print(inc)
         if inc.constant > 0:
+            if self.inclusive:
+                return BooleanLte(self.builder, self.module, self.spos, loopvar, tocheck).eval()
             return BooleanLt(self.builder, self.module, self.spos, loopvar, tocheck).eval()
         else:
+            if self.inclusive:
+                return BooleanGte(self.builder, self.module, self.spos, loopvar, tocheck).eval()
             return BooleanGt(self.builder, self.module, self.spos, loopvar, tocheck).eval()
 
     def get_inc_amount(self):

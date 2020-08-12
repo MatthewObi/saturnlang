@@ -98,7 +98,7 @@ fn main(argc: int, argv: CStringArray): int {
         printf("arrofints[%d] = %d\n", x, arrofints[x]);
     }
 
-    for x in 3 .. -1:-1 {
+    for x in 3 ... 0:-1 {
         printf("arrofints[%d] = %d\n", x, arrofints[x]);
     }
 

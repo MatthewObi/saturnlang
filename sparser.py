@@ -26,7 +26,7 @@ class Parser():
              'IDENT', 'TPRINT', 'DOT', 'TRETURN', 'LPAREN', 'RPAREN', 'LBRACKET', 'RBRACKET',
              'SEMICOLON', 'ADD', 'SUB', 'MUL', 'DIV', 'MOD', 'AND', 'OR', 'XOR', 'BOOLAND', 'BOOLOR',
              'TFN', 'COLON', 'LBRACE', 'RBRACE', 'COMMA', 'CC', 'EQ', 'CEQ', 'ADDEQ', 'SUBEQ', 'MULEQ',
-             'TIF', 'TELSE', 'TWHILE', 'TSWITCH', 'TCASE', 'TDEFAULT', 'TFOR', 'TIN', 'DOTDOT',
+             'TIF', 'TELSE', 'TWHILE', 'TSWITCH', 'TCASE', 'TDEFAULT', 'TFOR', 'TIN', 'DOTDOT', 'ELIPSES',
              'TCONST', 'TIMMUT', 'TTYPE', 'TSTRUCT', 'TCAST', 'TOPERATOR',
              'BOOLEQ', 'BOOLNEQ', 'BOOLGT', 'BOOLLT', 'BOOLGTE', 'BOOLLTE', 'TTRUE', 'TFALSE'],
 
@@ -401,6 +401,16 @@ class Parser():
             else:
                 spos = p[0].getsourcepos()
                 return IterExpr(self.builder, self.module, spos, p[0], p[2], p[4])
+
+        @self.pg.production('iter_expr : number ELIPSES number')
+        @self.pg.production('iter_expr : number ELIPSES number COLON number')
+        def iter_expr_const_inclusive(p):
+            if len(p) == 3:
+                spos = p[0].getsourcepos()
+                return IterExpr(self.builder, self.module, spos, p[0], p[2], inclusive=True)
+            else:
+                spos = p[0].getsourcepos()
+                return IterExpr(self.builder, self.module, spos, p[0], p[2], p[4], inclusive=True)
 
         @self.pg.production('expr : AND expr')
         def expr_unary(p):
