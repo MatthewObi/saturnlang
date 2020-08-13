@@ -87,21 +87,22 @@ class Lexer():
         self.lexer.add('OR', r'\|')
         self.lexer.add('XOR', r'\^')
         self.lexer.add('BINNOT', r'\~')
+        
+        self.lexer.add('ELIPSES', r'\.\.\.')
+        self.lexer.add('DOTDOT', r'\.\.')
 
         # Identifier
         self.lexer.add('IDENT', r'[_A-Za-z]\w*')
         
         # Number
-        self.lexer.add('FLOAT', r'[+-]?([0-9]+(\.[0-9]*)|\.[0-9]+)f')
-        self.lexer.add('DOUBLE', r'[+-]?([0-9]+([.][0-9]*)|\.[0-9]+)')
+        self.lexer.add('FLOAT', r'[+-]?([0-9]+\.[0-9]+)f')
+        self.lexer.add('DOUBLE', r'[+-]?([0-9]+\.[0-9]+)')
         self.lexer.add('LONGINT', r'[+-]?\d+l')
         self.lexer.add('ULONGINT', r'[+-]?\d+ul')
         self.lexer.add('BYTE', r'[+-]?\d+b')
         self.lexer.add('UINT', r'[+-]?\d+u')
         self.lexer.add('INT', r'[+-]?\d+')
-        
-        self.lexer.add('ELIPSES', r'\.\.\.')
-        self.lexer.add('DOTDOT', r'\.\.')
+
         self.lexer.add('DOT', r'\.')
         self.lexer.add('ADD', r'\+')
         self.lexer.add('SUB', r'\-')

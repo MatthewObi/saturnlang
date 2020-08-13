@@ -94,11 +94,11 @@ fn main(argc: int, argv: CStringArray): int {
     arrayelptr := &arrofints[1];
     *arrayelptr = 11;
 
-    for x in 0 .. 4 {
+    for x in 0..4 {
         printf("arrofints[%d] = %d\n", x, arrofints[x]);
     }
 
-    for x in 3 ... 0:-1 {
+    for x in 3...0:-1 {
         printf("arrofints[%d] = %d\n", x, arrofints[x]);
     }
 

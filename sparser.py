@@ -392,8 +392,8 @@ class Parser():
             spos = p[0].getsourcepos()
             return ForStatement(self.builder, self.module, spos, p[1], p[3], p[5])
 
-        @self.pg.production('iter_expr : number DOTDOT number')
-        @self.pg.production('iter_expr : number DOTDOT number COLON number')
+        @self.pg.production('iter_expr : expr DOTDOT expr')
+        @self.pg.production('iter_expr : expr DOTDOT expr COLON expr')
         def iter_expr_const(p):
             if len(p) == 3:
                 spos = p[0].getsourcepos()
@@ -402,8 +402,8 @@ class Parser():
                 spos = p[0].getsourcepos()
                 return IterExpr(self.builder, self.module, spos, p[0], p[2], p[4])
 
-        @self.pg.production('iter_expr : number ELIPSES number')
-        @self.pg.production('iter_expr : number ELIPSES number COLON number')
+        @self.pg.production('iter_expr : expr ELIPSES expr')
+        @self.pg.production('iter_expr : expr ELIPSES expr COLON expr')
         def iter_expr_const_inclusive(p):
             if len(p) == 3:
                 spos = p[0].getsourcepos()
