@@ -367,6 +367,8 @@ class LValue(Expr):
         ptr = check_name_in_scope(name)
         if ptr is None:
             ptr = self.module.sglobals[name]
+        if ptr.is_atomic():
+            return self.builder.load_atomic(ptr.irvalue, 'seq_cst', 4)
         return self.builder.load(ptr.irvalue)
 
 
@@ -408,7 +410,7 @@ class LValueField(Expr):
                 ir.Constant(ir.IntType(32), 0),
                 ir.Constant(ir.IntType(32), findex)
             ])
-        return Value(self.fname, stype.get_field_type(findex), gep)
+        return Value(self.fname, stype.get_field_type(findex), gep, ptr.qualifiers)
 
     def eval(self):
         stype = self.lvalue.get_type()
@@ -985,7 +987,7 @@ class Assignment():
     
     def eval(self):
         sptr = self.lvalue.get_pointer()
-        if sptr.type.is_const() or sptr.type.is_immut():
+        if sptr.is_const() or sptr.is_immut():
             lineno = self.expr.getsourcepos().lineno
             colno = self.expr.getsourcepos().colno
             throw_saturn_error(self.builder, self.module, lineno, colno, 
@@ -1001,6 +1003,8 @@ class Assignment():
         ptr = sptr.irvalue
         value = self.expr.eval()
         #print("(%s) => (%s)" % (value, ptr))
+        if sptr.is_atomic():
+            self.builder.store_atomic(value, ptr, 'seq_cst', 4)
         self.builder.store(value, ptr)
 
 
@@ -1011,15 +1015,18 @@ class AddAssignment(Assignment):
     """
     def eval(self):
         ptr = self.lvalue.get_pointer()
-        if ptr.type.is_const() or ptr.type.is_immut():
+        if ptr.is_const() or ptr.is_immut():
             lineno = self.expr.getsourcepos().lineno
             colno = self.expr.getsourcepos().colno
             throw_saturn_error(self.builder, self.module, lineno, colno, 
                 "Cannot reassign to const variable, %s." % ptr.name
             )
-        value = self.builder.load(ptr.irvalue)
-        res = self.builder.add(value, self.expr.eval())
-        self.builder.store(res, ptr.irvalue)
+        if not ptr.is_atomic():
+            value = self.builder.load(ptr.irvalue)
+            res = self.builder.add(value, self.expr.eval())
+            self.builder.store(res, ptr.irvalue)
+        else:
+            self.builder.atomic_rmw('add', ptr.irvalue, self.expr.eval(), 'seq_cst')
 
 
 class SubAssignment(Assignment):
@@ -1029,15 +1036,18 @@ class SubAssignment(Assignment):
     """
     def eval(self):
         ptr = self.lvalue.get_pointer()
-        if ptr.type.is_const() or ptr.type.is_immut():
+        if ptr.is_const() or ptr.is_immut():
             lineno = self.expr.getsourcepos().lineno
             colno = self.expr.getsourcepos().colno
             throw_saturn_error(self.builder, self.module, lineno, colno, 
                 "Cannot reassign to const variable, %s." % ptr.name
             )
-        value = self.builder.load(ptr.irvalue)
-        res = self.builder.sub(value, self.expr.eval())
-        self.builder.store(res, ptr.irvalue)
+        if not ptr.is_atomic():
+            value = self.builder.load(ptr.irvalue)
+            res = self.builder.sub(value, self.expr.eval())
+            self.builder.store(res, ptr.irvalue)
+        else:
+            self.builder.atomic_rmw('sub', ptr.irvalue, self.expr.eval(), 'seq_cst')
 
 
 class MulAssignment(Assignment):
@@ -1065,7 +1075,7 @@ class DivAssignment(Assignment):
     """
     def eval(self):
         ptr = self.lvalue.get_pointer()
-        if ptr.type.is_const() or ptr.type.is_immut():
+        if ptr.is_const() or ptr.is_immut():
             lineno = self.expr.getsourcepos().lineno
             colno = self.expr.getsourcepos().colno
             throw_saturn_error(self.builder, self.module, lineno, colno, 
@@ -1348,13 +1358,15 @@ class FuncDecl():
         fn = ir.Function(self.module, fnty, self.name.value)
         self.module.sfunctys[self.name.value] = sfnty
         block = fn.append_basic_block("entry")
-        # self.builder.dbgsub = self.module.add_debug_info("DISubprogram", {
-        #     "name":self.name.value, 
-        #     "file": self.module.di_file,
-        #     "line": self.spos.lineno,
-        #     #"column": self.spos.colno,
-        #     "isDefinition":True
-        # }, True)
+        self.builder.dbgsub = self.module.add_debug_info("DISubprogram", {
+            "name":self.name.value, 
+            "scope": self.module.di_file,
+            "file": self.module.di_file,
+            "line": self.spos.lineno,
+            "unit": self.module.di_compile_unit,
+            #"column": self.spos.colno,
+            "isDefinition":True
+        }, True)
         self.builder.position_at_start(block)
         fn.args = tuple(self.decl_args.get_arg_list(fn))
         self.block.eval()
@@ -1484,13 +1496,14 @@ class MethodDecl():
         elif self.name.value == 'operator.assign':
             types[self.struct.get_name()].add_operator('=', fn)
         block = fn.append_basic_block("entry")
-        # self.builder.dbgsub = self.module.add_debug_info("DISubprogram", {
-        #     "name": name, 
-        #     "file": self.module.di_file,
-        #     "line": self.spos.lineno,
-        #     #"column": self.spos.colno,
-        #     "isDefinition":True
-        # }, True)
+        self.builder.dbgsub = self.module.add_debug_info("DISubprogram", {
+            "name": name, 
+            "file": self.module.di_file,
+            "line": self.spos.lineno,
+            "unit": self.module.di_compile_unit,
+            #"column": self.spos.colno,
+            "isDefinition":True
+        }, True)
         self.builder.position_at_start(block)
         fn.args = tuple(self.decl_args.get_arg_list(fn))
         self.block.eval()
@@ -1561,16 +1574,22 @@ class VarDecl():
         ptr = Value(self.name.value, vartype, self.builder.alloca(vartype.irtype, name=self.name.value))
         scope = get_inner_scope()
         scope[self.name.value] = ptr
-        # dbglv = self.module.add_debug_info("DILocalVariable", {
-        #     "name":self.name.value, 
-        #     "arg":0, 
-        #     "scope":self.builder.dbgsub
-        # })
-        # dbgexpr = self.module.add_debug_info("DIExpression", {})
-        # self.builder.call(
-        #     self.module.get_global("llvm.dbg.addr"), 
-        #     [ptr, dbglv, dbgexpr]
-        # )
+        dbglv = self.module.add_debug_info("DILocalVariable", {
+            "name":self.name.value, 
+            #"arg":0, 
+            "scope":self.builder.dbgsub
+        })
+        dbgexpr = self.module.add_debug_info("DIExpression", {})
+        self.builder.debug_metadata = self.module.add_debug_info("DILocation", {
+            "line": self.spos.lineno,
+            "column": self.spos.lineno,
+            "scope": self.builder.dbgsub
+        })
+        self.builder.call(
+            self.module.get_global("llvm.dbg.addr"), 
+            [ptr.irvalue, dbglv, dbgexpr]
+        )
+        self.builder.debug_metadata = None
         if vartype.is_struct():
             c = ir.Constant(vartype.irtype, None)
             self.builder.store(c, ptr.irvalue)
@@ -1614,10 +1633,13 @@ class VarDeclAssign():
     def eval(self):
         val = self.initval.eval()
         vartype = self.initval.get_type()
+        quals = []
         if self.spec == 'const':
-            vartype = vartype.get_const_of()
+            quals.append('const')
         elif self.spec == 'immut':
-            vartype = vartype.get_immut_of()
+            quals.append('immut')
+        elif self.spec == 'atomic':
+            quals.append('atomic')
         if str(vartype.irtype) == 'void':
             #print("%s (%s)" % (str(vartype), str(vartype.irtype)))
             lineno = self.initval.getsourcepos().lineno
@@ -1625,24 +1647,31 @@ class VarDeclAssign():
             throw_saturn_error(self.builder, self.module, lineno, colno, 
                 "Can't create variable of void type."
             )
-        ptr = Value(self.name.value, vartype, self.builder.alloca(vartype.irtype, name=self.name.value))
+        ptr = Value(self.name.value, vartype, self.builder.alloca(vartype.irtype, name=self.name.value), qualifiers=quals)
 
         scope = get_inner_scope()
         scope[self.name.value] = ptr
-        # dbglv = self.module.add_debug_info("DILocalVariable", {
-        #     "name":self.name.value, 
-        #     #"arg":1, 
-        #     "file": self.module.di_file,
-        #     "line": self.spos.lineno,
-        #     "scope":self.builder.dbgsub,
-        #     "type": self.module.di_types[from_type_get_name(self.builder, self.module, vartype)]
-        # })
-        # dbgexpr = self.module.add_debug_info("DIExpression", {})
-        # self.builder.call(
-        #     self.module.get_global("llvm.dbg.addr"), 
-        #     [ptr, dbglv, dbgexpr]
-        # )
+        dbglv = self.module.add_debug_info("DILocalVariable", {
+            "name":self.name.value, 
+            #"arg":1, 
+            "file": self.module.di_file,
+            "line": self.spos.lineno,
+            "scope":self.builder.dbgsub
+        })
+        dbgexpr = self.module.add_debug_info("DIExpression", {})
+        self.builder.debug_metadata = self.module.add_debug_info("DILocation", {
+            "line": self.spos.lineno,
+            "column": self.spos.lineno,
+            "scope": self.builder.dbgsub
+        })
+        self.builder.call(
+            self.module.get_global("llvm.dbg.addr"), 
+            [ptr.irvalue, dbglv, dbgexpr]
+        )
+        self.builder.debug_metadata = None
         if self.initval is not None:
+            if ptr.is_atomic():
+                return self.builder.store_atomic(val, ptr.irvalue, 'seq_cst', 4)
             self.builder.store(val, ptr.irvalue)
         return ptr
 

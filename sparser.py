@@ -27,7 +27,7 @@ class Parser():
              'SEMICOLON', 'ADD', 'SUB', 'MUL', 'DIV', 'MOD', 'AND', 'OR', 'XOR', 'BOOLAND', 'BOOLOR',
              'TFN', 'COLON', 'LBRACE', 'RBRACE', 'COMMA', 'CC', 'EQ', 'CEQ', 'ADDEQ', 'SUBEQ', 'MULEQ',
              'TIF', 'TELSE', 'TWHILE', 'TSWITCH', 'TCASE', 'TDEFAULT', 'TFOR', 'TIN', 'DOTDOT', 'ELIPSES',
-             'TCONST', 'TIMMUT', 'TTYPE', 'TSTRUCT', 'TCAST', 'TOPERATOR',
+             'TCONST', 'TIMMUT', 'TATOMIC', 'TTYPE', 'TSTRUCT', 'TCAST', 'TOPERATOR',
              'BOOLEQ', 'BOOLNEQ', 'BOOLGT', 'BOOLLT', 'BOOLGTE', 'BOOLLTE', 'TTRUE', 'TFALSE'],
 
              precedence=[
@@ -264,12 +264,15 @@ class Parser():
 
         @self.pg.production('stmt : TCONST IDENT CEQ expr SEMICOLON')
         @self.pg.production('stmt : TIMMUT IDENT CEQ expr SEMICOLON')
+        @self.pg.production('stmt : TATOMIC IDENT CEQ expr SEMICOLON')
         def stmt_var_decl_ceq_spec(p):
             spos = p[0].getsourcepos()
             if p[0].gettokentype() == 'TCONST':
                 return VarDeclAssign(self.builder, self.module, spos, p[1], p[3], 'const')
             elif p[0].gettokentype() == 'TIMMUT':
                 return VarDeclAssign(self.builder, self.module, spos, p[1], p[3], 'immut')
+            elif p[0].gettokentype() == 'TATOMIC':
+                return VarDeclAssign(self.builder, self.module, spos, p[1], p[3], 'atomic')
 
         @self.pg.production('stmt : lvalue_expr EQ expr SEMICOLON')
         def stmt_assign(p):

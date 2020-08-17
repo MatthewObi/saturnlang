@@ -71,6 +71,17 @@ class CodeGen():
         })
         self.module.sfunctys = {}
         self.module.sglobals = {}
+        self.module.add_named_metadata("llvm.dbg.cu", self.module.di_compile_unit)
+        self.module.add_named_metadata("llvm.ident", ["llvmlite/1.0"])
+        self.module.add_named_metadata("llvm.module.flags", [
+            int32(2), 'Dwarf Version', int32(2)
+        ])
+        self.module.add_named_metadata("llvm.module.flags", [
+            int32(2), 'Debug Info Version', int32(3)
+        ])
+        self.module.add_named_metadata("llvm.module.flags", [
+            int32(1), 'PIC Level', int32(2)
+        ])
         self.module.memset = self.module.declare_intrinsic('llvm.memset', [int8ptr, int32])
         self.builder = ir.IRBuilder()
 
@@ -124,6 +135,8 @@ class CodeGen():
             pmb.opt_level = self.opt_level
             if pmb.opt_level < 2:
                 pmb.disable_unroll_loops = True
+            if pmb.opt_level > 1:
+                pmb.inlining_threshold = 2
             mpm = self.binding.ModulePassManager()
             pmb.populate(mpm)
             if mpm.run(mod):

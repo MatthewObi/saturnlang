@@ -36,6 +36,7 @@ class Lexer():
         self.lexer.add('TCAST', r'cast\b')
         self.lexer.add('TCONST', r'const\b')
         self.lexer.add('TIMMUT', r'immut')
+        self.lexer.add('TATOMIC', r'\batomic\b')
         self.lexer.add('TMUT', r'mut\b')
         self.lexer.add('TIN', r'in\b')
         self.lexer.add('TCINCLUDE', r'c_include\b')

@@ -85,28 +85,6 @@ class Type():
             traits=self.traits
         )
 
-    def make_const(self):
-        self.qualifiers.append(('const',))
-
-    def get_const_of(self):
-        return Type(self.name, 
-            self.irtype, 
-            self.tclass, 
-            qualifiers=self.qualifiers + [('const',)],
-            traits=self.traits
-        )
-
-    def make_immut(self):
-        self.qualifiers.append(('immut',))
-
-    def get_immut_of(self):
-        return Type(self.name, 
-            self.irtype, 
-            self.tclass, 
-            qualifiers=self.qualifiers + [('immut',)],
-            traits=self.traits
-        )
-
     def add_trait(self, trait):
         if trait not in self.traits:
             self.traits.append(trait)
@@ -121,16 +99,6 @@ class Type():
 
     def is_pointer(self):
         return ('ptr',) in self.qualifiers or self.name == 'cstring'
-
-    def is_const(self):
-        if len(self.qualifiers) > 0:
-            return self.qualifiers[-1][0] == 'const'
-        return False
-
-    def is_immut(self):
-        if len(self.qualifiers) > 0:
-            return self.qualifiers[-1][0] == 'immut'
-        return False
 
     def is_value(self):
         return not (self.is_array() or self.is_pointer())
@@ -159,13 +127,7 @@ class Type():
     def __str__(self):
         s = str()
         for q in self.qualifiers:
-            if q[0] == 'const':
-                s += 'const '
-            elif q[0] == 'immut':
-                s += 'immut '
-            elif q[0] == 'mut':
-                s += 'mut '
-            elif q[0] == 'ptr':
+            if q[0] == 'ptr':
                 s += '*'
             elif q[0] == 'array':
                 s += '[%d]' % q[1]
@@ -214,13 +176,20 @@ class Value():
     """
     A saturn value.
     """
-    def __init__(self, name, stype, irvalue):
+    def __init__(self, name, stype, irvalue, qualifiers=[]):
         self.name = name
         self.type = stype
         self.irvalue = irvalue
+        self.qualifiers=qualifiers
 
     def is_const(self):
-        return self.type.is_const()
+        return 'const' in self.qualifiers
+
+    def is_immut(self):
+        return 'immut' in self.qualifiers
+    
+    def is_atomic(self):
+        return 'atomic' in self.qualifiers
 
 class FuncType():
     """

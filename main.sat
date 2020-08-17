@@ -52,6 +52,9 @@ fn main(argc: int, argv: CStringArray): int {
     const PI := 3.141593;
     const TAU := PI * 2.0;
 
+    atomic aInt := 35;
+    aInt -= 4;
+
     myv2: Vector2;
     printf("myv2.x: %d\n", myv2.x);
 
