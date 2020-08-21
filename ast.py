@@ -1086,6 +1086,48 @@ class DivAssignment(Assignment):
         self.builder.store(res, ptr.irvalue)
 
 
+class AndAssignment(Assignment):
+    """
+    And assignment statement to a defined variable.\n
+    lvalue &= expr; (lvalue = lvalue & expr;)
+    """
+    def eval(self):
+        ptr = self.lvalue.get_pointer()
+        if ptr.is_const() or ptr.is_immut():
+            lineno = self.expr.getsourcepos().lineno
+            colno = self.expr.getsourcepos().colno
+            throw_saturn_error(self.builder, self.module, lineno, colno, 
+                "Cannot reassign to const variable, %s." % ptr.name
+            )
+        if not ptr.is_atomic():
+            value = self.builder.load(ptr.irvalue)
+            res = self.builder._and(value, self.expr.eval())
+            self.builder.store(res, ptr.irvalue)
+        else:
+            self.builder.atomic_rmw('and', ptr.irvalue, self.expr.eval(), 'seq_cst')
+
+
+class OrAssignment(Assignment):
+    """
+    Or assignment statement to a defined variable.\n
+    lvalue |= expr; (lvalue = lvalue | expr;)
+    """
+    def eval(self):
+        ptr = self.lvalue.get_pointer()
+        if ptr.is_const() or ptr.is_immut():
+            lineno = self.expr.getsourcepos().lineno
+            colno = self.expr.getsourcepos().colno
+            throw_saturn_error(self.builder, self.module, lineno, colno, 
+                "Cannot reassign to const variable, %s." % ptr.name
+            )
+        if not ptr.is_atomic():
+            value = self.builder.load(ptr.irvalue)
+            res = self.builder._or(value, self.expr.eval())
+            self.builder.store(res, ptr.irvalue)
+        else:
+            self.builder.atomic_rmw('or', ptr.irvalue, self.expr.eval(), 'seq_cst')
+
+
 class Program():
     """
     Base node for AST

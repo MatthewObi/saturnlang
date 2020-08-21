@@ -82,6 +82,10 @@ class Lexer():
         self.lexer.add('BOOLGT', r'>')
         self.lexer.add('BOOLLT', r'<')
 
+        self.lexer.add('ANDEQ', r'\&=')
+        self.lexer.add('OREQ', r'\|=')
+        self.lexer.add('XOREQ', r'\^=')
+
         self.lexer.add('EQ', r'=')
         
         self.lexer.add('AND', r'\&')

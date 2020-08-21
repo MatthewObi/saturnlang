@@ -9,7 +9,8 @@ from ast import (
     ArrayLiteralElement, ArrayLiteralBody, ArrayLiteral, TypeExpr,
     FuncDecl, FuncDeclExtern, FuncArgList, FuncArg, GlobalVarDecl, VarDecl, VarDeclAssign, 
     MethodDecl, MethodDeclExtern,
-    LValue, LValueField, FuncCall, MethodCall, CastExpr, Assignment, AddAssignment, SubAssignment, MulAssignment, 
+    LValue, LValueField, FuncCall, MethodCall, CastExpr, 
+    Assignment, AddAssignment, SubAssignment, MulAssignment, AndAssignment, OrAssignment,
     Boolean, BooleanEq, BooleanNeq, BooleanGte, BooleanGt, BooleanLte, BooleanLt, 
     IfStatement, WhileStatement, SwitchCase, SwitchDefaultCase, SwitchBody, SwitchStatement,
     ForStatement, IterExpr
@@ -25,7 +26,8 @@ class Parser():
              'INT', 'UINT', 'LONGINT', 'ULONGINT', 'BYTE', 'FLOAT', 'DOUBLE', 'STRING', 'MLSTRING',
              'IDENT', 'TPRINT', 'DOT', 'TRETURN', 'LPAREN', 'RPAREN', 'LBRACKET', 'RBRACKET',
              'SEMICOLON', 'ADD', 'SUB', 'MUL', 'DIV', 'MOD', 'AND', 'OR', 'XOR', 'BOOLAND', 'BOOLOR',
-             'TFN', 'COLON', 'LBRACE', 'RBRACE', 'COMMA', 'CC', 'EQ', 'CEQ', 'ADDEQ', 'SUBEQ', 'MULEQ',
+             'TFN', 'COLON', 'LBRACE', 'RBRACE', 'COMMA', 'CC', 
+             'EQ', 'CEQ', 'ADDEQ', 'SUBEQ', 'MULEQ', 'ANDEQ', 'OREQ',
              'TIF', 'TELSE', 'TWHILE', 'TSWITCH', 'TCASE', 'TDEFAULT', 'TFOR', 'TIN', 'DOTDOT', 'ELIPSES',
              'TCONST', 'TIMMUT', 'TATOMIC', 'TTYPE', 'TSTRUCT', 'TCAST', 'TOPERATOR',
              'BOOLEQ', 'BOOLNEQ', 'BOOLGT', 'BOOLLT', 'BOOLGTE', 'BOOLLTE', 'TTRUE', 'TFALSE'],
@@ -293,6 +295,16 @@ class Parser():
         def stmt_assign_mul(p):
             spos = p[0].getsourcepos()
             return MulAssignment(self.builder, self.module, spos, p[0], p[2])
+
+        @self.pg.production('stmt : lvalue_expr ANDEQ expr SEMICOLON')
+        def stmt_assign_add(p):
+            spos = p[0].getsourcepos()
+            return AndAssignment(self.builder, self.module, spos, p[0], p[2])
+
+        @self.pg.production('stmt : lvalue_expr OREQ expr SEMICOLON')
+        def stmt_assign_add(p):
+            spos = p[0].getsourcepos()
+            return OrAssignment(self.builder, self.module, spos, p[0], p[2])
 
         @self.pg.production('typeexpr : lvalue')
         @self.pg.production('typeexpr : MUL typeexpr')

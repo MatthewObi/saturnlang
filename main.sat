@@ -54,6 +54,7 @@ fn main(argc: int, argv: CStringArray): int {
 
     atomic aInt := 35;
     aInt -= 4;
+    aInt &= 45;
 
     myv2: Vector2;
     printf("myv2.x: %d\n", myv2.x);
