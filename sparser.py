@@ -10,7 +10,7 @@ from ast import (
     FuncDecl, FuncDeclExtern, FuncArgList, FuncArg, GlobalVarDecl, VarDecl, VarDeclAssign, 
     MethodDecl, MethodDeclExtern,
     LValue, LValueField, FuncCall, MethodCall, CastExpr, 
-    Assignment, AddAssignment, SubAssignment, MulAssignment, AndAssignment, OrAssignment,
+    Assignment, AddAssignment, SubAssignment, MulAssignment, AndAssignment, OrAssignment, XorAssignment,
     Boolean, BooleanEq, BooleanNeq, BooleanGte, BooleanGt, BooleanLte, BooleanLt, 
     IfStatement, WhileStatement, SwitchCase, SwitchDefaultCase, SwitchBody, SwitchStatement,
     ForStatement, IterExpr
@@ -27,7 +27,7 @@ class Parser():
              'IDENT', 'TPRINT', 'DOT', 'TRETURN', 'LPAREN', 'RPAREN', 'LBRACKET', 'RBRACKET',
              'SEMICOLON', 'ADD', 'SUB', 'MUL', 'DIV', 'MOD', 'AND', 'OR', 'XOR', 'BOOLAND', 'BOOLOR',
              'TFN', 'COLON', 'LBRACE', 'RBRACE', 'COMMA', 'CC', 
-             'EQ', 'CEQ', 'ADDEQ', 'SUBEQ', 'MULEQ', 'ANDEQ', 'OREQ',
+             'EQ', 'CEQ', 'ADDEQ', 'SUBEQ', 'MULEQ', 'ANDEQ', 'OREQ', 'XOREQ',
              'TIF', 'TELSE', 'TWHILE', 'TSWITCH', 'TCASE', 'TDEFAULT', 'TFOR', 'TIN', 'DOTDOT', 'ELIPSES',
              'TCONST', 'TIMMUT', 'TATOMIC', 'TTYPE', 'TSTRUCT', 'TCAST', 'TOPERATOR',
              'BOOLEQ', 'BOOLNEQ', 'BOOLGT', 'BOOLLT', 'BOOLGTE', 'BOOLLTE', 'TTRUE', 'TFALSE'],
@@ -297,14 +297,19 @@ class Parser():
             return MulAssignment(self.builder, self.module, spos, p[0], p[2])
 
         @self.pg.production('stmt : lvalue_expr ANDEQ expr SEMICOLON')
-        def stmt_assign_add(p):
+        def stmt_assign_and(p):
             spos = p[0].getsourcepos()
             return AndAssignment(self.builder, self.module, spos, p[0], p[2])
 
         @self.pg.production('stmt : lvalue_expr OREQ expr SEMICOLON')
-        def stmt_assign_add(p):
+        def stmt_assign_or(p):
             spos = p[0].getsourcepos()
             return OrAssignment(self.builder, self.module, spos, p[0], p[2])
+
+        @self.pg.production('stmt : lvalue_expr XOREQ expr SEMICOLON')
+        def stmt_assign_xor(p):
+            spos = p[0].getsourcepos()
+            return XorAssignment(self.builder, self.module, spos, p[0], p[2])
 
         @self.pg.production('typeexpr : lvalue')
         @self.pg.production('typeexpr : MUL typeexpr')
