@@ -1,0 +1,51 @@
+package io;
+
+///C stuff
+type FILE: struct;
+fn fopen(path: cstring, mode: cstring): *FILE;
+fn fclose(file: *FILE): void;
+fn fgets(str: cstring, num: int, stream: *FILE): cstring;
+
+fn malloc(size: int): *byte;
+fn free(ptr: *byte): void;
+///
+
+type File: struct {
+    file: *FILE;
+}
+
+fn(*File) open(path: cstring, mode: cstring): int {
+    this.file = fopen(path, mode);
+    file := this.file;
+    if file == null {
+        return -1;
+    }
+    return 0;
+}
+
+fn(*File) readLine(): cstring {
+    buffer : *byte;
+    buffer = malloc(100);
+    res := fgets(buffer, 100, this.file);
+    if res != null {
+        return res;
+    }
+    free(buffer);
+    return "";
+}
+
+fn(*File) isOpen(): bool {
+    file := this.file;
+    if file == null {
+        return false;
+    }
+    return true;
+}
+
+fn(*File) close(): void {
+    file := this.file;
+    if file != null {
+        fclose(this.file);
+    }
+}
+

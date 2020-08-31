@@ -170,6 +170,7 @@ types = {
     "float64": Type("float64", ir.DoubleType(), 'float'),
     "bool": Type("bool", ir.IntType(1), 'bool'),
     "cstring": Type("cstring", ir.IntType(8).as_pointer(), 'string', traits=['TOpaquePtr']),
+    "null_t": Type("null_t", ir.IntType(8).as_pointer(), 'null', traits=['TNoDereference']),
 }
 
 class Value():

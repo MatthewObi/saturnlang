@@ -1,6 +1,7 @@
 package main;
 import cstring;
 import cmath;
+import io;
 
 fn ptrfun(x: *int) {
     *x = 5;
@@ -55,6 +56,13 @@ fn main(argc: int, argv: CStringArray): int {
     atomic aInt := 35;
     aInt -= 4;
     aInt ^= 45;
+
+    testFile: File;
+    testFile.open("test.txt", "r");
+    testFString := testFile.readLine();
+    testFile.close();
+    printf("test.txt: %s\n", testFString);
+    free(testFString);
 
     myv2: Vector2;
     printf("myv2.x: %d\n", myv2.x);

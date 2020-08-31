@@ -1,11 +1,11 @@
 from rply import ParserGenerator, Token
 from ast import ( 
     Program, CodeBlock, Statement, ReturnStatement, 
-    PackageDecl, ImportDecl, CIncludeDecl, TypeDecl, StructField, StructDeclBody, StructDecl,
+    PackageDecl, ImportDecl, ImportDeclExtern, CIncludeDecl, TypeDecl, StructField, StructDeclBody, StructDecl,
     Sum, Sub, Mul, Div, Mod, And, Or, Xor, BoolAnd, BoolOr, Print, 
     AddressOf, DerefOf, ElementOf,
     Number, Integer, UInteger, Integer64, UInteger64, Float, Double, Byte, StringLiteral, MultilineStringLiteral,
-    StructLiteralElement, StructLiteralBody, StructLiteral, 
+    StructLiteralElement, StructLiteralBody, StructLiteral, Null,
     ArrayLiteralElement, ArrayLiteralBody, ArrayLiteral, TypeExpr,
     FuncDecl, FuncDeclExtern, FuncArgList, FuncArg, GlobalVarDecl, VarDecl, VarDeclAssign, 
     MethodDecl, MethodDeclExtern,
@@ -30,7 +30,7 @@ class Parser():
              'EQ', 'CEQ', 'ADDEQ', 'SUBEQ', 'MULEQ', 'ANDEQ', 'OREQ', 'XOREQ',
              'TIF', 'TELSE', 'TWHILE', 'TSWITCH', 'TCASE', 'TDEFAULT', 'TFOR', 'TIN', 'DOTDOT', 'ELIPSES',
              'TCONST', 'TIMMUT', 'TATOMIC', 'TTYPE', 'TSTRUCT', 'TCAST', 'TOPERATOR',
-             'BOOLEQ', 'BOOLNEQ', 'BOOLGT', 'BOOLLT', 'BOOLGTE', 'BOOLLTE', 'TTRUE', 'TFALSE'],
+             'BOOLEQ', 'BOOLNEQ', 'BOOLGT', 'BOOLLT', 'BOOLGTE', 'BOOLLTE', 'TTRUE', 'TFALSE', 'TNULL'],
 
              precedence=[
                 ('left', ['BOOLOR']),
@@ -180,7 +180,9 @@ class Parser():
         @self.pg.production('import_decl : TIMPORT lvalue SEMICOLON')
         def import_decl(p):
             spos = p[0].getsourcepos()
-            return ImportDecl(self.builder, self.module, spos, p[1])
+            if not self.decl_mode:
+                return ImportDecl(self.builder, self.module, spos, p[1])
+            return ImportDeclExtern(self.builder, self.module, spos, p[1])
 
         @self.pg.production('c_include_decl : TCINCLUDE STRING SEMICOLON')
         def c_include_decl(p):
@@ -196,6 +198,11 @@ class Parser():
         def struct_decl(p):
             spos = p[0].getsourcepos()
             return StructDecl(self.builder, self.module, spos, p[1], p[5], self.decl_mode)
+
+        @self.pg.production('struct_decl : TTYPE lvalue COLON TSTRUCT SEMICOLON')
+        def struct_decl_opaque(p):
+            spos = p[0].getsourcepos()
+            return StructDecl(self.builder, self.module, spos, p[1], None, self.decl_mode)
 
         @self.pg.production('struct_decl_body : struct_decl_body struct_decl_field')
         @self.pg.production('struct_decl_body : struct_decl_field')
@@ -686,6 +693,11 @@ class Parser():
                 return Boolean(self.builder, self.module, spos, True)
             else:
                 return Boolean(self.builder, self.module, spos, False)
+
+        @self.pg.production('expr : TNULL')
+        def expr_null(p):
+            spos = p[0].getsourcepos()
+            return Null(self.builder, self.module, spos)
 
         @self.pg.error
         def error_handle(token):

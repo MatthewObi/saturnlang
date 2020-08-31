@@ -223,6 +223,24 @@ class Boolean(Expr):
         return i
 
 
+class Null(Expr):
+    """
+    A null constant. (null_t)
+    """
+    def __init__(self, builder, module, spos):
+        self.builder = builder
+        self.module = module
+        self.spos = spos
+
+    def get_type(self):
+        return types['null_t']
+
+    def eval(self):
+        int8ptr = ir.IntType(8).as_pointer()
+        i = ir.Constant(int8ptr, int8ptr.null)
+        return i
+
+
 class ArrayLiteralElement(Expr):
     def __init__(self, builder, module, spos, expr, index=-1):
         self.builder = builder
@@ -568,7 +586,9 @@ class CastExpr(Expr):
             elif castt.is_integer():
                 cast = self.builder.ptrtoint(val, castt.irtype)
         elif exprt.is_integer():
-            if castt.is_integer():
+            if castt.is_pointer():
+                cast = self.builder.inttoptr(val, castt.irtype)
+            elif castt.is_integer():
                 if castt.get_integer_bits() < exprt.get_integer_bits():
                     cast = self.builder.trunc(val, castt.irtype)
                 elif castt.get_integer_bits() > exprt.get_integer_bits():
@@ -583,8 +603,6 @@ class CastExpr(Expr):
                     cast = self.builder.uitofp(val, castt.irtype)
                 else:
                     cast = self.builder.sitofp(val, castt.irtype)
-            elif castt.is_pointer():
-                cast = self.builder.inttoptr(val, castt.irtype)
             else:
                 lineno = self.expr.getsourcepos().lineno
                 colno = self.expr.getsourcepos().colno
@@ -837,24 +855,34 @@ class BoolCmpOp(BinaryOp):
     Base class for boolean comparison binary operations.
     """
     def getcmptype(self):
+        ltype = self.left.get_type()
+        rtype = self.right.get_type()
+        if ltype.is_similar(rtype):
+            self.lhs = self.left.eval()
+            self.rhs = self.right.eval()
+            return ltype
+        if ltype.is_pointer() and isinstance(self.right, Null):
+            self.lhs = self.left.eval()
+            self.rhs = ir.Constant(self.left.get_ir_type(), self.left.get_ir_type().null)
+            return ltype
         if self.right.get_ir_type() == self.left.get_ir_type():
             self.lhs = self.left.eval()
             self.rhs = self.right.eval()
-            return self.left.get_ir_type()
+            return ltype
         if isinstance(self.left.get_ir_type(), ir.DoubleType):
             if isinstance(self.right.get_ir_type(), ir.FloatType):
                 self.lhs = self.left.eval()
                 self.rhs = self.builder.fpext(self.right.eval(), ir.DoubleType())
-                return self.left.get_ir_type()
+                return ltype
             if isinstance(self.right.get_ir_type(), ir.IntType):
                 self.lhs = self.left.eval()
                 self.rhs = self.builder.sitofp(self.right.eval(), ir.DoubleType())
-                return self.left.get_ir_type()
+                return ltype
         elif isinstance(self.left.get_ir_type(), ir.IntType):
             if isinstance(self.right.get_ir_type(), ir.FloatType) or isinstance(self.right.get_ir_type(), ir.DoubleType):
                 self.lhs = self.builder.sitofp(self.right.eval(), self.left.get_ir_type())
                 self.rhs = self.right.eval()
-                return self.right.get_ir_type()
+                return rtype
             elif isinstance(self.right.get_ir_type(), ir.IntType):
                 if str(self.right.get_ir_type()) == 'i1' or str(self.left.get_ir_type()) == 'i1':
                     raise RuntimeError("Cannot do comparison between booleans and integers. (%s,%s) (At %s)" % (self.left.get_ir_type(), self.right.get_ir_type(), self.spos))
@@ -862,12 +890,12 @@ class BoolCmpOp(BinaryOp):
                     print('Warning: Automatic integer promotion for comparison (%s,%s) (At line %d, col %d)' % (self.left.get_ir_type(), self.right.get_ir_type(), self.spos.lineno, self.spos.colno))
                     self.lhs = self.left.eval()
                     self.rhs = self.builder.sext(self.right.eval(), self.left.get_ir_type())
-                    return self.left.get_ir_type()
+                    return ltype
                 else:
                     print('Warning: Automatic integer promotion for comparison (%s,%s) (At %s)' % (self.left.get_ir_type(), self.right.get_ir_type(), self.spos))
                     self.rhs = self.right.eval()
                     self.lhs = self.builder.sext(self.left.eval(), self.right.get_ir_type())
-                    return self.right.get_ir_type()
+                    return rtype
         raise RuntimeError("Ouch. Types for comparison cannot be matched. (%s,%s) (At %s)" % (self.left.get_ir_type(), self.right.get_ir_type(), self.spos))
 
     def get_ir_type(self):
@@ -880,7 +908,13 @@ class BooleanEq(BoolCmpOp):
     left == right
     """
     def eval(self):
-        cmpty = self.getcmptype()
+        cmptysat = self.getcmptype()
+        if cmptysat.is_pointer():
+            lhs = self.builder.ptrtoint(self.lhs, ir.IntType(64))
+            rhs = self.builder.ptrtoint(self.rhs, ir.IntType(64))
+            i = self.builder.icmp_signed('==', lhs, rhs)
+            return i
+        cmpty = cmptysat.irtype
         if isinstance(cmpty, ir.IntType):
             i = self.builder.icmp_signed('==', self.lhs, self.rhs)
         elif isinstance(cmpty, ir.FloatType) or isinstance(cmpty, ir.DoubleType):
@@ -896,7 +930,13 @@ class BooleanNeq(BoolCmpOp):
     left != right
     """
     def eval(self):
-        cmpty = self.getcmptype()
+        cmptysat = self.getcmptype()
+        if cmptysat.is_pointer():
+            lhs = self.builder.ptrtoint(self.lhs, ir.IntType(64))
+            rhs = self.builder.ptrtoint(self.rhs, ir.IntType(64))
+            i = self.builder.icmp_signed('!=', lhs, rhs)
+            return i
+        cmpty = cmptysat.irtype
         if isinstance(cmpty, ir.IntType):
             i = self.builder.icmp_signed('!=', self.lhs, self.rhs)
         elif isinstance(cmpty, ir.FloatType) or isinstance(cmpty, ir.DoubleType):
@@ -912,7 +952,8 @@ class BooleanGt(BoolCmpOp):
     left > right
     """
     def eval(self):
-        cmpty = self.getcmptype()
+        cmptysat = self.getcmptype()
+        cmpty = cmptysat.irtype
         if isinstance(cmpty, ir.IntType):
             i = self.builder.icmp_signed('>', self.lhs, self.rhs)
         elif isinstance(cmpty, ir.FloatType) or isinstance(cmpty, ir.DoubleType):
@@ -928,7 +969,8 @@ class BooleanLt(BoolCmpOp):
     left < right
     """
     def eval(self):
-        cmpty = self.getcmptype()
+        cmptysat = self.getcmptype()
+        cmpty = cmptysat.irtype
         if isinstance(cmpty, ir.IntType):
             i = self.builder.icmp_signed('<', self.lhs, self.rhs)
         elif isinstance(cmpty, ir.FloatType) or isinstance(cmpty, ir.DoubleType):
@@ -944,7 +986,8 @@ class BooleanGte(BoolCmpOp):
     left >= right
     """
     def eval(self):
-        cmpty = self.getcmptype()
+        cmptysat = self.getcmptype()
+        cmpty = cmptysat.irtype
         if isinstance(cmpty, ir.IntType):
             i = self.builder.icmp_signed('>=', self.lhs, self.rhs)
         elif isinstance(cmpty, ir.FloatType) or isinstance(cmpty, ir.DoubleType):
@@ -960,7 +1003,8 @@ class BooleanLte(BoolCmpOp):
     left <= right
     """
     def eval(self):
-        cmpty = self.getcmptype()
+        cmptysat = self.getcmptype()
+        cmpty = cmptysat.irtype
         if isinstance(cmpty, ir.IntType):
             i = self.builder.icmp_signed('<=', self.lhs, self.rhs)
         elif isinstance(cmpty, ir.FloatType) or isinstance(cmpty, ir.DoubleType):
@@ -1221,6 +1265,56 @@ class ImportDecl():
 
         parser = pg.get_parser()
         parser.parse(tokens).eval()
+
+
+class ImportDeclExtern():
+    """
+    A statement that reads and imports another package's declarations.
+    """
+    def __init__(self, builder, module, spos, lvalue):
+        self.builder = builder
+        self.module = module
+        self.spos = spos
+        self.lvalue = lvalue
+        
+        from sparser import Parser
+        from lexer import Lexer
+        from cachedmodule import CachedModule, cachedmods
+
+        path = './packages/' + self.lvalue.get_name() + '/main.sat'
+        if path not in cachedmods.keys():
+            text_input = ""
+            with open(path) as f:
+                text_input = f.read()
+            
+            cmod = CachedModule(path, text_input)
+            cachedmods[path] = cmod
+            
+        cmod = cachedmods[path]
+
+        lexer = Lexer().get_lexer()
+        tokens = lexer.lex(cmod.text_input)
+
+        self.builder.filestack.append(cmod.text_input)
+        self.builder.filestack_idx += 1
+
+        self.module.filestack.append(path)
+        self.module.filestack_idx += 1
+
+        pg = Parser(self.module, self.builder, True)
+        pg.parse()
+
+        self.builder.filestack.pop(-1)
+        self.builder.filestack_idx -= 1
+
+        self.module.filestack.pop(-1)
+        self.module.filestack_idx -= 1
+
+        parser = pg.get_parser()
+        parser.parse(tokens).eval()
+
+    def eval(self):
+        pass
 
 
 class CIncludeDecl():
@@ -1750,6 +1844,7 @@ class TypeExpr():
         self.lvalue = lvalue
         lname = self.lvalue.get_name()
         if lname not in types.keys():
+            print(*types.keys())
             raise RuntimeError("%s (%d:%d): Undefined type, %s, used in typeexpr." % (
                 self.module.filestack[self.module.filestack_idx],
                 self.spos.lineno,
@@ -1849,12 +1944,13 @@ class StructDecl():
         self.decl_mode = decl_mode
         name = self.lvalue.get_name()
         types[name] = StructType(name, self.module.context.get_identified_type(name), [])
-        for fld in self.body.get_fields():
-            types[name].add_field(fld.name, fld.ftype, fld.initvalue)
+        if self.body is not None:
+            for fld in self.body.get_fields():
+                types[name].add_field(fld.name, fld.ftype, fld.initvalue)
 
     def eval(self):
         name = self.lvalue.get_name()
-        if self.module.context.get_identified_type(name).is_opaque:
+        if self.module.context.get_identified_type(name).is_opaque and self.body is not None:
             idstruct = self.module.context.get_identified_type(name)
             idstruct.set_body(*self.body.get_ir_types())
             types[name].irtype = idstruct
@@ -1881,7 +1977,10 @@ class StructDecl():
                         ir.Constant(ir.IntType(32), 0),
                         ir.Constant(ir.IntType(32), structty.get_field_index(fld.name))
                     ])
-                    self.builder.store(fld.irvalue, gep)
+                    if fld.irvalue.constant == 'null':
+                        self.builder.store(ir.Constant(gep.type.pointee, gep.type.pointee.null), gep)
+                    else:
+                        self.builder.store(fld.irvalue, gep)
                 self.builder.ret_void()
             pop_inner_scope()
 

@@ -148,9 +148,9 @@ class CodeGen():
             fpm.initialize()
             for f in mod.functions:
                 if not fpm.run(f):
-                    print('noopt ', f.name)
+                    pass #print('noopt ', f.name)
                 else:
-                    print('opt ', f.name)
+                    pass #print('opt ', f.name)
             fpm.finalize()
 
         # Now add the module and make sure it is ready for execution
