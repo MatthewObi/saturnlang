@@ -2149,6 +2149,34 @@ class WhileStatement():
         self.builder.position_at_start(after)
 
 
+class DoWhileStatement():
+    """
+    Do-While loop statement.\n
+    do { loop } while boolexpr;
+    """
+    def __init__(self, builder, module, spos, boolexpr, loop):
+        self.builder = builder
+        self.module = module
+        self.spos = spos
+        self.boolexpr = boolexpr
+        self.loop = loop
+
+    def getsourcepos(self):
+        return self.spos
+
+    def eval(self):
+        loop = self.builder.append_basic_block(self.module.get_unique_name("while"))
+        after = self.builder.append_basic_block(self.module.get_unique_name("after"))
+        self.builder.branch(loop)
+        self.builder.goto_block(loop)
+        self.builder.position_at_start(loop)
+        self.loop.eval()
+        bexpr = self.boolexpr.eval()
+        self.builder.cbranch(bexpr, loop, after)
+        self.builder.goto_block(after)
+        self.builder.position_at_start(after)
+
+
 class IterExpr():
     """
     An expression representing an iteration.\n

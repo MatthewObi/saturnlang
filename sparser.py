@@ -12,7 +12,7 @@ from ast import (
     LValue, LValueField, FuncCall, MethodCall, CastExpr, 
     Assignment, AddAssignment, SubAssignment, MulAssignment, AndAssignment, OrAssignment, XorAssignment,
     Boolean, BooleanEq, BooleanNeq, BooleanGte, BooleanGt, BooleanLte, BooleanLt, 
-    IfStatement, WhileStatement, SwitchCase, SwitchDefaultCase, SwitchBody, SwitchStatement,
+    IfStatement, WhileStatement, DoWhileStatement, SwitchCase, SwitchDefaultCase, SwitchBody, SwitchStatement,
     ForStatement, IterExpr
 )
 from serror import throw_saturn_error
@@ -354,6 +354,17 @@ class Parser():
             spos = p[0].getsourcepos()
             block = CodeBlock(self.builder, self.module, p[3].getsourcepos(), p[3])
             return WhileStatement(self.builder, self.module, spos, p[1], block)
+
+        @self.pg.production('stmt : TDO LBRACE block RBRACE TWHILE expr SEMICOLON')
+        def stmt_dowhile(p):
+            spos = p[0].getsourcepos()
+            return DoWhileStatement(self.builder, self.module, spos, p[5], p[2])
+        
+        @self.pg.production('stmt : TDO expr TWHILE expr SEMICOLON')
+        def stmt_dowhile_expr(p):
+            spos = p[0].getsourcepos()
+            block = CodeBlock(self.builder, self.module, p[1].getsourcepos(), p[1])
+            return DoWhileStatement(self.builder, self.module, spos, p[3], block)
 
         @self.pg.production('stmt : for_stmt')
         def stmt_for(p):
