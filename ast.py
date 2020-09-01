@@ -587,6 +587,10 @@ class DerefOf(PrefixOp):
 
 
 class CastExpr(Expr):
+    """
+    A cast operation.\n
+    cast<ctype>(expr)
+    """
     def __init__(self, builder, module, spos, ctype, expr):
         self.builder = builder
         self.module = module
@@ -638,6 +642,26 @@ class CastExpr(Expr):
                 "Cannot cast expression of type '%s' to '%s'." % (str(exprt), str(castt))
             )
         return cast
+
+
+class SelectExpr(Expr):
+    """
+    A ternary selection operation.\n
+    if cond then a else b
+    """
+    def __init__(self, builder, module, spos, cond, a, b):
+        self.builder = builder
+        self.module = module
+        self.spos = spos
+        self.cond = cond
+        self.a = a
+        self.b = b
+
+    def get_type(self):
+        return self.a.get_type()
+
+    def eval(self):
+        return self.builder.select(self.cond.eval(), self.a.eval(), self.b.eval())
 
 
 class BinaryOp(Expr):

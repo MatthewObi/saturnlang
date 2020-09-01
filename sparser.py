@@ -9,7 +9,7 @@ from ast import (
     ArrayLiteralElement, ArrayLiteralBody, ArrayLiteral, TypeExpr,
     FuncDecl, FuncDeclExtern, FuncArgList, FuncArg, GlobalVarDecl, VarDecl, VarDeclAssign, 
     MethodDecl, MethodDeclExtern,
-    LValue, LValueField, FuncCall, MethodCall, CastExpr, 
+    LValue, LValueField, FuncCall, MethodCall, CastExpr, SelectExpr,
     Assignment, AddAssignment, SubAssignment, MulAssignment, AndAssignment, OrAssignment, XorAssignment,
     Boolean, BooleanEq, BooleanNeq, BooleanGte, BooleanGt, BooleanLte, BooleanLt, 
     IfStatement, WhileStatement, DoWhileStatement, SwitchCase, SwitchDefaultCase, SwitchBody, SwitchStatement,
@@ -537,6 +537,14 @@ class Parser():
             ctype = p[2]
             cexpr = p[5]
             return CastExpr(self.builder, self.module, spos, ctype, cexpr)
+
+        @self.pg.production('expr : TIF expr TTHEN expr TELSE expr')
+        def expr_select(p):
+            spos = p[0].getsourcepos()
+            a = p[3]
+            cond = p[1]
+            b = p[5]
+            return SelectExpr(self.builder, self.module, spos, cond, a, b)
 
         @self.pg.production('func_call : lvalue LPAREN args RPAREN')
         def func_call(p):
