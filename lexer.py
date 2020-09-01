@@ -24,6 +24,8 @@ class Lexer():
         self.lexer.add('TELSE', r'else')
         self.lexer.add('TWHILE', r'while')
         self.lexer.add('TFOR', r'for')
+        self.lexer.add('TTHEN', r'\bthen\b')
+        self.lexer.add('TDO', r'\bdo\b')
         self.lexer.add('TSWITCH', r'switch')
         self.lexer.add('TCASE', r'case')
         self.lexer.add('TDEFAULT', r'default')

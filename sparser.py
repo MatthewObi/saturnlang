@@ -28,7 +28,8 @@ class Parser():
              'SEMICOLON', 'ADD', 'SUB', 'MUL', 'DIV', 'MOD', 'AND', 'OR', 'XOR', 'BOOLAND', 'BOOLOR',
              'TFN', 'COLON', 'LBRACE', 'RBRACE', 'COMMA', 'CC', 
              'EQ', 'CEQ', 'ADDEQ', 'SUBEQ', 'MULEQ', 'ANDEQ', 'OREQ', 'XOREQ',
-             'TIF', 'TELSE', 'TWHILE', 'TSWITCH', 'TCASE', 'TDEFAULT', 'TFOR', 'TIN', 'DOTDOT', 'ELIPSES',
+             'TIF', 'TELSE', 'TWHILE', 'TTHEN', 'TDO', 
+             'TSWITCH', 'TCASE', 'TDEFAULT', 'TFOR', 'TIN', 'DOTDOT', 'ELIPSES',
              'TCONST', 'TIMMUT', 'TATOMIC', 'TTYPE', 'TSTRUCT', 'TCAST', 'TOPERATOR',
              'BOOLEQ', 'BOOLNEQ', 'BOOLGT', 'BOOLLT', 'BOOLGTE', 'BOOLLTE', 'TTRUE', 'TFALSE', 'TNULL'],
 
@@ -348,6 +349,12 @@ class Parser():
             spos = p[0].getsourcepos()
             return WhileStatement(self.builder, self.module, spos, p[1], p[3])
 
+        @self.pg.production('stmt : TWHILE expr TDO stmt')
+        def stmt_while_do(p):
+            spos = p[0].getsourcepos()
+            block = CodeBlock(self.builder, self.module, p[3].getsourcepos(), p[3])
+            return WhileStatement(self.builder, self.module, spos, p[1], block)
+
         @self.pg.production('stmt : for_stmt')
         def stmt_for(p):
             return p[0]
@@ -361,6 +368,12 @@ class Parser():
         def if_stmt_else(p):
             spos = p[0].getsourcepos()
             return IfStatement(self.builder, self.module, spos, p[1], p[3], el=p[7])
+
+        @self.pg.production('if_stmt : TIF expr TTHEN stmt')
+        def if_stmt_then(p):
+            spos = p[0].getsourcepos()
+            block = CodeBlock(self.module, self.builder, p[3].getsourcepos(), p[3])
+            return IfStatement(self.builder, self.module, spos, p[1], block)
 
         @self.pg.production('switch_stmt : TSWITCH lvalue_expr LBRACE switch_body RBRACE')
         @self.pg.production('switch_stmt : TSWITCH lvalue_expr LBRACE RBRACE')
@@ -418,6 +431,12 @@ class Parser():
         def for_stmt(p):
             spos = p[0].getsourcepos()
             return ForStatement(self.builder, self.module, spos, p[1], p[3], p[5])
+
+        @self.pg.production('for_stmt : TFOR lvalue TIN iter_expr TDO stmt')
+        def for_stmt_do(p):
+            spos = p[0].getsourcepos()
+            block = CodeBlock(self.builder, self.module, p[5].getsourcepos(), p[5])
+            return ForStatement(self.builder, self.module, spos, p[1], p[3], block)
 
         @self.pg.production('iter_expr : expr DOTDOT expr')
         @self.pg.production('iter_expr : expr DOTDOT expr COLON expr')

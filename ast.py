@@ -12,10 +12,14 @@ def get_inner_scope():
 def check_name_in_scope(name):
     global SCOPE
     for i in range(len(SCOPE)):
-        s = SCOPE[len(SCOPE)-1-i]
+        s = SCOPE[-1-i]
         if name in s.keys():
             return s[name]
     return None
+
+def add_new_local(name, ptr):
+    global SCOPE
+    SCOPE[-1][name] = ptr
 
 def push_new_scope():
     global SCOPE
@@ -343,6 +347,12 @@ class LValue(Expr):
         name = self.get_name()
         ptr = check_name_in_scope(name)
         if ptr is None:
+            if name not in self.module.sglobals:
+                lineno = self.getsourcepos().lineno
+                colno = self.getsourcepos().colno
+                throw_saturn_error(self.builder, self.module, lineno, colno, 
+                    "Could not find lvalue '%s' in current scope." % name
+                )
             ptr = self.module.sglobals[name]
         # if ptr.type.is_pointer():
         #     return ptr.type.get_deference_of()
@@ -377,6 +387,12 @@ class LValue(Expr):
         name = self.get_name()
         ptr = check_name_in_scope(name)
         if ptr is None:
+            if name not in self.module.sglobals:
+                lineno = self.getsourcepos().lineno
+                colno = self.getsourcepos().colno
+                throw_saturn_error(self.builder, self.module, lineno, colno, 
+                    "Could not find lvalue '%s' in current scope." % name
+                )
             ptr = self.module.sglobals[name]
         return ptr
     
@@ -384,6 +400,12 @@ class LValue(Expr):
         name = self.get_name()
         ptr = check_name_in_scope(name)
         if ptr is None:
+            if name not in self.module.sglobals:
+                lineno = self.getsourcepos().lineno
+                colno = self.getsourcepos().colno
+                throw_saturn_error(self.builder, self.module, lineno, colno, 
+                    "Could not find lvalue '%s' in current scope." % name
+                )
             ptr = self.module.sglobals[name]
         if ptr.is_atomic():
             return self.builder.load_atomic(ptr.irvalue, 'seq_cst', 4)
@@ -1405,16 +1427,14 @@ class FuncArg():
         arg = ir.Argument(func, self.atype.irtype, name=self.name.value)
         if decl:
             val = Value(self.name.value, self.atype, arg)
-            scope = get_inner_scope()
-            scope[self.name.value] = val
+            add_new_local(self.name.value, val)
             return val
         else:
             ptr = self.builder.alloca(self.atype.irtype, name=self.name.value)
             self.builder.store(arg, ptr)
             argval = Value(self.name.value, self.atype, arg)
             val = Value(self.name.value, self.atype, ptr)
-            scope = get_inner_scope()
-            scope[self.name.value] = val
+            add_new_local(self.name.value, val)
             return argval
 
 
@@ -1729,8 +1749,7 @@ class VarDecl():
     def eval(self):
         vartype = self.vtype.type
         ptr = Value(self.name.value, vartype, self.builder.alloca(vartype.irtype, name=self.name.value))
-        scope = get_inner_scope()
-        scope[self.name.value] = ptr
+        add_new_local(self.name.value, ptr)
         dbglv = self.module.add_debug_info("DILocalVariable", {
             "name":self.name.value, 
             #"arg":0, 
@@ -1806,8 +1825,7 @@ class VarDeclAssign():
             )
         ptr = Value(self.name.value, vartype, self.builder.alloca(vartype.irtype, name=self.name.value), qualifiers=quals)
 
-        scope = get_inner_scope()
-        scope[self.name.value] = ptr
+        add_new_local(self.name.value, ptr)
         dbglv = self.module.add_debug_info("DILocalVariable", {
             "name":self.name.value, 
             #"arg":1, 
@@ -2211,8 +2229,7 @@ class ForStatement():
         name = self.it.get_name()
         ty = self.itexpr.get_type()
         ptr = Value(name, ty, self.builder.alloca(ty.irtype, name=name))
-        scope = get_inner_scope()
-        scope[name] = ptr
+        add_new_local(name, ptr)
         self.builder.store(self.itexpr.eval_init(), ptr.irvalue)
         check = self.builder.append_basic_block(self.module.get_unique_name("for.check"))
         loop = self.builder.append_basic_block(self.module.get_unique_name("for.loop"))
