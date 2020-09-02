@@ -386,6 +386,13 @@ class Parser():
             block = CodeBlock(self.module, self.builder, p[3].getsourcepos(), p[3])
             return IfStatement(self.builder, self.module, spos, p[1], block)
 
+        @self.pg.production('if_stmt : TIF expr TTHEN stmt TELSE stmt')
+        def if_stmt_then_else(p):
+            spos = p[0].getsourcepos()
+            ifblock = CodeBlock(self.module, self.builder, p[3].getsourcepos(), p[3])
+            elblock = CodeBlock(self.module, self.builder, p[5].getsourcepos(), p[5])
+            return IfStatement(self.builder, self.module, spos, p[1], ifblock, el=elblock)
+
         @self.pg.production('switch_stmt : TSWITCH lvalue_expr LBRACE switch_body RBRACE')
         @self.pg.production('switch_stmt : TSWITCH lvalue_expr LBRACE RBRACE')
         def switch_stmt(p):

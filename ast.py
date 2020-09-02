@@ -475,6 +475,7 @@ class LValueField(Expr):
                 ir.Constant(ir.IntType(32), findex)
             ])
             return self.builder.load(gep)
+        return None
 
 
 class PostfixOp(Expr):
@@ -903,13 +904,14 @@ class BoolCmpOp(BinaryOp):
     def getcmptype(self):
         ltype = self.left.get_type()
         rtype = self.right.get_type()
+        if ltype.is_pointer() and isinstance(self.right, Null):
+            self.lhs = self.left.eval()
+            rirtype = ltype.irtype
+            self.rhs = rirtype(rirtype.null)
+            return ltype
         if ltype.is_similar(rtype):
             self.lhs = self.left.eval()
             self.rhs = self.right.eval()
-            return ltype
-        if ltype.is_pointer() and isinstance(self.right, Null):
-            self.lhs = self.left.eval()
-            self.rhs = ir.Constant(self.left.get_ir_type(), self.left.get_ir_type().null)
             return ltype
         if self.right.get_ir_type() == self.left.get_ir_type():
             self.lhs = self.left.eval()

@@ -16,32 +16,28 @@ type File: struct {
 
 fn(*File) open(path: cstring, mode: cstring): int {
     this.file = fopen(path, mode);
-    file := this.file;
-    return if file != null 
+    return if this.file != null 
         then  0
         else -1;
 }
 
 fn(*File) readLine(): cstring {
-    file := this.file;
-    if file == null then return "";
+    if this.file == null then return "";
     buffer : *byte;
     buffer = malloc(100);
-    res := fgets(buffer, 100, file);
+    res := fgets(buffer, 100, this.file);
     if res != null then return res;
     free(buffer);
     return "";
 }
 
 fn(*File) isOpen(): bool {
-    file := this.file;
-    return if file != null 
+    return if this.file != null 
         then  true
         else false;
 }
 
 fn(*File) close(): void {
-    file := this.file;
-    if file != null then fclose(this.file);
+    if this.file != null then fclose(this.file);
 }
 

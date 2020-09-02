@@ -117,6 +117,12 @@ fn main(argc: int, argv: CStringArray): int {
     for x in 1..3 do printf("arrofints[%d] = %d\n", x, arrofints[x]);
     for x in 3...0:-1 do printf("arrofints[%d] = %d\n", x, arrofints[x]);
 
+    for a in 0..2 do
+        for b in 0..2 do
+            for c in 0..2 do
+                for d in 0..2 do
+                    printf("%d%d%d%d\n", a, b, c, d);
+
     doVar := 15;
     do printf("%d ", doVar) while doVar < 0;
     doVar -= 1;
@@ -157,11 +163,10 @@ fn main(argc: int, argv: CStringArray): int {
         i-=1;
     }
     k := j % 2;
-    if k == 0 {
-        printf("j is even!\n");
-    } else {
+    if k == 0 then 
+        printf("j is even!\n"); 
+    else 
         printf("j is odd!\n");
-    }
     if len > 5 then printf("String is greater than 5 characters!\n");
     printf(str);
     printf("length: %d\n", len);
