@@ -1,5 +1,5 @@
 package main;
-import cstring;
+import string;
 import cmath;
 import io;
 
@@ -8,29 +8,6 @@ fn ptrfun(x: *int) {
 }
 
 type CStringArray : *cstring;
-
-type string : struct {
-    ptr : cstring;
-    len : uint;
-}
-
-fn(*string) new(): void {
-    this.ptr = "";
-    this.len = 1;
-}
-
-fn(*string) operator=(str: cstring): void {
-    this.ptr = str;
-    this.len = strlen(str);
-}
-
-fn(*string) length(): uint {
-    return this.len;
-}
-
-fn(*string) cstr(): cstring {
-    return this.ptr;
-}
 
 type Vector2 : struct {
     x: int = 7;

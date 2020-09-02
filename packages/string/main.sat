@@ -1,5 +1,6 @@
-package cstring;
+package string;
 
+//C stuff
 fn strlen(str: cstring): int;
 fn strcmp(lhs: cstring, rhs: cstring): int;
 fn strncmp(lhs: cstring, rhs: cstring, count: uint): int;
@@ -9,3 +10,27 @@ fn strrchr(str: cstring, ch: int): cstring;
 fn strstr(str: cstring, substr: cstring): cstring;
 fn strcpy(dest: cstring, src: cstring): cstring;
 fn strcat(dest: cstring, src: cstring): cstring;
+//
+
+type string : struct {
+    ptr : cstring;
+    len : uint;
+}
+
+fn(*string) new(): void {
+    this.ptr = "";
+    this.len = 1;
+}
+
+fn(*string) operator=(str: cstring): void {
+    this.ptr = str;
+    this.len = strlen(str);
+}
+
+fn(*string) length(): uint {
+    return this.len;
+}
+
+fn(*string) cstr(): cstring {
+    return this.ptr;
+}
