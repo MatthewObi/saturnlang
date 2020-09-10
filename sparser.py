@@ -456,6 +456,10 @@ class Parser():
             block = CodeBlock(self.builder, self.module, p[5].getsourcepos(), p[5])
             return ForStatement(self.builder, self.module, spos, p[1], p[3], block)
 
+        @self.pg.production('stmt : LBRACE block RBRACE')
+        def block_stmt(p):
+            return p[1]
+
         @self.pg.production('iter_expr : expr DOTDOT expr')
         @self.pg.production('iter_expr : expr DOTDOT expr COLON expr')
         def iter_expr_const(p):
