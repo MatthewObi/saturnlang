@@ -1,0 +1,16 @@
+fn switch_test(x: int): int {
+    y := 0;
+    switch x {
+        case 11:
+            printf("Woo!\n");
+            y += 5;
+        case 45:
+            printf("Wee ");
+            y += 1;
+            fallthrough;
+        default:
+            printf("woo!\n");
+            y += 2;
+    }
+    return y;
+}

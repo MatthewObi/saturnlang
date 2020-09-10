@@ -30,6 +30,8 @@ class Lexer():
         self.lexer.add('TCASE', r'\bcase\b')
         self.lexer.add('TDEFAULT', r'\bdefault\b')
         self.lexer.add('TFALLTHROUGH', r'\bfallthrough\b')
+        self.lexer.add('TBREAK', r'\bbreak\b')
+        self.lexer.add('TCONTINUE', r'\bcontinue\b')
         self.lexer.add('TRETURN', r'\breturn\b')
         self.lexer.add('TEXTERN', r'\bextern\b')
         self.lexer.add('TTYPE', r'\btype\b')

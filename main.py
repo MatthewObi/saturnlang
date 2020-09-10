@@ -37,7 +37,7 @@ for f in glob.glob("*.sat"):
     eval_files.append(f)
 
 for ff in files:
-    ffll = ff.rstrip('.sat')
+    ffll = ff[:-4]
     print("satc -o %s.ll %s" % (ffll, ff))
     evalfiles = eval_files.copy()
     evalfiles.remove(ff)
@@ -104,7 +104,7 @@ for ff in files:
     parser.parse(tokens).eval()
 
     ir = codegen.create_ir()
-    dest = ff.rstrip('.sat')
+    dest = ff[:-4]
     codegen.save_ir(dest + '.ll', ir)
     llfiles.append(dest)
 

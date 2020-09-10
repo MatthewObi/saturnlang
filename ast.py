@@ -2104,6 +2104,33 @@ class ReturnStatement(Statement):
             self.builder.ret_void()
 
 
+class FallthroughStatement(Statement):
+    """
+    Fallthrough statement.\n
+    fallthrough;
+    """
+    def eval(self):
+        pass
+
+
+class BreakStatement(Statement):
+    """
+    Break statement.\n
+    break;
+    """
+    def eval(self):
+        self.builder.branch(self.builder.break_dest)
+
+
+class ContinueStatement(Statement):
+    """
+    Continue statement.\n
+    continue;
+    """
+    def eval(self):
+        self.builder.branch(self.builder.continue_dest)
+
+
 class IfStatement():
     """
     If statement.\n
@@ -2168,7 +2195,11 @@ class WhileStatement():
         self.builder.cbranch(bexpr, loop, after)
         self.builder.goto_block(loop)
         self.builder.position_at_start(loop)
+        self.builder.break_dest = after
+        self.builder.continue_dest = loop
         self.loop.eval()
+        self.builder.break_dest = None
+        self.builder.continue_dest = None
         bexpr2 = self.boolexpr.eval()
         self.builder.cbranch(bexpr2, loop, after)
         self.builder.goto_block(after)
@@ -2196,7 +2227,11 @@ class DoWhileStatement():
         self.builder.branch(loop)
         self.builder.goto_block(loop)
         self.builder.position_at_start(loop)
+        self.builder.break_dest = after
+        self.builder.continue_dest = loop
         self.loop.eval()
+        self.builder.break_dest = None
+        self.builder.continue_dest = None
         bexpr = self.boolexpr.eval()
         self.builder.cbranch(bexpr, loop, after)
         self.builder.goto_block(after)
@@ -2287,16 +2322,24 @@ class ForStatement():
         self.builder.store(self.itexpr.eval_init(), ptr.irvalue)
         check = self.builder.append_basic_block(self.module.get_unique_name("for.check"))
         loop = self.builder.append_basic_block(self.module.get_unique_name("for.loop"))
+        inc = self.builder.append_basic_block(self.module.get_unique_name("for.inc"))
         after = self.builder.append_basic_block(self.module.get_unique_name("after"))
         self.builder.branch(check)
         self.builder.goto_block(check)
         self.builder.position_at_start(check)
+        self.builder.break_dest = after
+        self.builder.continue_dest = inc
         checkval = self.itexpr.eval_loop_check(self.it)
         self.builder.cbranch(checkval, loop, after)
         self.builder.goto_block(loop)
         self.builder.position_at_start(loop)
         self.loop.eval()
+        self.builder.branch(inc)
+        self.builder.goto_block(inc)
+        self.builder.position_at_start(inc)
         self.itexpr.eval_loop_inc(self.it)
+        self.builder.break_dest = None
+        self.builder.continue_dest = None
         self.builder.branch(check)
         self.builder.goto_block(after)
         self.builder.position_at_start(after)
@@ -2311,7 +2354,6 @@ class SwitchCase():
     def __init__(self, builder, module, spos, expr, stmts=[]):
         self.builder = builder
         self.module = module
-        self.expr = expr
         self.spos = spos
         self.expr = expr
         self.stmts = stmts
@@ -2385,18 +2427,30 @@ class SwitchStatement():
             after = self.builder.append_basic_block(self.module.get_unique_name("switch.after"))
             switch = self.builder.switch(sexpr, after)
         prev_block = None
+        prev_case = None
+        self.builder.break_dest = after
         for case in self.body.cases:
             case_expr = case.expr.eval()
             case_block = self.builder.append_basic_block(self.module.get_unique_name("switch.case"))
             switch.add_case(case_expr, case_block)
             if prev_block is not None and not prev_block.is_terminated:
-                self.builder.branch(after)
+                if len(prev_case.stmts) > 0 and isinstance(prev_case.stmts[-1], FallthroughStatement):
+                    self.builder.branch(case_block)
+                else:
+                    self.builder.branch(after)
             self.builder.goto_block(case_block)
             self.builder.position_at_start(case_block)
             case.eval()
             prev_block = case_block
+            prev_case = case
         if prev_block is not None and not prev_block.is_terminated:
-            self.builder.branch(after)
+            if len(prev_case.stmts) > 0 and isinstance(prev_case.stmts[-1], FallthroughStatement):
+                if default is not None:
+                    self.builder.branch(default)
+                else:
+                    self.builder.branch(after)
+            else:
+                self.builder.branch(after)
         if default is not None:
             self.builder.goto_block(default)
             self.builder.position_at_start(default)

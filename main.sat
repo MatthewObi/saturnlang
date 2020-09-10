@@ -100,6 +100,10 @@ fn main(argc: int, argv: CStringArray): int {
                 for d in 0..2 do
                     printf("%d%d%d%d\n", a, b, c, d);
 
+    printf("%d\n", switch_test(45));
+    printf("%d\n", switch_test(11));
+    printf("%d\n", switch_test(0));
+
     doVar := 15;
     do printf("%d ", doVar) while doVar < 0;
     doVar -= 1;

@@ -1,6 +1,6 @@
 from rply import ParserGenerator, Token
 from ast import ( 
-    Program, CodeBlock, Statement, ReturnStatement, 
+    Program, CodeBlock, Statement, ReturnStatement, BreakStatement, ContinueStatement, FallthroughStatement,
     PackageDecl, ImportDecl, ImportDeclExtern, CIncludeDecl, TypeDecl, StructField, StructDeclBody, StructDecl,
     Sum, Sub, Mul, Div, Mod, And, Or, Xor, BoolAnd, BoolOr, Print, 
     AddressOf, DerefOf, ElementOf,
@@ -28,7 +28,7 @@ class Parser():
              'SEMICOLON', 'ADD', 'SUB', 'MUL', 'DIV', 'MOD', 'AND', 'OR', 'XOR', 'BOOLAND', 'BOOLOR',
              'TFN', 'COLON', 'LBRACE', 'RBRACE', 'COMMA', 'CC', 
              'EQ', 'CEQ', 'ADDEQ', 'SUBEQ', 'MULEQ', 'ANDEQ', 'OREQ', 'XOREQ',
-             'TIF', 'TELSE', 'TWHILE', 'TTHEN', 'TDO', 
+             'TIF', 'TELSE', 'TWHILE', 'TTHEN', 'TDO', 'TBREAK', 'TCONTINUE', 'TFALLTHROUGH',
              'TSWITCH', 'TCASE', 'TDEFAULT', 'TFOR', 'TIN', 'DOTDOT', 'ELIPSES',
              'TCONST', 'TIMMUT', 'TATOMIC', 'TTYPE', 'TSTRUCT', 'TCAST', 'TOPERATOR',
              'BOOLEQ', 'BOOLNEQ', 'BOOLGT', 'BOOLLT', 'BOOLGTE', 'BOOLLTE', 'TTRUE', 'TFALSE', 'TNULL'],
@@ -257,6 +257,21 @@ class Parser():
             spos = p[0].getsourcepos()
             return ReturnStatement(self.builder, self.module, spos, None)
 
+        @self.pg.production('stmt : TBREAK SEMICOLON')
+        def stmt_break(p):
+            spos = p[0].getsourcepos()
+            return BreakStatement(self.builder, self.module, spos, None)
+
+        @self.pg.production('stmt : TCONTINUE SEMICOLON')
+        def stmt_continue(p):
+            spos = p[0].getsourcepos()
+            return ContinueStatement(self.builder, self.module, spos, None)
+
+        @self.pg.production('stmt : TFALLTHROUGH SEMICOLON')
+        def stmt_fallthrough(p):
+            spos = p[0].getsourcepos()
+            return FallthroughStatement(self.builder, self.module, spos, None)
+
         @self.pg.production('stmt : IDENT COLON typeexpr SEMICOLON')
         def stmt_var_decl(p):
             spos = p[0].getsourcepos()
@@ -425,22 +440,22 @@ class Parser():
                 else:
                     return SwitchBody(self.builder, self.module, spos, [p[0]])
 
-        @self.pg.production('case_expr : case_expr stmt')
         @self.pg.production('case_expr : TCASE expr COLON')
         def case_expr(p):
-            if len(p) == 3:
-                spos = p[0].getsourcepos()
-                return SwitchCase(self.builder, self.module, spos, p[1])
-            else:
-                p[0].add_stmt(p[1])
-                return p[0]
+            spos = p[0].getsourcepos()
+            return SwitchCase(self.builder, self.module, spos, p[1], [])
+        
+        @self.pg.production('case_expr : case_expr stmt')
+        def case_expr_stmt(p):
+            p[0].add_stmt(p[1])
+            return p[0]
 
         @self.pg.production('default_case_expr : default_case_expr stmt')
         @self.pg.production('default_case_expr : TDEFAULT COLON')
         def default_case_expr(p):
             if not isinstance(p[0], SwitchDefaultCase):
                 spos = p[0].getsourcepos()
-                return SwitchDefaultCase(self.builder, self.module, spos)
+                return SwitchDefaultCase(self.builder, self.module, spos, [])
             else:
                 p[0].add_stmt(p[1])
                 return p[0]
