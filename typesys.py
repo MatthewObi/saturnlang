@@ -98,7 +98,7 @@ class Type():
         return False
 
     def is_pointer(self):
-        return ('ptr',) in self.qualifiers or self.name == 'cstring'
+        return ('ptr',) in self.qualifiers or self.name == 'cstring' or self.name == 'null_t'
 
     def is_value(self):
         return not (self.is_array() or self.is_pointer())
@@ -170,7 +170,7 @@ types = {
     "float64": Type("float64", ir.DoubleType(), 'float'),
     "bool": Type("bool", ir.IntType(1), 'bool'),
     "cstring": Type("cstring", ir.IntType(8).as_pointer(), 'string', traits=['TOpaquePtr']),
-    "null_t": Type("null_t", ir.IntType(8).as_pointer(), 'null', traits=['TNoDereference']),
+    "null_t": Type("null_t", ir.IntType(8).as_pointer(), 'null', traits=['TNoDereference', 'TOpaquePtr']),
 }
 
 class Value():
@@ -252,6 +252,7 @@ class StructType(Type):
         return op in self.operator
 
     def add_operator(self, op, fn):
+        print('adding operator ', op)
         if not self.has_operator(op):
             self.operator[op] = fn
     

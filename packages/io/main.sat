@@ -38,6 +38,9 @@ fn(*File) isOpen(): bool {
 }
 
 fn(*File) close(): void {
-    if this.file != null then fclose(this.file);
+    if this.file != null { 
+        fclose(this.file);
+        this.file = cast<*FILE>(null);
+    }
 }
 

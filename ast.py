@@ -1097,6 +1097,7 @@ class Assignment():
         #print("(%s) => (%s)" % (value, ptr))
         if sptr.is_atomic():
             self.builder.store_atomic(value, ptr, 'seq_cst', 4)
+            return
         self.builder.store(value, ptr)
 
 
@@ -1773,6 +1774,7 @@ class VarDecl():
         return self.spos
 
     def eval(self):
+        self.vtype.eval()
         vartype = self.vtype.type
         ptr = Value(self.name.value, vartype, self.builder.alloca(vartype.irtype, name=self.name.value))
         add_new_local(self.name.value, ptr)
@@ -1803,6 +1805,7 @@ class VarDecl():
             #     calc_sizeof_struct(self.builder, self.module, ptr.type.irtype),
             #     ir.Constant(ir.IntType(1), 0),
             # ])
+            print(vartype, vartype.has_ctor(), vartype.has_operator('='))
             if self.initval is not None and vartype.has_operator('='):
                 method = vartype.operator['=']
                 pptr = ptr.irvalue
@@ -1897,19 +1900,29 @@ class TypeExpr():
             ))
         self.type = types[lvalue.get_name()]
         self.base_type = types[lvalue.get_name()]
+        self.quals = []
 
     def get_ir_type(self):
         return self.type.irtype
 
     def add_pointer_qualifier(self):
         self.type = self.type.get_pointer_to()
+        self.quals.append(['*'])
 
     def add_array_qualifier(self, size):
         self.type = self.type.get_array_of(int(size.value))
+        self.quals.append(['[]', int(size.value)])
 
     def is_pointer(self):
-        return self.type.is_pointer()     
+        return self.type.is_pointer()    
 
+    def eval(self):
+        self.type = types[self.lvalue.get_name()]
+        for qual in self.quals:
+            if qual[0] == '*':
+                self.type = self.type.get_pointer_to()
+            elif qual[0] == '[]':
+                self.type = self.type.get_array_of(qual[1])
 
 class TypeDecl():
     """
@@ -2007,13 +2020,13 @@ class StructDecl():
             structptr = structty.irtype.as_pointer()
             fnty = ir.FunctionType(ir.VoidType(), [structptr])
             fn = ir.Function(self.module, fnty, self.lvalue.get_name() + '.new')
+            #fn.attributes.add("alwaysinline")
             self.ctor = fn
             structty.add_ctor(fn)
             #self.module.sfunctys[self.name.value] = sfnty
             if not self.decl_mode:
                 fn.args = (ir.Argument(fn, structptr, name='this'),)
                 thisptr = fn.args[0]
-                fn.attributes.add("alwaysinline")
                 block = fn.append_basic_block("entry")
                 self.builder.position_at_start(block)
                 for fld in initfs:

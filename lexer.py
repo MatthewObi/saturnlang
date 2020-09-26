@@ -33,6 +33,7 @@ class Lexer():
         self.lexer.add('TBREAK', r'\bbreak\b')
         self.lexer.add('TCONTINUE', r'\bcontinue\b')
         self.lexer.add('TRETURN', r'\breturn\b')
+        self.lexer.add('TMATCH', r'\bmatch\b')
         self.lexer.add('TEXTERN', r'\bextern\b')
         self.lexer.add('TTYPE', r'\btype\b')
         self.lexer.add('TSTRUCT', r'\bstruct\b')
