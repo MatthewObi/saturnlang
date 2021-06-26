@@ -1,17 +1,25 @@
 package io;
 
-///C stuff
-type FILE: struct;
-fn fopen(path: cstring, mode: cstring): *FILE;
-fn fclose(file: *FILE): void;
-fn fgets(str: cstring, num: int, stream: *FILE): cstring;
+c_declare
+{
+    type FILE: struct;
+    fn fopen(path: cstring, mode: cstring): *FILE;
+    fn fclose(file: *FILE): void;
+    fn fgets(str: cstring, num: int, stream: *FILE): cstring;
 
-fn malloc(size: int): *byte;
-fn free(ptr: *byte): void;
-///
+    fn malloc(size: int): *byte;
+    fn free(ptr: *byte): void;
+}
 
 type File: struct {
     file: *FILE;
+}
+
+fn(*File) delete(): void {
+    if this.file != null { 
+        fclose(this.file);
+        this.file = cast<*FILE>(null);
+    }
 }
 
 fn(*File) open(path: cstring, mode: cstring): int {
@@ -25,7 +33,7 @@ fn(*File) readLine(): cstring {
     if this.file == null then return "";
     buffer : *byte;
     buffer = malloc(100);
-    res := fgets(buffer, 100, this.file);
+    res := fgets(cast<cstring>(buffer), 100, this.file);
     if res != null then return res;
     free(buffer);
     return "";
@@ -42,5 +50,6 @@ fn(*File) close(): void {
         fclose(this.file);
         this.file = cast<*FILE>(null);
     }
+    return;
 }
 

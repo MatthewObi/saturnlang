@@ -1,10 +1,13 @@
 package cmath;
 
-fn abs(n: int): int;
-fn fabsf(n: float32): float32;
-fn fabs(n: float64): float64;
-fn nanf(n: float32): float32;
-fn nan(n: float64): float64;
-fn floorf(n: float32): float32;
-fn floor(n: float64): float64;
-fn pow(base: float64, exponent: float64): float64;
+c_declare 
+{
+    fn abs(n: int): int;
+    fn fabsf(n: float32): float32;
+    fn fabs(n: float64): float64;
+    fn nanf(n: float32): float32;
+    fn nan(n: float64): float64;
+    fn floorf(n: float32): float32;
+    fn floor(n: float64): float64;
+    fn pow(base: float64, exponent: float64): float64;
+}

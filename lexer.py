@@ -46,6 +46,7 @@ class Lexer():
         self.lexer.add('TMUT', r'\bmut\b')
         self.lexer.add('TIN', r'\bin\b')
         self.lexer.add('TCINCLUDE', r'\bc_include\b')
+        self.lexer.add('TCDECLARE', r'\bc_declare\b')
 
         self.lexer.add('TTRUE', r'\btrue\b')
         self.lexer.add('TFALSE', r'\bfalse\b')

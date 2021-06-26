@@ -18,7 +18,7 @@ fn(*Vector2) getX(): int {
     return this.x;
 }
 
-fn(*Vector2) setX(newX : uint): void {
+fn(*Vector2) setX(newX : int): void {
     this.x = newX;
 }
 
@@ -26,9 +26,21 @@ fn(*Vector2) setX(newX : uint): void {
 fn main(argc: int, argv: CStringArray): int {
     arrofints : [4]int;
     array2 := []int {77, 44, 13, 39};
+    const fltarray := []float64 {
+        0.0, 
+        35.2
+    };
+    printf("fltarray[1] = %f", fltarray[0]);
     printf("argc = %d\n", argc);
-    const PI := 3.141593;
+    const PI  := 3.141593;
     const TAU := PI * 2.0;
+
+    ss  := 55 <=> 33;
+    ss2 := 55 <=> 55;
+    ss3 := 33 <=> 55;
+    printf("Spaceship: %d\n", ss);
+    printf("Spaceship: %d\n", ss2);
+    printf("Spaceship: %d\n", ss3);
 
     atomic aInt := 35;
     aInt -= 4;
@@ -40,7 +52,7 @@ fn main(argc: int, argv: CStringArray): int {
         testFString := testFile.readLine();
         testFile.close();
         printf("test.txt: %s\n", testFString);
-        free(testFString);
+        free(cast<*byte>(testFString));
     } else {
         printf("Could not open file 'test.txt'\n");
     }
@@ -48,7 +60,7 @@ fn main(argc: int, argv: CStringArray): int {
     myv2: Vector2;
     printf("myv2.x: %d\n", myv2.x);
 
-    myv2.setX(77u);
+    myv2.setX(89);
     myv2x := myv2.getX();
     printf("myv2.x: %d\n", myv2x);
 
@@ -120,6 +132,11 @@ fn main(argc: int, argv: CStringArray): int {
     }
 
     strstruct: string = "Hello.";
+    printf("%s (length = %d)\n", strstruct.cstr(), strstruct.length());
+
+    strstruct2: string = "Hi!";
+    printf("%d\n", strstruct <=> strstruct2);
+    strstruct = strstruct2;
     printf("%s (length = %d)\n", strstruct.cstr(), strstruct.length());
 
     str := "Hello, world!\n";

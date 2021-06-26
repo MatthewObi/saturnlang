@@ -1,6 +1,6 @@
 from llvmlite import ir
 from rply import Token
-from typesys import Type, types, FuncType, StructType, Value
+from typesys import Type, types, FuncType, StructType, Value, mangle_name, print_types, Func
 from serror import throw_saturn_error
 
 SCOPE = []
@@ -510,13 +510,13 @@ class ElementOf(PostfixOp):
                 gep = self.builder.gep(self.left.eval(), [
                     self.expr.eval()
                 ], True)
-                return Value("", ptr.type.get_deference_of(), gep)
+                return Value(ptr.name, ptr.type.get_deference_of(), gep, ptr.qualifiers)
             else:
                 gep = self.builder.gep(ptr.irvalue, [
                     ir.Constant(ir.IntType(32), 0),
                     self.expr.eval()
                 ], True)
-                return Value("", ptr.type.get_element_of(), gep)
+                return Value(ptr.name, ptr.type.get_element_of(), gep, ptr.qualifiers)
             
 
     def eval(self):
@@ -909,6 +909,11 @@ class BoolCmpOp(BinaryOp):
             rirtype = ltype.irtype
             self.rhs = rirtype(rirtype.null)
             return ltype
+        if ltype.is_struct() and isinstance(self.right, Null):
+            self.lhs = self.left.eval()
+            rirtype = ltype.irtype
+            self.rhs = rirtype(rirtype.null)
+            return ltype
         if ltype.is_similar(rtype):
             self.lhs = self.left.eval()
             self.rhs = self.right.eval()
@@ -948,6 +953,69 @@ class BoolCmpOp(BinaryOp):
 
     def get_ir_type(self):
         return types['bool'].irtype
+
+
+class Spaceship(BoolCmpOp):
+    """
+    Comparison spaceship '<=>' operator.\n
+    left <=> right
+    """
+    def eval(self):
+        ltype = self.left.get_type()
+        if ltype.is_struct() and ltype.has_operator('<=>'):
+            method = ltype.operator['<=>']
+            ptr = self.left.get_pointer().irvalue
+            value = self.right.eval()
+            ovrld = method.get_overload([ltype.get_pointer_to(), self.right.get_type()])
+            if not ovrld:
+                pass
+            return self.builder.call(ovrld, [ptr, value])
+        cmptysat = self.getcmptype()
+        begin = self.builder.basic_block
+        lt = self.builder.append_basic_block(self.module.get_unique_name("ship.less"))
+        gt = self.builder.append_basic_block(self.module.get_unique_name("ship.greater"))
+        after = self.builder.append_basic_block(self.module.get_unique_name("ship.after"))
+        ltv = ir.Constant(ir.IntType(32), -1)
+        eqv = ir.Constant(ir.IntType(32), 0)
+        gtv = ir.Constant(ir.IntType(32), 1)
+        if cmptysat.is_pointer():
+            lhs = self.builder.ptrtoint(self.lhs, ir.IntType(64))
+            rhs = self.builder.ptrtoint(self.rhs, ir.IntType(64))
+            i = self.builder.icmp_signed('==', lhs, rhs)
+            return i
+        cmpty = cmptysat.irtype
+        if isinstance(cmpty, ir.IntType):
+            i = self.builder.icmp_signed('==', self.lhs, self.rhs)
+        elif isinstance(cmpty, ir.FloatType) or isinstance(cmpty, ir.DoubleType):
+            i = self.builder.fcmp_ordered('==', self.lhs, self.rhs)
+        else:
+            i = self.builder.fcmp_ordered('==', self.lhs, self.rhs)
+        self.builder.cbranch(i, after, lt)
+        self.builder.goto_block(lt)
+        self.builder.position_at_start(lt)
+        if isinstance(cmpty, ir.IntType):
+            j = self.builder.icmp_signed('<', self.lhs, self.rhs)
+        elif isinstance(cmpty, ir.FloatType) or isinstance(cmpty, ir.DoubleType):
+            j = self.builder.fcmp_ordered('<', self.lhs, self.rhs)
+        else:
+            j = self.builder.fcmp_ordered('<', self.lhs, self.rhs)
+        self.builder.cbranch(j, after, gt)
+        self.builder.goto_block(gt)
+        self.builder.position_at_start(gt)
+        if isinstance(cmpty, ir.IntType):
+            k = self.builder.icmp_signed('>', self.lhs, self.rhs)
+        elif isinstance(cmpty, ir.FloatType) or isinstance(cmpty, ir.DoubleType):
+            k = self.builder.fcmp_ordered('>', self.lhs, self.rhs)
+        else:
+            k = self.builder.fcmp_ordered('>', self.lhs, self.rhs)
+        self.builder.branch(after)
+        self.builder.goto_block(after)
+        self.builder.position_at_start(after)
+        phi = self.builder.phi(types["int"].irtype, 'land')
+        phi.add_incoming(eqv, begin)
+        phi.add_incoming(ltv, lt)
+        phi.add_incoming(gtv, gt)
+        return phi
 
 
 class BooleanEq(BoolCmpOp):
@@ -1090,7 +1158,10 @@ class Assignment():
                 method = sptr.type.operator['=']
                 ptr = sptr.irvalue
                 value = self.expr.eval()
-                self.builder.call(method, [ptr, value])
+                ovrld = method.get_overload([sptr.type.get_pointer_to(), self.expr.get_type()])
+                if not ovrld:
+                    pass
+                self.builder.call(ovrld, [ptr, value])
                 return
         ptr = sptr.irvalue
         value = self.expr.eval()
@@ -1386,6 +1457,22 @@ class CIncludeDecl():
         pass
         
 
+class CDeclareDecl():
+    """
+    Creates a block of C declarations.
+    """
+    def __init__(self, builder, module, spos, cblock):
+        self.builder = builder
+        self.module = module
+        self.spos = spos
+        self.cblock = cblock
+
+    def eval(self):
+        self.builder.c_decl = True 
+        for decl in self.cblock:
+            decl.eval()
+        self.builder.c_decl = False
+
 
 class CodeBlock():
     """
@@ -1538,8 +1625,11 @@ class FuncDecl():
         fnty = ir.FunctionType(rtype.get_ir_type(), argtypes)
         #print("%s (%s)" % (self.name.value, fnty))
         sfnty = FuncType("", rtype.type, self.decl_args.get_arg_stype_list())
+        fname = self.name.value
+        if not self.builder.c_decl and not self.name.value == 'main':
+            fname = mangle_name(self.name.value, sfnty.atypes)
         try:
-            self.module.get_global(self.name.value)
+            self.module.get_global(fname)
             text_input = self.builder.filestack[self.builder.filestack_idx]
             lines = text_input.splitlines()
             lineno = self.name.getsourcepos().lineno
@@ -1559,8 +1649,14 @@ class FuncDecl():
             ))
         except(KeyError):
             pass
-        fn = ir.Function(self.module, fnty, self.name.value)
-        self.module.sfunctys[self.name.value] = sfnty
+        fn = ir.Function(self.module, fnty, fname)
+        if self.name.value not in self.module.sfuncs:
+            self.module.sfuncs[self.name.value] = Func(self.name.value, sfnty.rtype)
+            self.module.sfuncs[self.name.value].add_overload(sfnty.atypes, fn)
+        else:
+            self.module.sfuncs[self.name.value].add_overload(sfnty.atypes, fn)
+        print("New function:", fname)
+        #self.module.sfunctys[self.name.value] = sfnty
         block = fn.append_basic_block("entry")
         self.builder.dbgsub = self.module.add_debug_info("DISubprogram", {
             "name":self.name.value, 
@@ -1605,9 +1701,17 @@ class FuncDeclExtern():
         fnty = ir.FunctionType(rtype.irtype, argtypes)
         #print("%s (%s)" % (self.name.value, fnty))
         sfnty = FuncType("", rtype, self.decl_args.get_arg_stype_list())
-        fn = ir.Function(self.module, fnty, self.name.value)
+        fname = self.name.value
+        if not self.builder.c_decl:
+            fname = mangle_name(self.name.value, sfnty.atypes)
+        fn = ir.Function(self.module, fnty, fname)
         fn.args = tuple(self.decl_args.get_decl_arg_list(fn))
-        self.module.sfunctys[self.name.value] = sfnty
+        #self.module.sfunctys[self.name.value] = sfnty
+        if self.name.value not in self.module.sfuncs:
+            self.module.sfuncs[self.name.value] = Func(self.name.value, sfnty.rtype)
+            self.module.sfuncs[self.name.value].add_overload(sfnty.atypes, fn)
+        else:
+            self.module.sfuncs[self.name.value].add_overload(sfnty.atypes, fn)
         pop_inner_scope()
 
 
@@ -1671,8 +1775,12 @@ class MethodDecl():
         fnty = ir.FunctionType(rtype.get_ir_type(), argtypes)
         #print("%s (%s)" % (self.name.value, fnty))
         sfnty = FuncType("", rtype.type, self.decl_args.get_arg_stype_list())
+        name = self.struct.get_name() + '.' + self.name.value
+        fname = name
+        if not self.builder.c_decl:
+            fname = mangle_name(name, sfnty.atypes)
         try:
-            self.module.get_global(self.struct.get_name() + '.' + self.name.value)
+            self.module.get_global(fname)
             text_input = self.builder.filestack[self.builder.filestack_idx]
             lines = text_input.splitlines()
             lineno = self.name.getsourcepos().lineno
@@ -1692,13 +1800,24 @@ class MethodDecl():
             ))
         except(KeyError):
             pass
-        name = self.struct.get_name() + '.' + self.name.value
-        fn = ir.Function(self.module, fnty, name)
-        self.module.sfunctys[name] = sfnty
+        fn = ir.Function(self.module, fnty, fname)
+        #self.module.sfunctys[name] = sfnty
+        if name not in self.module.sfuncs:
+            self.module.sfuncs[name] = Func(name, sfnty.rtype)
+            self.module.sfuncs[name].add_overload(sfnty.atypes, fn)
+        else:
+            self.module.sfuncs[name].add_overload(sfnty.atypes, fn)
+        print("New method:", fname)
         if self.name.value == 'new':
-            types[self.struct.get_name()].add_ctor(fn)
+            types[self.struct.get_name()].add_ctor(self.module.sfuncs[name])
+        elif self.name.value == 'delete':
+            types[self.struct.get_name()].add_dtor(self.module.sfuncs[name])
         elif self.name.value == 'operator.assign':
-            types[self.struct.get_name()].add_operator('=', fn)
+            types[self.struct.get_name()].add_operator('=', self.module.sfuncs[name])
+        elif self.name.value == 'operator.eq':
+            types[self.struct.get_name()].add_operator('==', self.module.sfuncs[name])
+        elif self.name.value == 'operator.spaceship':
+            types[self.struct.get_name()].add_operator('<=>', self.module.sfuncs[name])
         block = fn.append_basic_block("entry")
         self.builder.dbgsub = self.module.add_debug_info("DISubprogram", {
             "name": name, 
@@ -1750,9 +1869,17 @@ class MethodDeclExtern():
         #print("%s (%s)" % (self.name.value, fnty))
         sfnty = FuncType("", rtype, self.decl_args.get_arg_stype_list())
         name = self.struct.get_name() + '.' + self.name.value
-        fn = ir.Function(self.module, fnty, name)
+        fname = name
+        if not self.builder.c_decl:
+            fname = mangle_name(name, sfnty.atypes)
+        fn = ir.Function(self.module, fnty, fname)
         fn.args = tuple(self.decl_args.get_decl_arg_list(fn))
-        self.module.sfunctys[name] = sfnty
+        #self.module.sfunctys[fname] = sfnty
+        if name not in self.module.sfuncs:
+            self.module.sfuncs[name] = Func(name, sfnty.rtype)
+            self.module.sfuncs[name].add_overload(sfnty.atypes, fn)
+        else:
+            self.module.sfuncs[name].add_overload(sfnty.atypes, fn)
         pop_inner_scope()
 
 
@@ -1810,7 +1937,10 @@ class VarDecl():
                 method = vartype.operator['=']
                 pptr = ptr.irvalue
                 value = self.initval.eval()
-                self.builder.call(method, [pptr, value])
+                ovrld = method.get_overload([vartype.get_pointer_to(), self.initval.get_type()])
+                if not ovrld:
+                    pass
+                self.builder.call(ovrld, [pptr, value])
                 return
             if vartype.has_ctor():
                 self.builder.call(vartype.get_ctor(), [ptr.irvalue])
@@ -1838,6 +1968,8 @@ class VarDeclAssign():
     def eval(self):
         val = self.initval.eval()
         vartype = self.initval.get_type()
+        
+        print('New var:', vartype, val, self.initval.get_ir_type())
         quals = []
         if self.spec == 'const':
             quals.append('const')
@@ -2055,16 +2187,25 @@ class FuncCall(Expr):
         self.args = args
 
     def get_type(self):
-        return self.module.sfunctys[self.lvalue.get_name()].rtype
+        return self.module.sfuncs[self.lvalue.get_name()].rtype
 
     def get_ir_type(self):
-        return self.module.get_global(self.lvalue.get_name()).ftype.return_type
+        return self.get_type().irtype
+        #return self.module.sfuncs[self.lvalue.get_name()].rtype.irtype
 
     def eval(self):
-        args = []
-        for arg in self.args:
-            args.append(arg.eval())
-        return self.builder.call(self.module.get_global(self.lvalue.get_name()), args, self.lvalue.get_name())
+        sfn = self.module.sfuncs[self.lvalue.get_name()]
+        aargs = [arg.get_type() for arg in self.args]
+        ovrld = sfn.get_overload(aargs)
+        if not ovrld:
+            lineno = self.getsourcepos().lineno
+            colno = self.getsourcepos().colno
+            throw_saturn_error(self.builder, self.module, lineno, colno, 
+                "Cannot find overload for function %s with argument types (%s)." % (self.lvalue.get_name(), print_types(aargs))
+            )
+        args = [arg.eval() for arg in self.args]
+        return self.builder.call(ovrld, args, self.lvalue.get_name())
+        #return self.builder.call(self.module.get_global(self.lvalue.get_name()), args, self.lvalue.get_name())
 
 
 class MethodCall(Expr):
@@ -2081,17 +2222,29 @@ class MethodCall(Expr):
         self.args = args
 
     def get_type(self):
-        return self.module.sfunctys[self.callee.get_type().name + '.' + self.lvalue.get_name()].rtype
+        name = self.callee.get_type().name + '.' + self.lvalue.get_name()
+        return self.module.sfuncs[name].rtype
 
     def get_ir_type(self):
-        return self.module.get_global(self.callee.get_type().name + '.' + self.lvalue.get_name()).ftype.return_type
+        return self.get_type().irtype
+        #return self.module.get_global(self.callee.get_type().name + '.' + self.lvalue.get_name()).ftype.return_type
 
     def eval(self):
         name = self.callee.get_type().name + '.' + self.lvalue.get_name()
-        args = [AddressOf(self.builder, self.module, self.spos, self.callee).eval()]
-        for arg in self.args:
-            args.append(arg.eval())
-        return self.builder.call(self.module.get_global(name), args, name)
+        sfn = self.module.sfuncs[name]
+        print(name, self.module.sfuncs[name], sfn.overloads)
+        sargs = [arg for arg in self.args]
+        sargs.insert(0, AddressOf(self.builder, self.module, self.spos, self.callee))
+        aargs = [arg.get_type() for arg in sargs]
+        ovrld = sfn.get_overload(aargs)
+        if not ovrld:
+            lineno = self.getsourcepos().lineno
+            colno = self.getsourcepos().colno
+            throw_saturn_error(self.builder, self.module, lineno, colno, 
+                "Cannot find overload for function %s with argument types (%s)." % (self.lvalue.get_name(), print_types(aargs))
+            )
+        args = [arg.eval() for arg in sargs]
+        return self.builder.call(ovrld, args, name)
 
 
 class Statement():

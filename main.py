@@ -130,7 +130,7 @@ linkcmd = ''
 if compile_target == 'wasm':
     linkcmd = 'wasm-ld -o main.wasm -entry main --export-all -L./test/sysroot/lib/wasm32-wasi -lc '
 elif compile_target == 'windows-x64':
-    linkcmd = 'lld-link -out:main.exe -defaultlib:libcmt -libpath:"C:/Program Files (x86)/Microsoft Visual Studio/2019/Community/VC/Tools/MSVC/14.26.28801/lib/x64" -libpath:"C:/Program Files (x86)/Windows Kits/10/Lib/10.0.18362.0/ucrt/x64" -libpath:"C:/Program Files (x86)/Windows Kits/10/Lib/10.0.18362.0/um/x64" -nologo '
+    linkcmd = 'lld-link -subsystem:console -out:main.exe -defaultlib:libcmt -libpath:"C:/Program Files (x86)/Microsoft Visual Studio/2019/Community/VC/Tools/MSVC/14.26.28801/lib/x64" -libpath:"C:/Program Files (x86)/Windows Kits/10/Lib/10.0.18362.0/ucrt/x64" -libpath:"C:/Program Files (x86)/Windows Kits/10/Lib/10.0.18362.0/um/x64" -nologo '
 
 for llf in linkfiles:
     linkcmd += '"%s" ' % llf

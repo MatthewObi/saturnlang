@@ -64,6 +64,7 @@ class Type():
             if ql[i][0] == 'ptr':
                 ql.pop(i)
                 break
+        ql.reverse()
         return Type(self.name, 
             self.irtype.pointee, 
             self.tclass, 
@@ -78,6 +79,7 @@ class Type():
             if ql[i][0] == 'array':
                 ql.pop(i)
                 break
+        ql.reverse()
         return Type(self.name, 
             self.irtype.element, 
             self.tclass, 
@@ -123,6 +125,15 @@ class Type():
 
     def is_iterable(self):
         return self.is_array() or self.is_string()
+
+    def is_const(self):
+        return 'const' in self.qualifiers
+
+    def is_immut(self):
+        return 'immut' in self.qualifiers
+    
+    def is_atomic(self):
+        return 'atomic' in self.qualifiers
 
     def __str__(self):
         s = str()
@@ -214,6 +225,7 @@ class StructType(Type):
         self.qualifiers = qualifiers
         self.traits = traits
         self.ctor = None
+        self.dtor = None
         self.operator = {}
 
     def add_field(self, name, ftype, irvalue):
@@ -247,6 +259,16 @@ class StructType(Type):
     def add_ctor(self, ctor):
         if not self.has_ctor():
             self.ctor = ctor
+
+    def has_dtor(self):
+        return self.dtor is not None
+
+    def get_dtor(self):
+        return self.dtor
+
+    def add_dtor(self, dtor):
+        if not self.has_dtor():
+            self.dtor = dtor
 
     def has_operator(self, op):
         return op in self.operator
@@ -291,3 +313,69 @@ class StructType(Type):
             qualifiers=ql,
             traits=self.traits
         )
+
+def mangle_name(name: str, atypes: list):
+    mname = '_Z%s_' % name
+    if len(atypes) == 0:
+        mname += 'v'
+        return mname
+    for atype in atypes:
+        if atype.is_const():
+            mname += 'K'
+        if atype.is_pointer():
+            mname += 'P'
+        if atype.is_atomic():
+            mname += 'A'
+        if atype.is_integer():
+            if atype.get_integer_bits() == 32:
+                mname += 'i'
+            elif atype.get_integer_bits() == 64:
+                mname += 'l'
+            elif atype.get_integer_bits() == 16:
+                mname += 's'
+            elif atype.get_integer_bits() == 8:
+                mname += 'c'
+        elif atype.name == 'cstring':
+            mname += 'Pc'
+        elif atype.irtype == ir.FloatType():
+            mname += 'f'
+        elif atype.irtype == ir.DoubleType():
+            mname += 'd'
+        elif atype.irtype == ir.IntType(1):
+            mname += 'b'
+        elif atype.irtype == ir.VoidType():
+            mname += 'v'
+        elif atype.is_struct():
+            mname += 'S' + atype.name + '_'
+    return mname
+
+def print_types(types_list: list):
+    if len(types_list) == 0:
+        return 'void'
+    else:
+        s: str = ''
+        for ty in types_list:
+            s += str(ty)
+            s += ', '
+        s = s.rstrip(', ')
+        return s
+
+class Func():
+    """
+    A function value in Saturn.
+    """
+    def __init__(self, name, rtype, overloads={}, traits={}):
+        self.name = name
+        self.rtype = rtype
+        self.overloads = overloads.copy()
+        self.traits = traits
+
+    def add_overload(self, atypes, fn):
+        key = mangle_name('', atypes)
+        self.overloads[key] = fn
+
+    def get_overload(self, atypes):
+        key = mangle_name('', atypes)
+        if key in self.overloads:
+            return self.overloads[key]
+        return None

@@ -70,6 +70,7 @@ class CodeGen():
             "encoding": ir.DIToken("DW_ATE_boolean")
         })
         self.module.sfunctys = {}
+        self.module.sfuncs = {}
         self.module.sglobals = {}
         self.module.add_named_metadata("llvm.dbg.cu", self.module.di_compile_unit)
         self.module.add_named_metadata("llvm.ident", ["llvmlite/1.0"])
@@ -84,6 +85,7 @@ class CodeGen():
         ])
         self.module.memset = self.module.declare_intrinsic('llvm.memset', [int8ptr, int32])
         self.builder = ir.IRBuilder()
+        self.builder.c_decl = False
 
     def _create_execution_engine(self):
         """

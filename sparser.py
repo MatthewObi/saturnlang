@@ -1,7 +1,7 @@
 from rply import ParserGenerator, Token
 from ast import ( 
     Program, CodeBlock, Statement, ReturnStatement, BreakStatement, ContinueStatement, FallthroughStatement,
-    PackageDecl, ImportDecl, ImportDeclExtern, CIncludeDecl, TypeDecl, StructField, StructDeclBody, StructDecl,
+    PackageDecl, ImportDecl, ImportDeclExtern, CIncludeDecl, CDeclareDecl, TypeDecl, StructField, StructDeclBody, StructDecl,
     Sum, Sub, Mul, Div, Mod, And, Or, Xor, BoolAnd, BoolOr, Print, 
     AddressOf, DerefOf, ElementOf,
     Number, Integer, UInteger, Integer64, UInteger64, Float, Double, Byte, StringLiteral, MultilineStringLiteral,
@@ -11,7 +11,7 @@ from ast import (
     MethodDecl, MethodDeclExtern,
     LValue, LValueField, FuncCall, MethodCall, CastExpr, SelectExpr,
     Assignment, AddAssignment, SubAssignment, MulAssignment, AndAssignment, OrAssignment, XorAssignment,
-    Boolean, BooleanEq, BooleanNeq, BooleanGte, BooleanGt, BooleanLte, BooleanLt, 
+    Boolean, Spaceship, BooleanEq, BooleanNeq, BooleanGte, BooleanGt, BooleanLte, BooleanLt, 
     IfStatement, WhileStatement, DoWhileStatement, SwitchCase, SwitchDefaultCase, SwitchBody, SwitchStatement,
     ForStatement, IterExpr
 )
@@ -22,7 +22,7 @@ class Parser():
     def __init__(self, module, builder, decl_mode=False):
         self.pg = ParserGenerator(
             # A list of all token names accepted by the parser.
-            ['TPACKAGE', 'TIMPORT', 'TCINCLUDE',
+            ['TPACKAGE', 'TIMPORT', 'TCINCLUDE', 'TCDECLARE',
              'INT', 'UINT', 'LONGINT', 'ULONGINT', 'BYTE', 'FLOAT', 'DOUBLE', 'STRING', 'MLSTRING',
              'IDENT', 'TPRINT', 'DOT', 'TRETURN', 'LPAREN', 'RPAREN', 'LBRACKET', 'RBRACKET',
              'SEMICOLON', 'ADD', 'SUB', 'MUL', 'DIV', 'MOD', 'AND', 'OR', 'XOR', 'BOOLAND', 'BOOLOR',
@@ -31,12 +31,13 @@ class Parser():
              'TIF', 'TELSE', 'TWHILE', 'TTHEN', 'TDO', 'TBREAK', 'TCONTINUE', 'TFALLTHROUGH',
              'TSWITCH', 'TCASE', 'TDEFAULT', 'TFOR', 'TIN', 'DOTDOT', 'ELIPSES',
              'TCONST', 'TIMMUT', 'TATOMIC', 'TTYPE', 'TSTRUCT', 'TCAST', 'TOPERATOR',
-             'BOOLEQ', 'BOOLNEQ', 'BOOLGT', 'BOOLLT', 'BOOLGTE', 'BOOLLTE', 'TTRUE', 'TFALSE', 'TNULL'],
+             'BOOLEQ', 'BOOLNEQ', 'BOOLGT', 'BOOLLT', 'BOOLGTE', 'BOOLLTE', 'SPACESHIP', 
+             'TTRUE', 'TFALSE', 'TNULL'],
 
              precedence=[
                 ('left', ['BOOLOR']),
                 ('left', ['BOOLAND']),
-                ('left', ['BOOLEQ', 'BOOLNEQ', 'BOOLGT', 'BOOLLT', 'BOOLGTE', 'BOOLLTE']),
+                ('left', ['BOOLEQ', 'BOOLNEQ', 'BOOLGT', 'BOOLLT', 'BOOLGTE', 'BOOLLTE', 'SPACESHIP']),
                 ('left', ['ADD', 'SUB']),
                 ('left', ['MUL', 'DIV', 'MOD'])
             ]
@@ -62,6 +63,7 @@ class Parser():
         @self.pg.production('gstmt : pack_decl')
         @self.pg.production('gstmt : import_decl')
         @self.pg.production('gstmt : c_include_decl')
+        @self.pg.production('gstmt : c_declare_decl')
         @self.pg.production('gstmt : type_decl')
         @self.pg.production('gstmt : struct_decl')
         def gstmt(p):
@@ -173,6 +175,18 @@ class Parser():
                 return MethodDecl(self.builder, self.module, spos, name, rtype, block, declargs, struct)
             return MethodDeclExtern(self.builder, self.module, spos, name, rtype, declargs, struct)
 
+        @self.pg.production('method_decl : TFN LPAREN MUL lvalue RPAREN TOPERATOR SPACESHIP LPAREN decl_args RPAREN COLON typeexpr LBRACE block RBRACE')
+        def method_decl_assign(p):
+            struct = p[3]
+            name = Token('IDENT', 'operator.spaceship')
+            declargs = p[8]
+            rtype = p[11]
+            block = p[13]
+            spos = p[0].getsourcepos()
+            if not self.decl_mode:
+                return MethodDecl(self.builder, self.module, spos, name, rtype, block, declargs, struct)
+            return MethodDeclExtern(self.builder, self.module, spos, name, rtype, declargs, struct)
+
         @self.pg.production('pack_decl : TPACKAGE lvalue SEMICOLON')
         def pack_decl(p):
             spos = p[0].getsourcepos()
@@ -189,6 +203,11 @@ class Parser():
         def c_include_decl(p):
             spos = p[0].getsourcepos()
             return CIncludeDecl(self.builder, self.module, spos, p[1])
+
+        @self.pg.production('c_declare_decl : TCDECLARE LBRACE gstmt_list RBRACE')
+        def c_declare_decl(p):
+            spos = p[0].getsourcepos()
+            return CDeclareDecl(self.builder, self.module, spos, p[2])
 
         @self.pg.production('type_decl : TTYPE lvalue COLON typeexpr SEMICOLON')
         def type_decl(p):
@@ -231,6 +250,18 @@ class Parser():
         def struct_decl_field_init(p):
             spos = p[0].getsourcepos()
             return StructField(self.builder, self.module, spos, p[0], p[2], p[4])
+
+        @self.pg.production('gstmt_list : ')
+        @self.pg.production('gstmt_list : gstmt')
+        @self.pg.production('gstmt_list : gstmt_list gstmt')
+        def gstmt_list(p):
+            if len(p) == 0:
+                return []
+            elif len(p) == 1:
+                return [p[0]]
+            else:
+                p[0].append(p[1])
+                return p[0]
 
         @self.pg.production('block : block stmt')
         @self.pg.production('block : stmt')
@@ -511,6 +542,7 @@ class Parser():
         @self.pg.production('expr : expr AND expr')
         @self.pg.production('expr : expr OR expr')
         @self.pg.production('expr : expr XOR expr')
+        @self.pg.production('expr : expr SPACESHIP expr')
         @self.pg.production('expr : expr BOOLAND expr')
         @self.pg.production('expr : expr BOOLOR expr')
         @self.pg.production('expr : expr BOOLEQ expr')
@@ -540,6 +572,8 @@ class Parser():
                 return Or(self.builder, self.module, spos, left, right)
             elif operator.gettokentype() == 'XOR':
                 return Xor(self.builder, self.module, spos, left, right)
+            elif operator.gettokentype() == 'SPACESHIP':
+                return Spaceship(self.builder, self.module, spos, left, right)
             elif operator.gettokentype() == 'BOOLEQ':
                 return BooleanEq(self.builder, self.module, spos, left, right)
             elif operator.gettokentype() == 'BOOLNEQ':
