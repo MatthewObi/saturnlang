@@ -1,9 +1,10 @@
 from llvmlite import ir
 from rply import Token
-from typesys import Type, types, FuncType, StructType, Value, mangle_name, print_types, Func
+from typesys import TupleType, Type, make_tuple_type, types, FuncType, StructType, Value, mangle_name, print_types, Func
 from serror import throw_saturn_error
 
 SCOPE = []
+DECL_SCOPE = []
 
 def get_inner_scope():
     global SCOPE
@@ -27,6 +28,30 @@ def push_new_scope():
 
 def pop_inner_scope():
     global SCOPE
+    SCOPE.pop(-1)
+
+def get_inner_decl_scope():
+    global DECL_SCOPE
+    return DECL_SCOPE[-1]
+
+def check_name_in_decl_scope(name):
+    global DECL_SCOPE
+    for i in range(len(DECL_SCOPE)):
+        s = DECL_SCOPE[-1-i]
+        if name in s.keys():
+            return s[name]
+    return None
+
+def add_new_decl_local(name, ty):
+    global DECL_SCOPE
+    DECL_SCOPE[-1][name] = ty
+
+def push_new_decl_scope():
+    global DECL_SCOPE
+    DECL_SCOPE.append({})
+
+def pop_inner_decl_scope():
+    global DECL_SCOPE
     SCOPE.pop(-1)
 
 class Expr():
@@ -330,6 +355,63 @@ class StructLiteral(Expr):
         c = ir.Constant(self.stype.get_ir_type(), membervals)
         return c
 
+
+class TupleLiteralElement(Expr):
+    def __init__(self, builder, module, spos, expr):
+        self.builder = builder
+        self.module = module
+        self.spos = spos
+        self.expr = expr
+
+
+class TupleLiteralBody():
+    def __init__(self, builder, module, spos):
+        self.builder = builder
+        self.module = module
+        self.spos = spos
+        self.elements = []
+
+    def add_element(self, expr):
+        self.elements.append(expr)
+
+
+class TupleLiteral(Expr):
+    """
+    A tuple literal.
+    """
+    def __init__(self, builder, module, spos, body):
+        self.builder = builder
+        self.module = module
+        self.spos = spos
+        self.ttype = make_tuple_type(body.elements)
+        self.body = body
+        self.type = self.get_type()
+
+    def get_type(self):
+        return self.ttype
+
+    def get_ir_type(self):
+        return self.ttype.irtype
+
+    def eval(self):
+        i = 0
+        name = self.module.get_unique_name("_unnamed_tuple")
+        ptr = self.builder.alloca(self.ttype.irtype, name=name)
+        val = Value(name, self.ttype, ptr)
+        add_new_local(name, val)
+        for el in self.body.elements:
+            gep = self.builder.gep(ptr, [
+                ir.Constant(ir.IntType(32), 0),
+                ir.Constant(ir.IntType(32), i)
+            ])
+            res = el.eval()
+            if isinstance(res, ir.Constant) and res.constant == 'null':
+                self.builder.store(ir.Constant(gep.type.pointee, gep.type.pointee.null), gep)
+            else:
+                self.builder.store(res, gep)
+            i+=1
+        return self.builder.load(ptr)
+
         
 class LValue(Expr):
     """
@@ -355,14 +437,17 @@ class LValue(Expr):
                 )
             ptr = self.module.sglobals[name]
         # if ptr.type.is_pointer():
-        #     return ptr.type.get_deference_of()
+        #     return ptr.type.get_dereference_of()
         return ptr.type
 
     def get_ir_type(self):
         name = self.get_name()
-        ptr = check_name_in_scope(name).irvalue
+        print(name)
+        ptr = check_name_in_scope(name)
         if ptr is None:
             ptr = self.module.get_global(name)
+        else:
+            ptr = ptr.irvalue
         if ptr.type.is_pointer:
             return ptr.type.pointee
         return ptr.type
@@ -510,7 +595,7 @@ class ElementOf(PostfixOp):
                 gep = self.builder.gep(self.left.eval(), [
                     self.expr.eval()
                 ], True)
-                return Value(ptr.name, ptr.type.get_deference_of(), gep, ptr.qualifiers)
+                return Value(ptr.name, ptr.type.get_dereference_of(), gep, ptr.qualifiers)
             else:
                 gep = self.builder.gep(ptr.irvalue, [
                     ir.Constant(ir.IntType(32), 0),
@@ -519,6 +604,35 @@ class ElementOf(PostfixOp):
                 return Value(ptr.name, ptr.type.get_element_of(), gep, ptr.qualifiers)
             
 
+    def eval(self):
+        ptr = self.get_pointer()
+        lep = self.builder.load(ptr.irvalue)
+        return lep
+
+
+class TupleElementOf(PostfixOp):
+    """
+    A tuple element of postfix operation.\n
+    left.i
+    """
+    def get_type(self):
+        return self.left.get_type().get_element_type(int(self.expr))
+
+    def get_pointer(self):
+        ptr = self.left.get_pointer()
+        leftty = self.left.get_type()
+        if leftty.is_pointer():
+            gep = self.builder.gep(self.left.eval(), [
+                ir.Constant(ir.IntType(32), int(self.expr))
+            ], True)
+            return Value(ptr.name, ptr.type.get_dereference_of(), gep, ptr.qualifiers)
+        else:
+            gep = self.builder.gep(ptr.irvalue, [
+                ir.Constant(ir.IntType(32), 0),
+                ir.Constant(ir.IntType(32), int(self.expr))
+            ], True)
+            return Value(ptr.name, ptr.type.get_element_of(), gep, ptr.qualifiers)
+    
     def eval(self):
         ptr = self.get_pointer()
         lep = self.builder.load(ptr.irvalue)
@@ -569,7 +683,7 @@ class DerefOf(PrefixOp):
         return self.right.get_name()
 
     def get_type(self):
-        return self.right.get_type().get_deference_of()
+        return self.right.get_type().get_dereference_of()
     
     def get_pointer(self):
         return Value("", self.get_type(), self.builder.load(self.right.get_pointer().irvalue))
@@ -962,14 +1076,23 @@ class Spaceship(BoolCmpOp):
     """
     def eval(self):
         ltype = self.left.get_type()
-        if ltype.is_struct() and ltype.has_operator('<=>'):
-            method = ltype.operator['<=>']
-            ptr = self.left.get_pointer().irvalue
-            value = self.right.eval()
-            ovrld = method.get_overload([ltype.get_pointer_to(), self.right.get_type()])
-            if not ovrld:
-                pass
-            return self.builder.call(ovrld, [ptr, value])
+        if ltype.is_struct():
+            if ltype.has_operator('<=>'):
+                method = ltype.operator['<=>']
+                ptr = self.left.get_pointer().irvalue
+                value = self.right.eval()
+                ovrld = method.get_overload([ltype.get_pointer_to(), self.right.get_type()])
+                if not ovrld:
+                    pass
+                return self.builder.call(ovrld, [ptr, value])
+            else:
+                lineno = self.spos.lineno
+                colno = self.spos.colno
+                throw_saturn_error(self.builder, self.module, lineno, colno, 
+                    "Comparing structs using operator '<=>', but no matching operator function found. (%s and %s)." % (
+                    str(self.left.get_type()),
+                    str(self.right.get_type())
+                ))
         cmptysat = self.getcmptype()
         begin = self.builder.basic_block
         lt = self.builder.append_basic_block(self.module.get_unique_name("ship.less"))
@@ -2030,8 +2153,8 @@ class TypeExpr():
                 self.spos.colno,
                 lname
             ))
-        self.type = types[lvalue.get_name()]
         self.base_type = types[lvalue.get_name()]
+        self.type = types[lvalue.get_name()]
         self.quals = []
 
     def get_ir_type(self):
@@ -2046,7 +2169,7 @@ class TypeExpr():
         self.quals.append(['[]', int(size.value)])
 
     def is_pointer(self):
-        return self.type.is_pointer()    
+        return self.type.is_pointer()
 
     def eval(self):
         self.type = types[self.lvalue.get_name()]
@@ -2055,6 +2178,34 @@ class TypeExpr():
                 self.type = self.type.get_pointer_to()
             elif qual[0] == '[]':
                 self.type = self.type.get_array_of(qual[1])
+
+
+class TupleTypeExpr(TypeExpr):
+    """
+    Expression representing a Saturn tuple type.
+    """
+    def __init__(self, builder, module, spos, typeexprs):
+        self.builder = builder
+        self.module = module
+        self.spos = spos
+        self.types = typeexprs
+        for ty in self.types:
+            lname = ty.lvalue.name
+            if lname not in types.keys():
+                print(*types.keys())
+                raise RuntimeError("%s (%d:%d): Undefined type, %s, used in typeexpr." % (
+                    self.module.filestack[self.module.filestack_idx],
+                    self.spos.lineno,
+                    self.spos.colno,
+                    lname
+                ))
+        self.type = TupleType("", ir.LiteralStructType([ty.get_ir_type() for ty in self.types]))
+        self.base_type = self.type
+        self.quals = []
+
+    def eval(self):
+        pass
+
 
 class TypeDecl():
     """

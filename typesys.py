@@ -57,7 +57,7 @@ class Type():
             traits=self.traits
         )
 
-    def get_deference_of(self):
+    def get_dereference_of(self):
         ql = self.qualifiers.copy()
         ql.reverse()
         for i in range(len(ql)):
@@ -122,6 +122,9 @@ class Type():
 
     def is_struct(self):
         return self.tclass == 'struct'
+
+    def is_tuple(self):
+        return self.tclass == 'tuple'
 
     def is_iterable(self):
         return self.is_array() or self.is_string()
@@ -217,7 +220,7 @@ class StructType(Type):
     """
     A structure type in Saturn.
     """
-    def __init__(self, name, irtype, fields=[], qualifiers=[], traits={}):
+    def __init__(self, name, irtype, fields=[], qualifiers=[], traits={}, operators={}):
         self.name = name
         self.irtype = irtype
         self.fields = fields
@@ -226,7 +229,7 @@ class StructType(Type):
         self.traits = traits
         self.ctor = None
         self.dtor = None
-        self.operator = {}
+        self.operator = operators.copy()
 
     def add_field(self, name, ftype, irvalue):
         if irvalue is not None:
@@ -271,7 +274,8 @@ class StructType(Type):
             self.dtor = dtor
 
     def has_operator(self, op):
-        return op in self.operator
+        print('looking for operator', op, '\nAvailable operators:', *self.operator.keys())
+        return op in self.operator.keys()
 
     def add_operator(self, op, fn):
         print('adding operator ', op)
@@ -283,10 +287,11 @@ class StructType(Type):
             self.irtype.as_pointer(), 
             self.fields, 
             qualifiers=self.qualifiers + [('ptr',)],
-            traits=self.traits
+            traits=self.traits,
+            operators=self.operator
         )
 
-    def get_deference_of(self):
+    def get_dereference_of(self):
         ql = self.qualifiers.copy()
         ql.reverse()
         for i in range(len(ql)):
@@ -297,7 +302,8 @@ class StructType(Type):
             self.irtype.pointee,
             self.fields,
             qualifiers=ql,
-            traits=self.traits
+            traits=self.traits,
+            operators=self.operator
         )
 
     def get_element_of(self):
@@ -311,31 +317,32 @@ class StructType(Type):
             self.irtype.element, 
             self.fields, 
             qualifiers=ql,
-            traits=self.traits
+            traits=self.traits,
+            operators=self.operator
         )
 
 def mangle_name(name: str, atypes: list):
-    mname = '_Z%s_' % name
+    mname = '_Z%d%sE' % (len(name), name)
     if len(atypes) == 0:
         mname += 'v'
         return mname
     for atype in atypes:
         if atype.is_const():
             mname += 'K'
-        if atype.is_pointer():
-            mname += 'P'
+        for q in atype.qualifiers:
+            if q[0] == 'ptr':
+                mname += 'P'
         if atype.is_atomic():
             mname += 'A'
-        if atype.is_integer():
-            if atype.get_integer_bits() == 32:
-                mname += 'i'
-            elif atype.get_integer_bits() == 64:
-                mname += 'l'
-            elif atype.get_integer_bits() == 16:
-                mname += 's'
-            elif atype.get_integer_bits() == 8:
-                mname += 'c'
-        elif atype.name == 'cstring':
+        if atype.irtype == types['int'].irtype:
+            mname += 'i'
+        elif atype.irtype == types['int64'].irtype:
+            mname += 'l'
+        elif atype.irtype == types['int16'].irtype:
+            mname += 's'
+        elif atype.irtype == types['int8'].irtype:
+            mname += 'c'
+        elif atype.irtype == types['cstring'].irtype:
             mname += 'Pc'
         elif atype.irtype == ir.FloatType():
             mname += 'f'
@@ -346,7 +353,7 @@ def mangle_name(name: str, atypes: list):
         elif atype.irtype == ir.VoidType():
             mname += 'v'
         elif atype.is_struct():
-            mname += 'S' + atype.name + '_'
+            mname += 'S%d%s' % (len(atype.name), atype.name)
     return mname
 
 def print_types(types_list: list):
@@ -379,3 +386,78 @@ class Func():
         if key in self.overloads:
             return self.overloads[key]
         return None
+
+class TupleType(Type):
+    """
+    A tuple type in Saturn.
+    """
+    def __init__(self, name, irtype, elements=[], qualifiers=[], traits={}):
+        self.name = name
+        self.irtype = irtype
+        self.elements = elements.copy()
+        self.tclass = 'tuple'
+        self.qualifiers = qualifiers
+        self.traits = traits
+        self._next_element_idx = 0
+
+    def add_element(self, ftype, irvalue):
+        if irvalue is not None:
+            self.elements.append(Value("_%d" % self._next_element_idx, ftype, irvalue.eval()))
+        else:
+            self.elements.append(Value("_%d" % self._next_element_idx, ftype, None))
+        self._next_element_idx += 1
+
+    def get_element_type(self, index):
+        return self.elements[index].type
+
+    def get_elements_with_value(self):
+        withval = []
+        for el in self.elements:
+            if el.irvalue is not None:
+                withval.append(el)
+        return withval
+    
+    def get_pointer_to(self):
+        return TupleType(self.name, 
+            self.irtype.as_pointer(), 
+            self.elements.copy(), 
+            qualifiers=self.qualifiers + [('ptr',)],
+            traits=self.traits
+        )
+
+    def get_dereference_of(self):
+        ql = self.qualifiers.copy()
+        ql.reverse()
+        for i in range(len(ql)):
+            if ql[i][0] == 'ptr':
+                ql.pop(i)
+                break
+        ql.reverse()
+        return TupleType(self.name, 
+            self.irtype.pointee,
+            self.elements,
+            qualifiers=ql,
+            traits=self.traits
+        )
+
+    def get_element_of(self):
+        ql = self.qualifiers.copy()
+        ql.reverse()
+        for i in range(len(ql)):
+            if ql[i][0] == 'array':
+                ql.pop(i)
+                break
+        ql.reverse()
+        return TupleType(self.name, 
+            self.irtype, 
+            self.elements, 
+            qualifiers=ql,
+            traits=self.traits
+        )
+
+def make_tuple_type(els: list):
+    s = TupleType("", 
+        ir.LiteralStructType([el.get_ir_type() for el in els]), 
+        [],
+    )
+    return s

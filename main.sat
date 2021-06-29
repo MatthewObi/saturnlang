@@ -22,6 +22,8 @@ fn(*Vector2) setX(newX : int): void {
     this.x = newX;
 }
 
+type IVector2 : tuple(int, int);
+
 //main function
 fn main(argc: int, argv: CStringArray): int {
     arrofints : [4]int;
@@ -56,6 +58,20 @@ fn main(argc: int, argv: CStringArray): int {
     } else {
         printf("Could not open file 'test.txt'\n");
     }
+
+    testTuple := tuple { 33, "Hi." };
+    undefinedTuple : *tuple(int, cstring);
+    undefinedTuple = &testTuple;
+    printf("tuple: %d %s\n", testTuple.0, testTuple.1);
+
+    longTuple := tuple { 113, Vector2{x: 10, y: 17}, 1.5, tuple { 10, "Hi!" }, "" };
+    //tuple0, tupletext := testTuple;
+
+    ivector2 : IVector2;
+    ivector2 = tuple { 10, -10 };
+    printf("ivec2: (%d, %d)\n", ivector2.0, ivector2.1);
+    ivector2.0 -= 6;
+    printf("ivec2: (%d, %d)\n", ivector2.0, ivector2.1);
 
     myv2: Vector2;
     printf("myv2.x: %d\n", myv2.x);

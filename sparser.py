@@ -3,10 +3,11 @@ from ast import (
     Program, CodeBlock, Statement, ReturnStatement, BreakStatement, ContinueStatement, FallthroughStatement,
     PackageDecl, ImportDecl, ImportDeclExtern, CIncludeDecl, CDeclareDecl, TypeDecl, StructField, StructDeclBody, StructDecl,
     Sum, Sub, Mul, Div, Mod, And, Or, Xor, BoolAnd, BoolOr, Print, 
-    AddressOf, DerefOf, ElementOf,
+    AddressOf, DerefOf, ElementOf, TupleElementOf,
     Number, Integer, UInteger, Integer64, UInteger64, Float, Double, Byte, StringLiteral, MultilineStringLiteral,
     StructLiteralElement, StructLiteralBody, StructLiteral, Null,
-    ArrayLiteralElement, ArrayLiteralBody, ArrayLiteral, TypeExpr,
+    ArrayLiteralElement, ArrayLiteralBody, ArrayLiteral, TypeExpr, TupleTypeExpr,
+    TupleLiteralElement, TupleLiteralBody, TupleLiteral,
     FuncDecl, FuncDeclExtern, FuncArgList, FuncArg, GlobalVarDecl, VarDecl, VarDeclAssign, 
     MethodDecl, MethodDeclExtern,
     LValue, LValueField, FuncCall, MethodCall, CastExpr, SelectExpr,
@@ -30,7 +31,7 @@ class Parser():
              'EQ', 'CEQ', 'ADDEQ', 'SUBEQ', 'MULEQ', 'ANDEQ', 'OREQ', 'XOREQ',
              'TIF', 'TELSE', 'TWHILE', 'TTHEN', 'TDO', 'TBREAK', 'TCONTINUE', 'TFALLTHROUGH',
              'TSWITCH', 'TCASE', 'TDEFAULT', 'TFOR', 'TIN', 'DOTDOT', 'ELIPSES',
-             'TCONST', 'TIMMUT', 'TATOMIC', 'TTYPE', 'TSTRUCT', 'TCAST', 'TOPERATOR',
+             'TCONST', 'TIMMUT', 'TATOMIC', 'TTYPE', 'TSTRUCT', 'TTUPLE', 'TCAST', 'TOPERATOR',
              'BOOLEQ', 'BOOLNEQ', 'BOOLGT', 'BOOLLT', 'BOOLGTE', 'BOOLLTE', 'SPACESHIP', 
              'TTRUE', 'TFALSE', 'TNULL'],
 
@@ -381,6 +382,22 @@ class Parser():
                     p[3].add_array_qualifier(size)
                     return p[3]
 
+        @self.pg.production('typeexpr : TTUPLE LPAREN tuple_type_list RPAREN')
+        def typeexpr_tuple(p):
+            spos = p[0].getsourcepos()
+            return TupleTypeExpr(self.builder, self.module, spos, p[2])
+
+        @self.pg.production('tuple_type_list : ')
+        @self.pg.production('tuple_type_list : typeexpr')
+        @self.pg.production('tuple_type_list : tuple_type_list COMMA typeexpr')
+        def tuple_type_list(p):
+            if len(p) == 0:
+                return []
+            elif len(p) == 1:
+                return [p[0]]
+            else:
+                p[0].append(p[2])
+                return p[0]
 
         @self.pg.production('stmt : if_stmt')
         def stmt_if(p):
@@ -673,6 +690,11 @@ class Parser():
             spos = p[0].getsourcepos()
             return MethodCall(self.builder, self.module, spos, p[0], p[2].lvalue, p[2].args)
 
+        @self.pg.production('lvalue_expr : lvalue DOT INT')
+        def lvalue_expr_tuple_element(p):
+            spos = p[0].getsourcepos()
+            return TupleElementOf(self.builder, self.module, spos, p[0], p[2].value)
+
         @self.pg.production('expr : lvalue_expr')
         def expr_lvalue(p):
             return p[0]
@@ -683,6 +705,10 @@ class Parser():
 
         @self.pg.production('expr : array_literal')
         def expr_array_literal(p):
+            return p[0]
+
+        @self.pg.production('expr : tuple_literal')
+        def expr_tuple_literal(p):
             return p[0]
 
         @self.pg.production('struct_literal : typeexpr LBRACE struct_literal_body RBRACE')
@@ -740,6 +766,34 @@ class Parser():
         def array_literal_element(p):
             spos = p[0].getsourcepos()
             return ArrayLiteralElement(self.builder, self.module, spos, p[0])
+
+        @self.pg.production('tuple_literal : TTUPLE LBRACE tuple_literal_body RBRACE')
+        def tuple_literal(p):
+            spos = p[1].getsourcepos()
+            return TupleLiteral(self.builder, self.module, spos, p[2])
+
+        @self.pg.production('tuple_literal_body : tuple_literal_body COMMA tuple_literal_element')
+        @self.pg.production('tuple_literal_body : tuple_literal_body COMMA')
+        @self.pg.production('tuple_literal_body : tuple_literal_element')
+        @self.pg.production('tuple_literal_body : ')
+        def tuple_literal_body(p):
+            if len(p) == 0:
+                return TupleLiteralBody(self.builder, self.module, None)
+            elif len(p) == 1:
+                spos = p[0].getsourcepos()
+                body = TupleLiteralBody(self.builder, self.module, spos)
+                body.add_element(p[0].expr)
+                return body
+            elif len(p) == 2:
+                return p[0]
+            else:
+                p[0].add_element(p[2].expr)
+                return p[0]
+
+        @self.pg.production('tuple_literal_element : expr')
+        def tuple_literal_element(p):
+            spos = p[0].getsourcepos()
+            return TupleLiteralElement(self.builder, self.module, spos, p[0])
 
         @self.pg.production('expr : number')
         def expr_number(p):
