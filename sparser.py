@@ -1,8 +1,8 @@
 from rply import ParserGenerator, Token
 from ast import ( 
-    Program, CodeBlock, Statement, ReturnStatement, BreakStatement, ContinueStatement, FallthroughStatement,
+    Program, CodeBlock, Statement, ReturnStatement, BreakStatement, ContinueStatement, FallthroughStatement, DeferStatement,
     PackageDecl, ImportDecl, ImportDeclExtern, CIncludeDecl, CDeclareDecl, TypeDecl, StructField, StructDeclBody, StructDecl,
-    Sum, Sub, Mul, Div, Mod, And, Or, Xor, BoolAnd, BoolOr, Print, 
+    Sum, Sub, Mul, Div, Mod, And, Or, Xor, BinaryNot, BoolAnd, BoolOr, BoolNot, Negate, Print, 
     AddressOf, DerefOf, ElementOf, TupleElementOf,
     Number, Integer, UInteger, Integer64, UInteger64, Float, Double, Byte, StringLiteral, MultilineStringLiteral,
     StructLiteralElement, StructLiteralBody, StructLiteral, Null,
@@ -28,11 +28,11 @@ class Parser():
              'IDENT', 'TPRINT', 'DOT', 'TRETURN', 'LPAREN', 'RPAREN', 'LBRACKET', 'RBRACKET',
              'SEMICOLON', 'ADD', 'SUB', 'MUL', 'DIV', 'MOD', 'AND', 'OR', 'XOR', 'BOOLAND', 'BOOLOR',
              'TFN', 'COLON', 'LBRACE', 'RBRACE', 'COMMA', 'CC', 
-             'EQ', 'CEQ', 'ADDEQ', 'SUBEQ', 'MULEQ', 'ANDEQ', 'OREQ', 'XOREQ',
-             'TIF', 'TELSE', 'TWHILE', 'TTHEN', 'TDO', 'TBREAK', 'TCONTINUE', 'TFALLTHROUGH',
+             'EQ', 'CEQ', 'ADDEQ', 'SUBEQ', 'MULEQ', 'MODEQ', 'ANDEQ', 'OREQ', 'XOREQ',
+             'TIF', 'TELSE', 'TWHILE', 'TTHEN', 'TDO', 'TBREAK', 'TCONTINUE', 'TFALLTHROUGH', 'TDEFER',
              'TSWITCH', 'TCASE', 'TDEFAULT', 'TFOR', 'TIN', 'DOTDOT', 'ELIPSES',
              'TCONST', 'TIMMUT', 'TATOMIC', 'TTYPE', 'TSTRUCT', 'TTUPLE', 'TCAST', 'TOPERATOR',
-             'BOOLEQ', 'BOOLNEQ', 'BOOLGT', 'BOOLLT', 'BOOLGTE', 'BOOLLTE', 'SPACESHIP', 
+             'BOOLEQ', 'BOOLNEQ', 'BOOLGT', 'BOOLLT', 'BOOLGTE', 'BOOLLTE', 'SPACESHIP', 'BOOLNOT',
              'TTRUE', 'TFALSE', 'TNULL'],
 
              precedence=[
@@ -40,7 +40,8 @@ class Parser():
                 ('left', ['BOOLAND']),
                 ('left', ['BOOLEQ', 'BOOLNEQ', 'BOOLGT', 'BOOLLT', 'BOOLGTE', 'BOOLLTE', 'SPACESHIP']),
                 ('left', ['ADD', 'SUB']),
-                ('left', ['MUL', 'DIV', 'MOD'])
+                ('left', ['MUL', 'DIV', 'MOD']),
+                ('right', ['BOOLNOT'])
             ]
         )
         self.module = module
@@ -304,6 +305,17 @@ class Parser():
             spos = p[0].getsourcepos()
             return FallthroughStatement(self.builder, self.module, spos, None)
 
+        @self.pg.production('stmt : TDEFER stmt')
+        def stmt_defer(p):
+            spos = p[0].getsourcepos()
+            block = CodeBlock(self.builder, self.module, p[1].getsourcepos(), p[1])
+            return DeferStatement(self.builder, self.module, spos, block)
+
+        @self.pg.production('stmt : TDEFER LBRACE block RBRACE')
+        def stmt_defer_block(p):
+            spos = p[0].getsourcepos()
+            return DeferStatement(self.builder, self.module, spos, p[1])
+
         @self.pg.production('stmt : IDENT COLON typeexpr SEMICOLON')
         def stmt_var_decl(p):
             spos = p[0].getsourcepos()
@@ -544,12 +556,18 @@ class Parser():
                 return IterExpr(self.builder, self.module, spos, p[0], p[2], p[4], inclusive=True)
 
         @self.pg.production('expr : AND expr')
+        @self.pg.production('expr : BOOLNOT expr')
+        @self.pg.production('expr : SUB expr')
         def expr_unary(p):
             right = p[1]
             operator = p[0]
             spos = p[0].getsourcepos()
             if operator.gettokentype() == 'AND':
                 return AddressOf(self.builder, self.module, spos, right)
+            elif operator.gettokentype() == 'BOOLNOT':
+                return BoolNot(self.builder, self.module, spos, right)
+            elif operator.gettokentype() == 'SUB':
+                return Negate(self.builder, self.module, spos, right)
 
         @self.pg.production('expr : expr ADD expr')
         @self.pg.production('expr : expr SUB expr')

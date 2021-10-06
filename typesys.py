@@ -117,6 +117,9 @@ class Type():
     def is_number(self):
         return self.is_float() or self.is_integer()
 
+    def is_bool(self):
+        return self.tclass == 'bool'
+
     def is_string(self):
         return self.tclass == 'string'
 
@@ -274,11 +277,11 @@ class StructType(Type):
             self.dtor = dtor
 
     def has_operator(self, op):
-        print('looking for operator', op, '\nAvailable operators:', *self.operator.keys())
+        #print('looking for operator', op, '\nAvailable operators:', *self.operator.keys())
         return op in self.operator.keys()
 
     def add_operator(self, op, fn):
-        print('adding operator ', op)
+        #print('adding operator ', op)
         if not self.has_operator(op):
             self.operator[op] = fn
     

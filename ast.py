@@ -62,6 +62,7 @@ class Expr():
         self.builder = builder
         self.module = module
         self.spos = spos
+        self.is_constexpr = False
 
     def getsourcepos(self):
         return self.spos
@@ -82,9 +83,7 @@ class Number(Expr):
         self.spos = spos
         self.value = value
         self.type = self.get_type()
-
-    def get_type(self):
-        return types['int']
+        self.is_constexpr = True
 
 
 class Integer(Number):
@@ -97,6 +96,9 @@ class Integer(Number):
     def eval(self):
         i = ir.Constant(self.type.irtype, int(self.value))
         return i
+
+    def consteval(self):
+        return int(self.value)
 
 
 class UInteger(Number):
@@ -111,6 +113,9 @@ class UInteger(Number):
         i = ir.Constant(self.type.irtype, int(val))
         return i
 
+    def consteval(self):
+        return int(self.value.strip('u'))
+
 
 class Integer64(Number):
     """
@@ -124,6 +129,9 @@ class Integer64(Number):
         i = ir.Constant(self.type.irtype, int(val))
         return i
 
+    def consteval(self):
+        return int(self.value.strip('l'))
+
 
 class UInteger64(Number):
     """
@@ -136,6 +144,9 @@ class UInteger64(Number):
         val = self.value.strip('ul')
         i = ir.Constant(self.type.irtype, int(val))
         return i
+    
+    def consteval(self):
+        return int(self.value.strip('ul'))
 
 
 class Byte(Number):
@@ -149,6 +160,9 @@ class Byte(Number):
         i = ir.Constant(self.type.irtype, int(self.value))
         return i
 
+    def consteval(self):
+        return int(self.value.strip('ul'))
+
 
 class Float(Number):
     """
@@ -161,6 +175,9 @@ class Float(Number):
         i = ir.Constant(self.type.irtype, float(self.value))
         return i
 
+    def consteval(self):
+        return float(self.value.strip('f'))
+
 
 class Double(Number):
     """
@@ -172,6 +189,9 @@ class Double(Number):
     def eval(self):
         i = ir.Constant(self.type.irtype, float(self.value))
         return i
+
+    def consteval(self):
+        return float(self.value)
 
 
 class StringLiteral(Expr):
@@ -243,6 +263,7 @@ class Boolean(Expr):
         self.module = module
         self.spos = spos
         self.value = value
+        self.is_constexpr = True
 
     def get_type(self):
         return types['bool']
@@ -250,6 +271,9 @@ class Boolean(Expr):
     def eval(self):
         i = ir.Constant(self.get_type().irtype, self.value)
         return i
+
+    def consteval(self):
+        return self.value
 
 
 class Null(Expr):
@@ -396,7 +420,9 @@ class TupleLiteral(Expr):
     def eval(self):
         i = 0
         name = self.module.get_unique_name("_unnamed_tuple")
-        ptr = self.builder.alloca(self.ttype.irtype, name=name)
+        with self.builder.goto_entry_block():
+            self.builder.position_at_start(self.builder.block)
+            ptr = self.builder.alloca(self.ttype.irtype, name=name)
         val = Value(name, self.ttype, ptr)
         add_new_local(name, val)
         for el in self.body.elements:
@@ -424,6 +450,7 @@ class LValue(Expr):
         self.lhs = lhs
         self.name = name
         self.value = None
+        self.is_constexpr = False
 
     def get_type(self):
         name = self.get_name()
@@ -442,7 +469,7 @@ class LValue(Expr):
 
     def get_ir_type(self):
         name = self.get_name()
-        print(name)
+        #print(name)
         ptr = check_name_in_scope(name)
         if ptr is None:
             ptr = self.module.get_global(name)
@@ -504,6 +531,7 @@ class LValueField(Expr):
         self.spos = spos
         self.fname = fname
         self.lvalue = lvalue
+        self.is_constexpr = False
 
     def get_type(self):
         stype = self.lvalue.get_type()
@@ -563,6 +591,78 @@ class LValueField(Expr):
         return None
 
 
+class CastExpr(Expr):
+    """
+    A cast operation.\n
+    cast<ctype>(expr)
+    """
+    def __init__(self, builder, module, spos, ctype, expr):
+        self.builder = builder
+        self.module = module
+        self.spos = spos
+        self.ctype = ctype
+        self.expr = expr
+
+    def get_type(self):
+        return self.ctype.type
+
+    def eval(self):
+        cast = None
+        val = self.expr.eval()
+        exprt = self.expr.get_type()
+        castt = self.get_type()
+        if exprt.is_pointer():
+            if castt.is_pointer():
+                cast = self.builder.bitcast(val, castt.irtype)
+            elif castt.is_integer():
+                cast = self.builder.ptrtoint(val, castt.irtype)
+            elif castt.is_bool():
+                #lhs = self.builder.ptrtoint(val, ir.IntType(64))
+                #rhs = self.builder.ptrtoint(ir.Constant(exprt.irtype, exprt.irtype.null), ir.IntType(64))
+                cast = self.builder.icmp_unsigned('!=', val, ir.Constant(exprt.irtype, exprt.irtype.null))
+        elif exprt.is_integer():
+            if castt.is_pointer():
+                cast = self.builder.inttoptr(val, castt.irtype)
+            elif castt.is_integer():
+                if castt.get_integer_bits() < exprt.get_integer_bits():
+                    cast = self.builder.trunc(val, castt.irtype)
+                elif castt.get_integer_bits() > exprt.get_integer_bits():
+                    if castt.is_unsigned():
+                        cast = self.builder.zext(val, castt.irtype)
+                    else:
+                        cast = self.builder.sext(val, castt.irtype)
+                else:
+                    cast = val
+            elif castt.is_float():
+                if exprt.is_unsigned():
+                    cast = self.builder.uitofp(val, castt.irtype)
+                else:
+                    cast = self.builder.sitofp(val, castt.irtype)
+            elif castt.is_bool():
+                if exprt.is_unsigned():
+                    cast = self.builder.icmp_unsigned('!=', val, ir.Constant(exprt.irtype, 0))
+                elif exprt.is_integer():
+                    cast = self.builder.icmp_signed('!=', val, ir.Constant(exprt.irtype, 0))
+                elif exprt.is_float():
+                    cast = self.builder.fcmp_ordered('!=', val, ir.Constant(exprt.irtype, 0.0))
+                elif exprt.is_pointer():
+                    null = exprt.irtype.null
+                    cast = self.builder.icmp_signed('!=', val, null)
+            else:
+                lineno = self.expr.getsourcepos().lineno
+                colno = self.expr.getsourcepos().colno
+                throw_saturn_error(self.builder, self.module, lineno, colno, 
+                    "Cannot cast from integer type to '%s'." % str(self.get_type())
+                )
+        else:
+            lineno = self.expr.getsourcepos().lineno
+            colno = self.expr.getsourcepos().colno
+            throw_saturn_error(self.builder, self.module, lineno, colno, 
+                "Cannot cast expression of type '%s' to '%s'." % (str(exprt), str(castt))
+            )
+        return cast
+
+
 class PostfixOp(Expr):
     """
     A base class for unary postfix operations.\n
@@ -577,6 +677,7 @@ class PostfixOp(Expr):
         self.spos = spos
         self.left = left
         self.expr = expr
+        self.is_constexpr = self.left.is_constexpr and self.expr.is_constexpr
 
 
 class ElementOf(PostfixOp):
@@ -652,6 +753,7 @@ class PrefixOp(Expr):
         self.module = module
         self.spos = spos
         self.right = right
+        self.is_constexpr = False
 
 
 class AddressOf(PrefixOp):
@@ -701,62 +803,61 @@ class DerefOf(PrefixOp):
         return i
 
 
-class CastExpr(Expr):
+class BinaryNot(PrefixOp):
     """
-    A cast operation.\n
-    cast<ctype>(expr)
+    Binary not '~' operator.\n
+    ~right
     """
-    def __init__(self, builder, module, spos, ctype, expr):
-        self.builder = builder
-        self.module = module
-        self.spos = spos
-        self.ctype = ctype
-        self.expr = expr
-
     def get_type(self):
-        return self.ctype.type
+        return self.right.get_type()
 
     def eval(self):
-        cast = None
-        val = self.expr.eval()
-        exprt = self.expr.get_type()
-        castt = self.get_type()
-        if exprt.is_pointer():
-            if castt.is_pointer():
-                cast = self.builder.bitcast(val, castt.irtype)
-            elif castt.is_integer():
-                cast = self.builder.ptrtoint(val, castt.irtype)
-        elif exprt.is_integer():
-            if castt.is_pointer():
-                cast = self.builder.inttoptr(val, castt.irtype)
-            elif castt.is_integer():
-                if castt.get_integer_bits() < exprt.get_integer_bits():
-                    cast = self.builder.trunc(val, castt.irtype)
-                elif castt.get_integer_bits() > exprt.get_integer_bits():
-                    if castt.is_unsigned():
-                        cast = self.builder.zext(val, castt.irtype)
-                    else:
-                        cast = self.builder.sext(val, castt.irtype)
-                else:
-                    cast = val
-            elif castt.is_float():
-                if exprt.is_unsigned():
-                    cast = self.builder.uitofp(val, castt.irtype)
-                else:
-                    cast = self.builder.sitofp(val, castt.irtype)
-            else:
-                lineno = self.expr.getsourcepos().lineno
-                colno = self.expr.getsourcepos().colno
-                throw_saturn_error(self.builder, self.module, lineno, colno, 
-                    "Cannot cast from integer type to '%s'." % str(self.get_type())
-                )
+        binnot = self.builder.not_(self.right.eval())
+        return binnot
+
+    def consteval(self):
+        return ~self.right.consteval()
+
+
+class Negate(PrefixOp):
+    """
+    Negate '-' operator.\n
+    -right
+    """
+    def get_type(self):
+        return self.right.get_type()
+
+    def consteval(self):
+        return -self.right.consteval()
+
+    def eval(self):
+        if self.right.is_constexpr:
+            return ir.Constant(self.get_type().irtype, self.consteval())
+        neg = self.builder.sub(ir.Constant(self.get_type().irtype, 0), self.right.eval())
+        return neg
+
+
+class BoolNot(PrefixOp):
+    """
+    Boolean not '!' operator.\n
+    !right
+    """
+    def get_type(self):
+        return types['bool']
+
+    def eval(self):
+        tv = None
+        if not self.right.get_type().is_bool():
+            tv = CastExpr(self.builder, self.module, self.spos, 
+                TypeExpr(self.builder, self.module, self.spos, 
+                LValue(self.builder, self.module, self.spos, 'bool')), self.right).eval()
         else:
-            lineno = self.expr.getsourcepos().lineno
-            colno = self.expr.getsourcepos().colno
-            throw_saturn_error(self.builder, self.module, lineno, colno, 
-                "Cannot cast expression of type '%s' to '%s'." % (str(exprt), str(castt))
-            )
-        return cast
+            tv = self.right.eval()
+        ntv = self.builder.xor(tv, ir.Constant(ir.IntType(1), 1))
+        return ntv
+
+    def consteval(self):
+        return not self.right.consteval()
 
 
 class SelectExpr(Expr):
@@ -795,6 +896,7 @@ class BinaryOp(Expr):
         self.spos = spos
         self.left = left
         self.right = right
+        self.is_constexpr = left.is_constexpr and right.is_constexpr
 
 
 class Sum(BinaryOp):
@@ -817,6 +919,9 @@ class Sum(BinaryOp):
                 str(self.right.get_type())
             ))
         return i
+
+    def consteval(self):
+        return self.left.consteval() + self.right.consteval()
 
 
 class Sub(BinaryOp):
@@ -841,6 +946,9 @@ class Sub(BinaryOp):
             ))
         return i
 
+    def consteval(self):
+        return self.left.consteval() - self.right.consteval()
+
 
 class Mul(BinaryOp):
     """
@@ -863,6 +971,9 @@ class Mul(BinaryOp):
                 str(self.right.get_type())
             ))
         return i
+
+    def consteval(self):
+        return self.left.consteval() * self.right.consteval()
 
 
 class Div(BinaryOp):
@@ -888,6 +999,9 @@ class Div(BinaryOp):
             ))
         return i
 
+    def consteval(self):
+        return self.left.consteval() / self.right.consteval()
+
 
 class Mod(BinaryOp):
     """
@@ -912,6 +1026,9 @@ class Mod(BinaryOp):
             ))
         return i
 
+    def consteval(self):
+        return self.left.consteval() % self.right.consteval()
+
 
 class And(BinaryOp):
     """
@@ -932,6 +1049,9 @@ class And(BinaryOp):
                 str(self.right.get_type())
             ))
         return i
+
+    def consteval(self):
+        return self.left.consteval() & self.right.consteval()
 
 
 class Or(BinaryOp):
@@ -954,6 +1074,9 @@ class Or(BinaryOp):
             ))
         return i
 
+    def consteval(self):
+        return self.left.consteval() | self.right.consteval()
+
 
 class Xor(BinaryOp):
     """
@@ -963,6 +1086,9 @@ class Xor(BinaryOp):
     def eval(self):
         i = self.builder.xor(self.left.eval(), self.right.eval())
         return i
+
+    def consteval(self):
+        return self.left.consteval() ^ self.right.consteval()
 
 
 class BoolAnd(BinaryOp):
@@ -987,6 +1113,9 @@ class BoolAnd(BinaryOp):
         phi.add_incoming(bool2, rhs)
         return phi
 
+    def consteval(self):
+        return self.left.consteval() and self.right.consteval()
+
 
 class BoolOr(BinaryOp):
     """
@@ -1010,6 +1139,9 @@ class BoolOr(BinaryOp):
         phi.add_incoming(bool2, rhs)
         return phi
 
+    def consteval(self):
+        return self.left.consteval() or self.right.consteval()
+
 
 class BoolCmpOp(BinaryOp):
     """
@@ -1021,7 +1153,7 @@ class BoolCmpOp(BinaryOp):
         if ltype.is_pointer() and isinstance(self.right, Null):
             self.lhs = self.left.eval()
             rirtype = ltype.irtype
-            self.rhs = rirtype(rirtype.null)
+            self.rhs = ir.Constant(rirtype, rirtype.null)
             return ltype
         if ltype.is_struct() and isinstance(self.right, Null):
             self.lhs = self.left.eval()
@@ -1089,7 +1221,7 @@ class Spaceship(BoolCmpOp):
                 lineno = self.spos.lineno
                 colno = self.spos.colno
                 throw_saturn_error(self.builder, self.module, lineno, colno, 
-                    "Comparing structs using operator '<=>', but no matching operator function found. (%s and %s)." % (
+                    "Comparing structs using operator '<=>', but no matching operator method found. (%s and %s)." % (
                     str(self.left.get_type()),
                     str(self.right.get_type())
                 ))
@@ -1102,9 +1234,7 @@ class Spaceship(BoolCmpOp):
         eqv = ir.Constant(ir.IntType(32), 0)
         gtv = ir.Constant(ir.IntType(32), 1)
         if cmptysat.is_pointer():
-            lhs = self.builder.ptrtoint(self.lhs, ir.IntType(64))
-            rhs = self.builder.ptrtoint(self.rhs, ir.IntType(64))
-            i = self.builder.icmp_signed('==', lhs, rhs)
+            i = self.builder.icmp_unsigned('==', self.lhs, self.rhs)
             return i
         cmpty = cmptysat.irtype
         if isinstance(cmpty, ir.IntType):
@@ -1149,9 +1279,7 @@ class BooleanEq(BoolCmpOp):
     def eval(self):
         cmptysat = self.getcmptype()
         if cmptysat.is_pointer():
-            lhs = self.builder.ptrtoint(self.lhs, ir.IntType(64))
-            rhs = self.builder.ptrtoint(self.rhs, ir.IntType(64))
-            i = self.builder.icmp_signed('==', lhs, rhs)
+            i = self.builder.icmp_unsigned('==', self.lhs, self.rhs)
             return i
         cmpty = cmptysat.irtype
         if isinstance(cmpty, ir.IntType):
@@ -1162,6 +1290,9 @@ class BooleanEq(BoolCmpOp):
             i = self.builder.fcmp_ordered('==', self.lhs, self.rhs)
         return i
 
+    def consteval(self):
+        return self.left.consteval() == self.right.consteval()
+
 
 class BooleanNeq(BoolCmpOp):
     """
@@ -1171,9 +1302,7 @@ class BooleanNeq(BoolCmpOp):
     def eval(self):
         cmptysat = self.getcmptype()
         if cmptysat.is_pointer():
-            lhs = self.builder.ptrtoint(self.lhs, ir.IntType(64))
-            rhs = self.builder.ptrtoint(self.rhs, ir.IntType(64))
-            i = self.builder.icmp_signed('!=', lhs, rhs)
+            i = self.builder.icmp_unsigned('!=', self.lhs, self.rhs)
             return i
         cmpty = cmptysat.irtype
         if isinstance(cmpty, ir.IntType):
@@ -1183,6 +1312,9 @@ class BooleanNeq(BoolCmpOp):
         else:
             i = self.builder.fcmp_ordered('!=', self.lhs, self.rhs)
         return i
+
+    def consteval(self):
+        return self.left.consteval() != self.right.consteval()
 
 
 class BooleanGt(BoolCmpOp):
@@ -1201,6 +1333,9 @@ class BooleanGt(BoolCmpOp):
             i = self.builder.fcmp_ordered('>', self.lhs, self.rhs)
         return i
 
+    def consteval(self):
+        return self.left.consteval() > self.right.consteval()
+
 
 class BooleanLt(BoolCmpOp):
     """
@@ -1217,6 +1352,9 @@ class BooleanLt(BoolCmpOp):
         else:
             i = self.builder.fcmp_ordered('<', self.lhs, self.rhs)
         return i
+
+    def consteval(self):
+        return self.left.consteval() < self.right.consteval()
 
 
 class BooleanGte(BoolCmpOp):
@@ -1235,6 +1373,9 @@ class BooleanGte(BoolCmpOp):
             i = self.builder.fcmp_ordered('>=', self.lhs, self.rhs)
         return i
 
+    def consteval(self):
+        return self.left.consteval() >= self.right.consteval()
+
 
 class BooleanLte(BoolCmpOp):
     """
@@ -1251,6 +1392,9 @@ class BooleanLte(BoolCmpOp):
         else:
             i = self.builder.fcmp_ordered('<=', self.lhs, self.rhs)
         return i
+
+    def consteval(self):
+        return self.left.consteval() <= self.right.consteval()
 
 
 class Assignment():
@@ -1369,7 +1513,49 @@ class DivAssignment(Assignment):
                 "Cannot reassign to const variable, %s." % ptr.name
             )
         value = self.builder.load(ptr.irvalue)
-        res = self.builder.sdiv(value, self.expr.eval())
+        res = None
+        if get_type().is_unsigned():
+            res = self.builder.udiv(value, self.expr.eval())
+        elif get_type().is_integer():
+            res = self.builder.sdiv(value, self.expr.eval())
+        elif get_type().is_float():
+            res = self.builder.fdiv(value, self.expr.eval())
+        else:
+            lineno = self.expr.getsourcepos().lineno
+            colno = self.expr.getsourcepos().colno
+            throw_saturn_error(self.builder, self.module, lineno, colno, 
+                "Cannot do division assignment on variable, %s." % ptr.name
+            )
+        self.builder.store(res, ptr.irvalue)
+
+
+class ModAssignment(Assignment):
+    """
+    Modulo assignment statement to a defined variable.\n
+    lvalue %= expr; (lvalue = lvalue % expr;)
+    """
+    def eval(self):
+        ptr = self.lvalue.get_pointer()
+        if ptr.is_const() or ptr.is_immut():
+            lineno = self.expr.getsourcepos().lineno
+            colno = self.expr.getsourcepos().colno
+            throw_saturn_error(self.builder, self.module, lineno, colno, 
+                "Cannot reassign to const variable, %s." % ptr.name
+            )
+        value = self.builder.load(ptr.irvalue)
+        res = None
+        if get_type().is_unsigned():
+            res = self.builder.urem(value, self.expr.eval())
+        elif get_type().is_integer():
+            res = self.builder.srem(value, self.expr.eval())
+        elif get_type().is_float():
+            res = self.builder.frem(value, self.expr.eval())
+        else:
+            lineno = self.expr.getsourcepos().lineno
+            colno = self.expr.getsourcepos().colno
+            throw_saturn_error(self.builder, self.module, lineno, colno, 
+                "Cannot do modulus assignment on variable, %s." % ptr.name
+            )
         self.builder.store(res, ptr.irvalue)
 
 
@@ -1667,7 +1853,9 @@ class FuncArg():
             add_new_local(self.name.value, val)
             return val
         else:
-            ptr = self.builder.alloca(self.atype.irtype, name=self.name.value)
+            with self.builder.goto_entry_block():
+                self.builder.position_at_start(self.builder.block)
+                ptr = self.builder.alloca(self.atype.irtype, name=self.name.value)
             self.builder.store(arg, ptr)
             argval = Value(self.name.value, self.atype, arg)
             val = Value(self.name.value, self.atype, ptr)
@@ -1778,7 +1966,7 @@ class FuncDecl():
             self.module.sfuncs[self.name.value].add_overload(sfnty.atypes, fn)
         else:
             self.module.sfuncs[self.name.value].add_overload(sfnty.atypes, fn)
-        print("New function:", fname)
+        #print("New function:", fname)
         #self.module.sfunctys[self.name.value] = sfnty
         block = fn.append_basic_block("entry")
         self.builder.dbgsub = self.module.add_debug_info("DISubprogram", {
@@ -1791,9 +1979,12 @@ class FuncDecl():
             "isDefinition":True
         }, True)
         self.builder.position_at_start(block)
+        self.builder.defer = []
         fn.args = tuple(self.decl_args.get_arg_list(fn))
         self.block.eval()
         if not self.builder.block.is_terminated:
+            for stmt in self.builder.defer:
+                stmt.eval()
             if isinstance(self.builder.function.function_type.return_type, ir.VoidType):
                 self.builder.ret_void()
             else:
@@ -1930,7 +2121,7 @@ class MethodDecl():
             self.module.sfuncs[name].add_overload(sfnty.atypes, fn)
         else:
             self.module.sfuncs[name].add_overload(sfnty.atypes, fn)
-        print("New method:", fname)
+        #print("New method:", fname)
         if self.name.value == 'new':
             types[self.struct.get_name()].add_ctor(self.module.sfuncs[name])
         elif self.name.value == 'delete':
@@ -1951,9 +2142,12 @@ class MethodDecl():
             "isDefinition":True
         }, True)
         self.builder.position_at_start(block)
+        self.builder.defer = []
         fn.args = tuple(self.decl_args.get_arg_list(fn))
         self.block.eval()
         if not self.builder.block.is_terminated:
+            for stmt in self.builder.defer:
+                stmt.eval()
             if isinstance(self.builder.function.function_type.return_type, ir.VoidType):
                 self.builder.ret_void()
             else:
@@ -2026,7 +2220,11 @@ class VarDecl():
     def eval(self):
         self.vtype.eval()
         vartype = self.vtype.type
-        ptr = Value(self.name.value, vartype, self.builder.alloca(vartype.irtype, name=self.name.value))
+
+        with self.builder.goto_entry_block():
+            self.builder.position_at_start(self.builder.block)
+            ptr = Value(self.name.value, vartype, self.builder.alloca(vartype.irtype, name=self.name.value))
+        
         add_new_local(self.name.value, ptr)
         dbglv = self.module.add_debug_info("DILocalVariable", {
             "name":self.name.value, 
@@ -2055,7 +2253,7 @@ class VarDecl():
             #     calc_sizeof_struct(self.builder, self.module, ptr.type.irtype),
             #     ir.Constant(ir.IntType(1), 0),
             # ])
-            print(vartype, vartype.has_ctor(), vartype.has_operator('='))
+            #print(vartype, vartype.has_ctor(), vartype.has_operator('='))
             if self.initval is not None and vartype.has_operator('='):
                 method = vartype.operator['=']
                 pptr = ptr.irvalue
@@ -2092,7 +2290,7 @@ class VarDeclAssign():
         val = self.initval.eval()
         vartype = self.initval.get_type()
         
-        print('New var:', vartype, val, self.initval.get_ir_type())
+        #print('New var:', vartype, val, self.initval.get_ir_type())
         quals = []
         if self.spec == 'const':
             quals.append('const')
@@ -2107,7 +2305,10 @@ class VarDeclAssign():
             throw_saturn_error(self.builder, self.module, lineno, colno, 
                 "Can't create variable of void type."
             )
-        ptr = Value(self.name.value, vartype, self.builder.alloca(vartype.irtype, name=self.name.value), qualifiers=quals)
+        with self.builder.goto_entry_block():
+            self.builder.position_at_start(self.builder.block)
+            ptr = Value(self.name.value, vartype, self.builder.alloca(vartype.irtype, name=self.name.value), qualifiers=quals)
+        #ptr = Value(self.name.value, vartype, self.builder.alloca(vartype.irtype, name=self.name.value), qualifiers=quals)
 
         add_new_local(self.name.value, ptr)
         dbglv = self.module.add_debug_info("DILocalVariable", {
@@ -2146,7 +2347,7 @@ class TypeExpr():
         self.lvalue = lvalue
         lname = self.lvalue.get_name()
         if lname not in types.keys():
-            print(*types.keys())
+            #print(*types.keys())
             raise RuntimeError("%s (%d:%d): Undefined type, %s, used in typeexpr." % (
                 self.module.filestack[self.module.filestack_idx],
                 self.spos.lineno,
@@ -2182,7 +2383,8 @@ class TypeExpr():
 
 class TupleTypeExpr(TypeExpr):
     """
-    Expression representing a Saturn tuple type.
+    Expression representing a Saturn tuple type.\n
+    tuple(typeexprs...)
     """
     def __init__(self, builder, module, spos, typeexprs):
         self.builder = builder
@@ -2192,7 +2394,7 @@ class TupleTypeExpr(TypeExpr):
         for ty in self.types:
             lname = ty.lvalue.name
             if lname not in types.keys():
-                print(*types.keys())
+                #print(*types.keys())
                 raise RuntimeError("%s (%d:%d): Undefined type, %s, used in typeexpr." % (
                     self.module.filestack[self.module.filestack_idx],
                     self.spos.lineno,
@@ -2336,6 +2538,7 @@ class FuncCall(Expr):
         self.spos = spos
         self.lvalue = lvalue
         self.args = args
+        self.is_constexpr = False
 
     def get_type(self):
         return self.module.sfuncs[self.lvalue.get_name()].rtype
@@ -2383,7 +2586,7 @@ class MethodCall(Expr):
     def eval(self):
         name = self.callee.get_type().name + '.' + self.lvalue.get_name()
         sfn = self.module.sfuncs[name]
-        print(name, self.module.sfuncs[name], sfn.overloads)
+        #print(name, self.module.sfuncs[name], sfn.overloads)
         sargs = [arg for arg in self.args]
         sargs.insert(0, AddressOf(self.builder, self.module, self.spos, self.callee))
         aargs = [arg.get_type() for arg in sargs]
@@ -2415,10 +2618,15 @@ class ReturnStatement(Statement):
     return value;
     """
     def eval(self):
-        if self.value is not None:
-            self.builder.ret(self.value.eval())
-        else:
-            self.builder.ret_void()
+        ret_block = self.builder.append_basic_block('ret')
+        with self.builder.goto_block(ret_block):
+            for stmt in self.builder.defer:
+                stmt.eval()
+            if self.value is not None:
+                self.builder.ret(self.value.eval())
+            else:
+                self.builder.ret_void()
+        self.builder.branch(ret_block)
 
 
 class FallthroughStatement(Statement):
@@ -2446,6 +2654,24 @@ class ContinueStatement(Statement):
     """
     def eval(self):
         self.builder.branch(self.builder.continue_dest)
+
+
+class DeferStatement(Statement):
+    """
+    Defer statement.\n
+    defer stmt;\n
+    defer { block }
+    """
+    def __init__(self, builder, module, spos, stmt):
+        self.builder = builder
+        self.module = module
+        self.spos = spos
+        self.stmt = stmt
+
+    def eval(self):
+        """TODO: Actually implement defer in a non intrusive way."""
+        #self.builder.defer.insert(0, self.stmt)
+        pass
 
 
 class IfStatement():
@@ -2479,7 +2705,7 @@ class IfStatement():
         self.builder.goto_block(then)
         self.builder.position_at_start(then)
         self.then.eval()
-        if not then.is_terminated:
+        if not self.builder.block.is_terminated:
             self.builder.branch(after)
         if self.el is not None:
             self.builder.goto_block(el)
