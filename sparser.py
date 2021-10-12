@@ -4,9 +4,9 @@ from ast import (
     PackageDecl, ImportDecl, ImportDeclExtern, CIncludeDecl, CDeclareDecl, TypeDecl, StructField, StructDeclBody, StructDecl,
     Sum, Sub, Mul, Div, Mod, And, Or, Xor, BinaryNot, BoolAnd, BoolOr, BoolNot, Negate, Print, 
     AddressOf, DerefOf, ElementOf, TupleElementOf,
-    Number, Integer, UInteger, Integer64, UInteger64, Float, Double, Byte, StringLiteral, MultilineStringLiteral,
+    Number, Integer, UInteger, Integer64, UInteger64, Float, Double, HalfFloat, Byte, StringLiteral, MultilineStringLiteral,
     StructLiteralElement, StructLiteralBody, StructLiteral, Null,
-    ArrayLiteralElement, ArrayLiteralBody, ArrayLiteral, TypeExpr, TupleTypeExpr,
+    ArrayLiteralElement, ArrayLiteralBody, ArrayLiteral, TypeExpr, TupleTypeExpr, FuncTypeExpr,
     TupleLiteralElement, TupleLiteralBody, TupleLiteral,
     FuncDecl, FuncDeclExtern, FuncArgList, FuncArg, GlobalVarDecl, VarDecl, VarDeclAssign, 
     MethodDecl, MethodDeclExtern,
@@ -24,7 +24,7 @@ class Parser():
         self.pg = ParserGenerator(
             # A list of all token names accepted by the parser.
             ['TPACKAGE', 'TIMPORT', 'TCINCLUDE', 'TCDECLARE',
-             'INT', 'UINT', 'LONGINT', 'ULONGINT', 'BYTE', 'FLOAT', 'DOUBLE', 'STRING', 'MLSTRING',
+             'INT', 'UINT', 'LONGINT', 'ULONGINT', 'BYTE', 'HALF', 'FLOAT', 'DOUBLE', 'STRING', 'MLSTRING',
              'IDENT', 'TPRINT', 'DOT', 'TRETURN', 'LPAREN', 'RPAREN', 'LBRACKET', 'RBRACKET',
              'SEMICOLON', 'ADD', 'SUB', 'MUL', 'DIV', 'MOD', 'AND', 'OR', 'XOR', 'BOOLAND', 'BOOLOR',
              'TFN', 'COLON', 'LBRACE', 'RBRACE', 'COMMA', 'CC', 
@@ -326,6 +326,18 @@ class Parser():
             spos = p[0].getsourcepos()
             return VarDecl(self.builder, self.module, spos, p[0], p[2], p[4])
 
+        @self.pg.production('stmt : TCONST IDENT COLON typeexpr EQ expr SEMICOLON')
+        @self.pg.production('stmt : TIMMUT IDENT COLON typeexpr EQ expr SEMICOLON')
+        @self.pg.production('stmt : TATOMIC IDENT COLON typeexpr EQ expr SEMICOLON')
+        def stmt_var_decl_eq_spec(p):
+            spos = p[0].getsourcepos()
+            if p[0].gettokentype() == 'TCONST':
+                return VarDecl(self.builder, self.module, spos, p[1], p[3], p[5], 'const')
+            elif p[0].gettokentype() == 'TIMMUT':
+                return VarDecl(self.builder, self.module, spos, p[1], p[3], p[5], 'immut')
+            elif p[0].gettokentype() == 'TATOMIC':
+                return VarDecl(self.builder, self.module, spos, p[1], p[3], p[5], 'atomic')
+
         @self.pg.production('stmt : IDENT CEQ expr SEMICOLON')
         def stmt_var_decl_ceq(p):
             spos = p[0].getsourcepos()
@@ -403,6 +415,23 @@ class Parser():
         @self.pg.production('tuple_type_list : typeexpr')
         @self.pg.production('tuple_type_list : tuple_type_list COMMA typeexpr')
         def tuple_type_list(p):
+            if len(p) == 0:
+                return []
+            elif len(p) == 1:
+                return [p[0]]
+            else:
+                p[0].append(p[2])
+                return p[0]
+
+        @self.pg.production('typeexpr : TFN LPAREN func_arg_type_list RPAREN typeexpr')
+        def typeexpr_func(p):
+            spos = p[0].getsourcepos()
+            return FuncTypeExpr(self.builder, self.module, spos, p[2], p[4])
+
+        @self.pg.production('func_arg_type_list : ')
+        @self.pg.production('func_arg_type_list : typeexpr')
+        @self.pg.production('func_arg_type_list : tuple_type_list COMMA typeexpr')
+        def func_arg_type_list(p):
             if len(p) == 0:
                 return []
             elif len(p) == 1:
@@ -822,6 +851,7 @@ class Parser():
         @self.pg.production('number : LONGINT')
         @self.pg.production('number : ULONGINT')
         @self.pg.production('number : BYTE')
+        @self.pg.production('number : HALF')
         @self.pg.production('number : FLOAT')
         @self.pg.production('number : DOUBLE')
         def number(p):
@@ -836,6 +866,8 @@ class Parser():
                 return UInteger64(self.builder, self.module, spos, p[0].value)
             elif p[0].gettokentype() == 'BYTE':
                 return Byte(self.builder, self.module, spos, p[0].value)
+            elif p[0].gettokentype() == 'HALF':
+                return HalfFloat(self.builder, self.module, spos, p[0].value)
             elif p[0].gettokentype() == 'FLOAT':
                 return Float(self.builder, self.module, spos, p[0].value)
             elif p[0].gettokentype() == 'DOUBLE':

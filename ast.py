@@ -194,6 +194,21 @@ class Double(Number):
         return float(self.value)
 
 
+class HalfFloat(Number):
+    """
+    A half-precision float constant. (float16)
+    """
+    def get_type(self):
+        return types['float16']
+
+    def eval(self):
+        i = ir.Constant(self.type.irtype, float(self.value))
+        return i
+
+    def consteval(self):
+        return float(self.value.strip('q'))
+
+
 class StringLiteral(Expr):
     """
     A null terminated string literal. (cstring)
@@ -457,11 +472,18 @@ class LValue(Expr):
         ptr = check_name_in_scope(name)
         if ptr is None:
             if name not in self.module.sglobals:
-                lineno = self.getsourcepos().lineno
-                colno = self.getsourcepos().colno
-                throw_saturn_error(self.builder, self.module, lineno, colno, 
-                    "Could not find lvalue '%s' in current scope." % name
-                )
+                if name not in self.module.sfuncs:
+                    lineno = self.getsourcepos().lineno
+                    colno = self.getsourcepos().colno
+                    throw_saturn_error(self.builder, self.module, lineno, colno, 
+                        "Could not find lvalue '%s' in current scope." % name
+                    )
+                ptr = self.module.sfuncs[name]
+                key = list(ptr.overloads.keys())[0]
+                begin = '_Z%d' % len(name)
+                key = begin + name + key[3:]
+                fnty = self.module.sfunctys[key]
+                return fnty
             ptr = self.module.sglobals[name]
         # if ptr.type.is_pointer():
         #     return ptr.type.get_dereference_of()
@@ -500,12 +522,21 @@ class LValue(Expr):
         ptr = check_name_in_scope(name)
         if ptr is None:
             if name not in self.module.sglobals:
-                lineno = self.getsourcepos().lineno
-                colno = self.getsourcepos().colno
-                throw_saturn_error(self.builder, self.module, lineno, colno, 
-                    "Could not find lvalue '%s' in current scope." % name
-                )
-            ptr = self.module.sglobals[name]
+                if name not in self.module.sfuncs:
+                    lineno = self.getsourcepos().lineno
+                    colno = self.getsourcepos().colno
+                    throw_saturn_error(self.builder, self.module, lineno, colno, 
+                        "Could not find lvalue '%s' in current scope." % name
+                    )
+                ptr = self.module.sfuncs[name]
+                key = list(ptr.overloads.keys())[0]
+                fn = ptr.overloads[key]
+                begin = '_Z%d' % len(name)
+                key = begin + name + key[3:]
+                fnty = self.module.sfunctys[key]
+                return Value('', fnty.get_pointer_to(), fn)
+            else:
+                ptr = self.module.sglobals[name]
         return ptr
     
     def eval(self):
@@ -513,12 +544,15 @@ class LValue(Expr):
         ptr = check_name_in_scope(name)
         if ptr is None:
             if name not in self.module.sglobals:
-                lineno = self.getsourcepos().lineno
-                colno = self.getsourcepos().colno
-                throw_saturn_error(self.builder, self.module, lineno, colno, 
-                    "Could not find lvalue '%s' in current scope." % name
-                )
-            ptr = self.module.sglobals[name]
+                if name not in self.module.sfuncs:
+                    lineno = self.getsourcepos().lineno
+                    colno = self.getsourcepos().colno
+                    throw_saturn_error(self.builder, self.module, lineno, colno, 
+                        "Could not find lvalue '%s' in current scope." % name
+                    )
+                ptr = self.module.sfuncs[name]
+            else:
+                ptr = self.module.sglobals[name]
         if ptr.is_atomic():
             return self.builder.load_atomic(ptr.irvalue, 'seq_cst', 4)
         return self.builder.load(ptr.irvalue)
@@ -1488,15 +1522,20 @@ class MulAssignment(Assignment):
     """
     def eval(self):
         ptr = self.lvalue.get_pointer()
-        if ptr.type.is_const() or ptr.type.is_immut():
+        if ptr.is_const() or ptr.is_immut():
             lineno = self.expr.getsourcepos().lineno
             colno = self.expr.getsourcepos().colno
             throw_saturn_error(self.builder, self.module, lineno, colno, 
                 "Cannot reassign to const variable, %s." % ptr.name
             )
-        value = self.builder.load(ptr.irvalue)
-        res = self.builder.mul(value, self.expr.eval())
-        self.builder.store(res, ptr.irvalue)
+        if not ptr.is_atomic():
+            value = self.builder.load(ptr.irvalue)
+            res = self.builder.mul(value, self.expr.eval())
+            self.builder.store(res, ptr.irvalue)
+        else:
+            value = self.builder.load_atomic(ptr.irvalue, 'seq_cst', 4)
+            res = self.builder.mul(value, self.expr.eval())
+            self.builder.store_atomic(res, ptr.irvalue, 'seq_cst', 4)
 
 
 class DivAssignment(Assignment):
@@ -1512,7 +1551,11 @@ class DivAssignment(Assignment):
             throw_saturn_error(self.builder, self.module, lineno, colno, 
                 "Cannot reassign to const variable, %s." % ptr.name
             )
-        value = self.builder.load(ptr.irvalue)
+        value = None
+        if not ptr.is_atomic():
+            value = self.builder.load(ptr.irvalue)
+        else:
+            value = self.builder.load_atomic(ptr.irvalue, 'seq_cst', 4)
         res = None
         if get_type().is_unsigned():
             res = self.builder.udiv(value, self.expr.eval())
@@ -1526,7 +1569,10 @@ class DivAssignment(Assignment):
             throw_saturn_error(self.builder, self.module, lineno, colno, 
                 "Cannot do division assignment on variable, %s." % ptr.name
             )
-        self.builder.store(res, ptr.irvalue)
+        if not ptr.is_atomic():
+            self.builder.store(res, ptr.irvalue)
+        else:
+            self.builder.store_atomic(res, ptr.irvalue, 'seq_cst', 4)
 
 
 class ModAssignment(Assignment):
@@ -1542,7 +1588,11 @@ class ModAssignment(Assignment):
             throw_saturn_error(self.builder, self.module, lineno, colno, 
                 "Cannot reassign to const variable, %s." % ptr.name
             )
-        value = self.builder.load(ptr.irvalue)
+        value = None
+        if not ptr.is_atomic():
+            value = self.builder.load(ptr.irvalue)
+        else:
+            value = self.builder.load_atomic(ptr.irvalue, 'seq_cst', 4)
         res = None
         if get_type().is_unsigned():
             res = self.builder.urem(value, self.expr.eval())
@@ -1556,7 +1606,10 @@ class ModAssignment(Assignment):
             throw_saturn_error(self.builder, self.module, lineno, colno, 
                 "Cannot do modulus assignment on variable, %s." % ptr.name
             )
-        self.builder.store(res, ptr.irvalue)
+        if not ptr.is_atomic():
+            self.builder.store(res, ptr.irvalue)
+        else:
+            self.builder.store_atomic(res, ptr.irvalue, 'seq_cst', 4)
 
 
 class AndAssignment(Assignment):
@@ -1935,7 +1988,7 @@ class FuncDecl():
         argtypes = self.decl_args.get_arg_type_list()
         fnty = ir.FunctionType(rtype.get_ir_type(), argtypes)
         #print("%s (%s)" % (self.name.value, fnty))
-        sfnty = FuncType("", rtype.type, self.decl_args.get_arg_stype_list())
+        sfnty = FuncType("", fnty, rtype.type, self.decl_args.get_arg_stype_list())
         fname = self.name.value
         if not self.builder.c_decl and not self.name.value == 'main':
             fname = mangle_name(self.name.value, sfnty.atypes)
@@ -1967,7 +2020,8 @@ class FuncDecl():
         else:
             self.module.sfuncs[self.name.value].add_overload(sfnty.atypes, fn)
         #print("New function:", fname)
-        #self.module.sfunctys[self.name.value] = sfnty
+        sfnty.name = fname
+        self.module.sfunctys[fname] = sfnty
         block = fn.append_basic_block("entry")
         self.builder.dbgsub = self.module.add_debug_info("DISubprogram", {
             "name":self.name.value, 
@@ -2014,7 +2068,7 @@ class FuncDeclExtern():
         argtypes = self.decl_args.get_arg_type_list()
         fnty = ir.FunctionType(rtype.irtype, argtypes)
         #print("%s (%s)" % (self.name.value, fnty))
-        sfnty = FuncType("", rtype, self.decl_args.get_arg_stype_list())
+        sfnty = FuncType("", fnty, rtype, self.decl_args.get_arg_stype_list())
         fname = self.name.value
         if not self.builder.c_decl:
             fname = mangle_name(self.name.value, sfnty.atypes)
@@ -2035,13 +2089,14 @@ class GlobalVarDecl():
     name : vtype;\n
     name : vtype = initval;
     """
-    def __init__(self, builder, module, spos, name, vtype, initval=None):
+    def __init__(self, builder, module, spos, name, vtype, initval=None, spec='none'):
         self.name = name
         self.vtype = vtype
         self.builder = builder
         self.module = module
         self.spos = spos
         self.initval = initval
+        self.spec = spec
 
     def getsourcepos(self):
         return self.spos
@@ -2054,7 +2109,10 @@ class GlobalVarDecl():
             gvar.initializer = self.initval.eval()
         else:
             gvar.initializer = ir.Constant(vartype, 0)
-        return gvar
+        
+        ptr = Value(self.name.value, vartype, gvar)
+        add_new_global(self.name.value, ptr)
+        return ptr
 
 
 class MethodDecl():
@@ -2088,7 +2146,7 @@ class MethodDecl():
         argtypes = self.decl_args.get_arg_type_list()
         fnty = ir.FunctionType(rtype.get_ir_type(), argtypes)
         #print("%s (%s)" % (self.name.value, fnty))
-        sfnty = FuncType("", rtype.type, self.decl_args.get_arg_stype_list())
+        sfnty = FuncType("", fnty, rtype.type, self.decl_args.get_arg_stype_list())
         name = self.struct.get_name() + '.' + self.name.value
         fname = name
         if not self.builder.c_decl:
@@ -2184,7 +2242,7 @@ class MethodDeclExtern():
         argtypes = self.decl_args.get_arg_type_list()
         fnty = ir.FunctionType(rtype.irtype, argtypes)
         #print("%s (%s)" % (self.name.value, fnty))
-        sfnty = FuncType("", rtype, self.decl_args.get_arg_stype_list())
+        sfnty = FuncType("", fnty, rtype, self.decl_args.get_arg_stype_list())
         name = self.struct.get_name() + '.' + self.name.value
         fname = name
         if not self.builder.c_decl:
@@ -2206,13 +2264,14 @@ class VarDecl():
     name : vtype;\n
     name : vtype = initval;
     """
-    def __init__(self, builder, module, spos, name, vtype, initval=None):
+    def __init__(self, builder, module, spos, name, vtype, initval=None, spec='none'):
         self.name = name
         self.vtype = vtype
         self.builder = builder
         self.module = module
         self.spos = spos
         self.initval = initval
+        self.spec = spec
 
     def getsourcepos(self):
         return self.spos
@@ -2221,9 +2280,29 @@ class VarDecl():
         self.vtype.eval()
         vartype = self.vtype.type
 
+        quals = []
+        if self.spec == 'const':
+            if self.initval is None:
+                lineno = self.name.getsourcepos().lineno
+                colno = self.name.getsourcepos().colno
+                throw_saturn_error(self.builder, self.module, lineno, colno, 
+                    "Can't create const variable with no initial value."
+                )
+            quals.append('const')
+        elif self.spec == 'immut':
+            if self.initval is None:
+                lineno = self.name.getsourcepos().lineno
+                colno = self.name.getsourcepos().colno
+                throw_saturn_error(self.builder, self.module, lineno, colno, 
+                    "Can't create immut variable with no initial value."
+                )
+            quals.append('immut')
+        elif self.spec == 'atomic':
+            quals.append('atomic')
+
         with self.builder.goto_entry_block():
             self.builder.position_at_start(self.builder.block)
-            ptr = Value(self.name.value, vartype, self.builder.alloca(vartype.irtype, name=self.name.value))
+            ptr = Value(self.name.value, vartype, self.builder.alloca(vartype.irtype, name=self.name.value), qualifiers=quals)
         
         add_new_local(self.name.value, ptr)
         dbglv = self.module.add_debug_info("DILocalVariable", {
@@ -2331,7 +2410,8 @@ class VarDeclAssign():
         self.builder.debug_metadata = None
         if self.initval is not None:
             if ptr.is_atomic():
-                return self.builder.store_atomic(val, ptr.irvalue, 'seq_cst', 4)
+                self.builder.store_atomic(val, ptr.irvalue, 'seq_cst', 4)
+                return ptr
             self.builder.store(val, ptr.irvalue)
         return ptr
 
@@ -2360,6 +2440,9 @@ class TypeExpr():
 
     def get_ir_type(self):
         return self.type.irtype
+
+    def get_type(self):
+        return self.type
 
     def add_pointer_qualifier(self):
         self.type = self.type.get_pointer_to()
@@ -2402,6 +2485,36 @@ class TupleTypeExpr(TypeExpr):
                     lname
                 ))
         self.type = TupleType("", ir.LiteralStructType([ty.get_ir_type() for ty in self.types]))
+        self.base_type = self.type
+        self.quals = []
+
+    def eval(self):
+        pass
+
+
+class FuncTypeExpr(TypeExpr):
+    """
+    Expression representing a Saturn function type.\n
+    fn(argtypeexprs...) rettypeexpr
+    """
+    def __init__(self, builder, module, spos, argtypeexprs, rettypeexpr):
+        self.builder = builder
+        self.module = module
+        self.spos = spos
+        self.args = argtypeexprs
+        for ty in self.args:
+            lname = ty.lvalue.name
+            if lname not in types.keys():
+                #print(*types.keys())
+                raise RuntimeError("%s (%d:%d): Undefined type, %s, used in typeexpr." % (
+                    self.module.filestack[self.module.filestack_idx],
+                    self.spos.lineno,
+                    self.spos.colno,
+                    lname
+                ))
+        self.rtype = rettypeexpr
+        fnty = ir.FunctionType(self.rtype.get_ir_type(), [ty.get_ir_type() for ty in self.args])
+        self.type = FuncType("", fnty, self.rtype.get_type(), [ty.get_type() for ty in self.args])
         self.base_type = self.type
         self.quals = []
 
@@ -2541,24 +2654,39 @@ class FuncCall(Expr):
         self.is_constexpr = False
 
     def get_type(self):
-        return self.module.sfuncs[self.lvalue.get_name()].rtype
+        name = self.lvalue.get_name()
+        ptr = check_name_in_scope(name)
+        if ptr is None:
+            if name not in self.module.sglobals:
+                return self.module.sfuncs[name].rtype
+            return self.module.sglobals[name].rtype
+        return ptr.type
 
     def get_ir_type(self):
         return self.get_type().irtype
         #return self.module.sfuncs[self.lvalue.get_name()].rtype.irtype
 
     def eval(self):
-        sfn = self.module.sfuncs[self.lvalue.get_name()]
-        aargs = [arg.get_type() for arg in self.args]
-        ovrld = sfn.get_overload(aargs)
-        if not ovrld:
-            lineno = self.getsourcepos().lineno
-            colno = self.getsourcepos().colno
-            throw_saturn_error(self.builder, self.module, lineno, colno, 
-                "Cannot find overload for function %s with argument types (%s)." % (self.lvalue.get_name(), print_types(aargs))
-            )
+        name = self.lvalue.get_name()
+        ptr = check_name_in_scope(name)
+        sfn = None
+        if ptr is None:
+            if name not in self.module.sglobals:
+                sfn = self.module.sfuncs[self.lvalue.get_name()]
+                aargs = [arg.get_type() for arg in self.args]
+                ovrld = sfn.get_overload(aargs)
+                if not ovrld:
+                    lineno = self.getsourcepos().lineno
+                    colno = self.getsourcepos().colno
+                    throw_saturn_error(self.builder, self.module, lineno, colno, 
+                        "Cannot find overload for function %s with argument types (%s)." % (self.lvalue.get_name(), print_types(aargs))
+                    )
+                args = [arg.eval() for arg in self.args]
+                return self.builder.call(ovrld, args, self.lvalue.get_name())
+            ptr = self.module.sglobals[name]
         args = [arg.eval() for arg in self.args]
-        return self.builder.call(ovrld, args, self.lvalue.get_name())
+        fn = self.builder.load(ptr.irvalue)
+        return self.builder.call(fn, args)
         #return self.builder.call(self.module.get_global(self.lvalue.get_name()), args, self.lvalue.get_name())
 
 

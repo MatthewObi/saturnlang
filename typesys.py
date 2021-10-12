@@ -126,6 +126,9 @@ class Type():
     def is_struct(self):
         return self.tclass == 'struct'
 
+    def is_function(self):
+        return self.tclass == 'function'
+
     def is_tuple(self):
         return self.tclass == 'tuple'
 
@@ -185,6 +188,7 @@ types = {
     "uint16": Type("uint16", ir.IntType(16), 'uint'),
     "float32": Type("float32", ir.FloatType(), 'float'),
     "float64": Type("float64", ir.DoubleType(), 'float'),
+    "float16": Type("float16", ir.HalfType(), 'float'),
     "bool": Type("bool", ir.IntType(1), 'bool'),
     "cstring": Type("cstring", ir.IntType(8).as_pointer(), 'string', traits=['TOpaquePtr']),
     "null_t": Type("null_t", ir.IntType(8).as_pointer(), 'null', traits=['TNoDereference', 'TOpaquePtr']),
@@ -209,14 +213,30 @@ class Value():
     def is_atomic(self):
         return 'atomic' in self.qualifiers
 
-class FuncType():
+class FuncType(Type):
     """
     A semantic function type in Saturn.
     """
-    def __init__(self, name, rtype, atypes=[]):
+    def __init__(self, name, irtype, rtype, atypes=[], qualifiers=[], traits={}):
         self.name = name
+        self.irtype = irtype
         self.rtype = rtype
         self.atypes = atypes
+        self.tclass = 'function'
+        self.qualifiers = qualifiers.copy()
+        self.traits = traits.copy()
+
+    def get_return_type(self):
+        return self.rtype
+
+    def get_pointer_to(self):
+        return FuncType(self.name, 
+            self.irtype.as_pointer(),
+            self.rtype,
+            self.atypes.copy(),
+            qualifiers=self.qualifiers + [('ptr',)],
+            traits=self.traits
+        )
 
 
 class StructType(Type):

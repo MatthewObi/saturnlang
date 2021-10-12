@@ -28,10 +28,12 @@ type IVector2 : tuple(int, int);
 fn main(argc: int, argv: CStringArray): int {
     arrofints : [4]int;
     array2 := []int {77, 44, 13, 39};
+    fnptr := &ptrfun;
     const fltarray := []float64 {
         0.0, 
         35.2
     };
+
     printf("fltarray[1] = %f", fltarray[0]);
     printf("argc = %d\n", argc);
     const PI  := 3.141593;
@@ -46,7 +48,6 @@ fn main(argc: int, argv: CStringArray): int {
 
     atomic aInt := 35;
     aInt -= 4;
-    aInt ^= 45;
 
     testFile: File;
     res := testFile.open("test.txt", "r");
@@ -117,17 +118,17 @@ fn main(argc: int, argv: CStringArray): int {
     arrayelptr := &arrofints[1];
     *arrayelptr = 11;
 
-    for x in 0 .. 4 {
+    for x in 0..4 {
         printf("arrofints[%d] = %d\n", x, arrofints[x]);
     }
 
-    for x in 1 .. 3 do printf("arrofints[%d] = %d\n", x, arrofints[x]);
-    for x in 3 ... 0:-1 do printf("arrofints[%d] = %d\n", x, arrofints[x]);
+    for x in 1..3 do printf("arrofints[%d] = %d\n", x, arrofints[x]);
+    for x in 3...0:-1 do printf("arrofints[%d] = %d\n", x, arrofints[x]);
 
-    for a in 0 .. 2 do
-        for b in 0 .. 2 do
-            for c in 0 .. 2 do
-                for d in 0 .. 2 do
+    for a in 0..2 do
+        for b in 0..2 do
+            for c in 0..2 do
+                for d in 0..2 do
                     printf("%d%d%d%d\n", a, b, c, d);
 
     printf("%d\n", switch_test(45));
@@ -164,6 +165,8 @@ fn main(argc: int, argv: CStringArray): int {
     ptr2 := &i;
     printf("i = %d\n", i);
     ptrfun(&i);
+    printf("i = %d\n", *ptr2);
+    fnptr(&i);
     printf("i = %d\n", *ptr2);
     t := (*ptr2) + 5;
     i = t;

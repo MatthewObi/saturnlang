@@ -6,9 +6,6 @@ c_declare
     fn fopen(path: cstring, mode: cstring): *FILE;
     fn fclose(file: *FILE): void;
     fn fgets(str: cstring, num: int, stream: *FILE): cstring;
-
-    fn malloc(size: int): *byte;
-    fn free(ptr: *byte): void;
 }
 
 type File: struct {

@@ -112,7 +112,8 @@ class Lexer():
         
         # Number
         self.lexer.add('FLOAT',    r'[0-9]+\.[0-9]*f')
-        self.lexer.add('DOUBLE',   r'[0-9]+\.[0-9]*')
+        self.lexer.add('DOUBLE',   r'[0-9]+\.[0-9]+')
+        self.lexer.add('HALF',     r'[0-9]+\.[0-9]*h')
         self.lexer.add('LONGINT',  r'\d+l')
         self.lexer.add('ULONGINT', r'\d+ul')
         self.lexer.add('BYTE',     r'\d+b')
