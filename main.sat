@@ -1,7 +1,6 @@
 package main;
 import string;
 import cmath;
-import io;
 
 fn ptrfun(x: *int) {
     *x = 5;
@@ -49,7 +48,7 @@ fn main(argc: int, argv: CStringArray): int {
     atomic aInt := 35;
     aInt -= 4;
 
-    testFile: File;
+    /*testFile: File;
     res := testFile.open("test.txt", "r");
     if res != -1 {
         testFString := testFile.readLine();
@@ -60,7 +59,7 @@ fn main(argc: int, argv: CStringArray): int {
         }
     } else {
         printf("Could not open file 'test.txt'\n");
-    }
+    }*/
 
     testTuple := tuple { 33, "Hi." };
     undefinedTuple : *tuple(int, cstring);

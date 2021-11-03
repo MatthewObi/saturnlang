@@ -72,20 +72,41 @@ class Type():
             traits=self.traits
         )
 
-    def get_element_of(self):
-        ql = self.qualifiers.copy()
-        ql.reverse()
-        for i in range(len(ql)):
-            if ql[i][0] == 'array':
-                ql.pop(i)
-                break
-        ql.reverse()
-        return Type(self.name, 
-            self.irtype.element, 
-            self.tclass, 
-            qualifiers=ql,
-            traits=self.traits
+    def get_reference_to(self):
+        return ReferenceType(self.name,
+            self,
+            self.tclass
         )
+
+    def get_element_of(self):
+        if self.is_pointer():
+            ql = self.qualifiers.copy()
+            ql.reverse()
+            for i in range(len(ql)):
+                if ql[i][0] == 'ptr':
+                    ql.pop(i)
+                    break
+            ql.reverse()
+            return Type(self.name, 
+                self.irtype.pointee, 
+                self.tclass, 
+                qualifiers=ql,
+                traits=self.traits
+            )
+        else:
+            ql = self.qualifiers.copy()
+            ql.reverse()
+            for i in range(len(ql)):
+                if ql[i][0] == 'array':
+                    ql.pop(i)
+                    break
+            ql.reverse()
+            return Type(self.name, 
+                self.irtype.element, 
+                self.tclass, 
+                qualifiers=ql,
+                traits=self.traits
+            )
 
     def add_trait(self, trait):
         if trait not in self.traits:
@@ -132,6 +153,9 @@ class Type():
     def is_tuple(self):
         return self.tclass == 'tuple'
 
+    def is_reference(self):
+        return ('ref',) in self.qualifiers
+
     def is_iterable(self):
         return self.is_array() or self.is_string()
 
@@ -144,6 +168,9 @@ class Type():
     def is_atomic(self):
         return 'atomic' in self.qualifiers
 
+    def has_dtor(self):
+        return False
+
     def __str__(self):
         s = str()
         for q in self.qualifiers:
@@ -151,6 +178,8 @@ class Type():
                 s += '*'
             elif q[0] == 'array':
                 s += '[%d]' % q[1]
+            elif q[0] == 'ref':
+                s += '&'
         s += self.name
         return s
 
@@ -198,20 +227,39 @@ class Value():
     """
     A saturn value.
     """
-    def __init__(self, name, stype, irvalue, qualifiers=[]):
+    def __init__(self, name, stype, irvalue, qualifiers=[], objtype='stack'):
         self.name = name
         self.type = stype
+        self.objtype = objtype
         self.irvalue = irvalue
-        self.qualifiers=qualifiers
+        self.qualifiers=qualifiers.copy()
 
     def is_const(self):
         return 'const' in self.qualifiers
 
     def is_immut(self):
         return 'immut' in self.qualifiers
+
+    def is_readonly(self):
+        return 'readonly' in self.qualifiers
     
     def is_atomic(self):
         return 'atomic' in self.qualifiers
+
+    def is_stack_object(self):
+        return self.objtype == 'stack'
+
+    def is_shared_object(self):
+        return self.objtype == 'shared'
+
+    def is_owned_object(self):
+        return self.objtype == 'owned'
+
+    def is_global(self):
+        return self.objtype == 'global'
+
+    def is_heap_object(self):
+        return self.objtype == 'shared' or self.objtype == 'owned'
 
 class FuncType(Type):
     """
@@ -314,6 +362,12 @@ class StructType(Type):
             operators=self.operator
         )
 
+    def get_reference_to(self):
+        return ReferenceType(self.name,
+            self,
+            self.tclass
+        )
+
     def get_dereference_of(self):
         ql = self.qualifiers.copy()
         ql.reverse()
@@ -344,6 +398,60 @@ class StructType(Type):
             operators=self.operator
         )
 
+
+class ReferenceType(Type):
+    """
+    A reference type in Saturn. Can hold a raw pointer, stack allocated object, or shared object.
+    Performs automatic dereferencing.
+    """
+    HAS_SHARED_OWNERSHIP = (1 << 0)
+    IS_HEAP_OBJECT       = (1 << 1)
+    def __init__(self, name, stype, tclass):
+        self.name = name
+        self.tclass = tclass
+        self.type = stype
+        self.irtype = self.type.irtype.as_pointer()
+        self.qualifiers = self.type.qualifiers + [('ref',)]
+        self.traits = self.type.traits.copy()
+        self.bits = -1
+
+    def add_field(self, name, ftype, irvalue):
+        self.type.add_field(name, ftype, irvalue)
+
+    def get_field_index(self, name):
+        return self.type.get_field_index(name)
+
+    def get_field_type(self, index):
+        return self.type.get_field_type(index)
+
+    def get_fields_with_init(self):
+        return self.type.get_fields_with_init()
+
+    def has_ctor(self):
+        return self.type.has_ctor()
+
+    def get_ctor(self):
+        return self.type.get_ctor()
+
+    def add_ctor(self, ctor):
+        self.type.add_ctor(ctor)
+
+    def has_dtor(self):
+        return self.type.has_dtor()
+
+    def get_dtor(self):
+        return self.type.get_dtor()
+
+    def add_dtor(self, dtor):
+        self.type.add_dtor(dtor)
+
+    def has_operator(self, op):
+        return self.type.has_operator(op)
+
+    def add_operator(self, op, fn):
+        self.type.add_operator(op, fn)
+
+
 def mangle_name(name: str, atypes: list):
     mname = '_Z%d%sE' % (len(name), name)
     if len(atypes) == 0:
@@ -355,6 +463,8 @@ def mangle_name(name: str, atypes: list):
         for q in atype.qualifiers:
             if q[0] == 'ptr':
                 mname += 'P'
+            elif q[0] == 'ref':
+                mname += 'R'
         if atype.is_atomic():
             mname += 'A'
         if atype.irtype == types['int'].irtype:

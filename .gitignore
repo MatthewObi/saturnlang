@@ -129,5 +129,5 @@ dmypy.json
 *.ll
 *.o
 *.exe
-wasmtest/
 concepttest/
+test/

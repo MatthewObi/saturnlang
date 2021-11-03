@@ -11,9 +11,6 @@ c_declare
     fn strstr(str: cstring, substr: cstring): cstring;
     fn strcpy(dest: cstring, src: cstring): cstring;
     fn strcat(dest: cstring, src: cstring): cstring;
-
-    fn malloc(size: int): *byte;
-    fn free(ptr: *byte): void;
 }
 
 type string : struct {
@@ -30,7 +27,7 @@ fn(*string) new(): void {
 
 fn(*string) delete(): void {
     if this.alloc == true {
-        free(cast<*byte>(this.ptr));
+        x := cast<*byte>(this.ptr);
     }
 }
 

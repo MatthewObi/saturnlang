@@ -10,8 +10,8 @@ from ast import (
     TupleLiteralElement, TupleLiteralBody, TupleLiteral,
     FuncDecl, FuncDeclExtern, FuncArgList, FuncArg, GlobalVarDecl, VarDecl, VarDeclAssign, 
     MethodDecl, MethodDeclExtern,
-    LValue, LValueField, FuncCall, MethodCall, CastExpr, SelectExpr,
-    Assignment, AddAssignment, SubAssignment, MulAssignment, AndAssignment, OrAssignment, XorAssignment,
+    LValue, LValueField, FuncCall, MethodCall, CastExpr, SelectExpr, MakeExpr, MakeSharedExpr,
+    Assignment, AddAssignment, SubAssignment, MulAssignment, ModAssignment, AndAssignment, OrAssignment, XorAssignment,
     Boolean, Spaceship, BooleanEq, BooleanNeq, BooleanGte, BooleanGt, BooleanLte, BooleanLt, 
     IfStatement, WhileStatement, DoWhileStatement, SwitchCase, SwitchDefaultCase, SwitchBody, SwitchStatement,
     ForStatement, IterExpr
@@ -31,7 +31,8 @@ class Parser():
              'EQ', 'CEQ', 'ADDEQ', 'SUBEQ', 'MULEQ', 'MODEQ', 'ANDEQ', 'OREQ', 'XOREQ',
              'TIF', 'TELSE', 'TWHILE', 'TTHEN', 'TDO', 'TBREAK', 'TCONTINUE', 'TFALLTHROUGH', 'TDEFER',
              'TSWITCH', 'TCASE', 'TDEFAULT', 'TFOR', 'TIN', 'DOTDOT', 'ELIPSES',
-             'TCONST', 'TIMMUT', 'TATOMIC', 'TTYPE', 'TSTRUCT', 'TTUPLE', 'TCAST', 'TOPERATOR',
+             'TCONST', 'TIMMUT', 'TMUT', 'TREADONLY', 'TNOCAPTURE', 'TATOMIC', 
+             'TTYPE', 'TSTRUCT', 'TTUPLE', 'TCAST', 'TOPERATOR', 'TMAKE', 'TSHARED', 'TOWNED',
              'BOOLEQ', 'BOOLNEQ', 'BOOLGT', 'BOOLLT', 'BOOLGTE', 'BOOLLTE', 'SPACESHIP', 'BOOLNOT',
              'TTRUE', 'TFALSE', 'TNULL'],
 
@@ -118,6 +119,14 @@ class Parser():
             spos = p[0].getsourcepos()
             return FuncDeclExtern(self.builder, self.module, spos, name, rtype, declargs)
 
+        @self.pg.production('func_decl_extern : TFN IDENT LPAREN decl_args COMMA ELIPSES RPAREN COLON typeexpr SEMICOLON')
+        def func_decl_extern_varargs(p):
+            name = p[1]
+            declargs = p[3]
+            rtype = p[8]
+            spos = p[0].getsourcepos()
+            return FuncDeclExtern(self.builder, self.module, spos, name, rtype, declargs, var_arg=True)
+
         @self.pg.production('decl_args : decl_args COMMA decl_arg')
         @self.pg.production('decl_args : decl_arg')
         @self.pg.production('decl_args : ')
@@ -137,6 +146,13 @@ class Parser():
             vtype = p[2]
             spos = p[0].getsourcepos()
             return FuncArg(self.builder, self.module, spos, name, vtype)
+
+        @self.pg.production('decl_arg : storage_spec_list IDENT COLON typeexpr')
+        def decl_arg_spec(p):
+            name = p[1]
+            vtype = p[3]
+            spos = p[1].getsourcepos()
+            return FuncArg(self.builder, self.module, spos, name, vtype, [i[0] for i in p[0]])
 
         @self.pg.production('gvar_decl : IDENT COLON typeexpr SEMICOLON')
         def gvar_decl(p):
@@ -270,7 +286,7 @@ class Parser():
         def block(p):
             if(len(p) == 1):
                 spos = p[0].getsourcepos()
-                return CodeBlock(self.module, self.builder, spos, p[0])
+                return CodeBlock(self.builder, self.module, spos, p[0])
             else:
                 p[0].add(p[1])
                 return p[0]
@@ -314,7 +330,7 @@ class Parser():
         @self.pg.production('stmt : TDEFER LBRACE block RBRACE')
         def stmt_defer_block(p):
             spos = p[0].getsourcepos()
-            return DeferStatement(self.builder, self.module, spos, p[1])
+            return DeferStatement(self.builder, self.module, spos, p[2])
 
         @self.pg.production('stmt : IDENT COLON typeexpr SEMICOLON')
         def stmt_var_decl(p):
@@ -326,34 +342,53 @@ class Parser():
             spos = p[0].getsourcepos()
             return VarDecl(self.builder, self.module, spos, p[0], p[2], p[4])
 
-        @self.pg.production('stmt : TCONST IDENT COLON typeexpr EQ expr SEMICOLON')
-        @self.pg.production('stmt : TIMMUT IDENT COLON typeexpr EQ expr SEMICOLON')
-        @self.pg.production('stmt : TATOMIC IDENT COLON typeexpr EQ expr SEMICOLON')
+        @self.pg.production('stmt : storage_spec_list IDENT COLON typeexpr EQ expr SEMICOLON')
         def stmt_var_decl_eq_spec(p):
+            spos = p[1].getsourcepos()
+            return VarDecl(self.builder, self.module, spos, p[1], p[3], p[5], p[0])
+
+        @self.pg.production('storage_spec_list : storage_spec')
+        @self.pg.production('storage_spec_list : storage_spec_list storage_spec')
+        def storage_spec_list(p):
+            if len(p) == 0:
+                return []
+            elif len(p) == 1:
+                return [p[0]]
+            else:
+                p[0].append(p[1])
+                return p[0]
+
+        @self.pg.production('storage_spec : TCONST')
+        @self.pg.production('storage_spec : TIMMUT')
+        @self.pg.production('storage_spec : TMUT')
+        @self.pg.production('storage_spec : TREADONLY')
+        @self.pg.production('storage_spec : TNOCAPTURE')
+        @self.pg.production('storage_spec : TATOMIC')
+        def storage_spec(p):
             spos = p[0].getsourcepos()
             if p[0].gettokentype() == 'TCONST':
-                return VarDecl(self.builder, self.module, spos, p[1], p[3], p[5], 'const')
+                return ('const', spos)
             elif p[0].gettokentype() == 'TIMMUT':
-                return VarDecl(self.builder, self.module, spos, p[1], p[3], p[5], 'immut')
+                return ('immut', spos)
+            elif p[0].gettokentype() == 'TMUT':
+                return ('mut', spos)
+            elif p[0].gettokentype() == 'TREADONLY':
+                return ('readonly', spos)
+            elif p[0].gettokentype() == 'TNOCAPTURE':
+                return ('nocapture', spos)
             elif p[0].gettokentype() == 'TATOMIC':
-                return VarDecl(self.builder, self.module, spos, p[1], p[3], p[5], 'atomic')
+                return ('atomic', spos)
+
 
         @self.pg.production('stmt : IDENT CEQ expr SEMICOLON')
         def stmt_var_decl_ceq(p):
             spos = p[0].getsourcepos()
             return VarDeclAssign(self.builder, self.module, spos, p[0], p[2])
 
-        @self.pg.production('stmt : TCONST IDENT CEQ expr SEMICOLON')
-        @self.pg.production('stmt : TIMMUT IDENT CEQ expr SEMICOLON')
-        @self.pg.production('stmt : TATOMIC IDENT CEQ expr SEMICOLON')
+        @self.pg.production('stmt : storage_spec_list IDENT CEQ expr SEMICOLON')
         def stmt_var_decl_ceq_spec(p):
-            spos = p[0].getsourcepos()
-            if p[0].gettokentype() == 'TCONST':
-                return VarDeclAssign(self.builder, self.module, spos, p[1], p[3], 'const')
-            elif p[0].gettokentype() == 'TIMMUT':
-                return VarDeclAssign(self.builder, self.module, spos, p[1], p[3], 'immut')
-            elif p[0].gettokentype() == 'TATOMIC':
-                return VarDeclAssign(self.builder, self.module, spos, p[1], p[3], 'atomic')
+            spos = p[1].getsourcepos()
+            return VarDeclAssign(self.builder, self.module, spos, p[1], p[3], p[0])
 
         @self.pg.production('stmt : lvalue_expr EQ expr SEMICOLON')
         def stmt_assign(p):
@@ -374,6 +409,11 @@ class Parser():
         def stmt_assign_mul(p):
             spos = p[0].getsourcepos()
             return MulAssignment(self.builder, self.module, spos, p[0], p[2])
+
+        @self.pg.production('stmt : lvalue_expr MODEQ expr SEMICOLON')
+        def stmt_assign_mul(p):
+            spos = p[0].getsourcepos()
+            return ModAssignment(self.builder, self.module, spos, p[0], p[2])
 
         @self.pg.production('stmt : lvalue_expr ANDEQ expr SEMICOLON')
         def stmt_assign_and(p):
@@ -430,7 +470,7 @@ class Parser():
 
         @self.pg.production('func_arg_type_list : ')
         @self.pg.production('func_arg_type_list : typeexpr')
-        @self.pg.production('func_arg_type_list : tuple_type_list COMMA typeexpr')
+        @self.pg.production('func_arg_type_list : func_arg_type_list COMMA typeexpr')
         def func_arg_type_list(p):
             if len(p) == 0:
                 return []
@@ -758,6 +798,10 @@ class Parser():
         def expr_tuple_literal(p):
             return p[0]
 
+        @self.pg.production('expr : make_expr')
+        def expr_make_expr(p):
+            return p[0]
+
         @self.pg.production('struct_literal : typeexpr LBRACE struct_literal_body RBRACE')
         def struct_literal(p):
             spos = p[1].getsourcepos()
@@ -841,6 +885,48 @@ class Parser():
         def tuple_literal_element(p):
             spos = p[0].getsourcepos()
             return TupleLiteralElement(self.builder, self.module, spos, p[0])
+
+        @self.pg.production('make_expr : TMAKE typeexpr')
+        @self.pg.production('make_expr : TMAKE typeexpr LPAREN args RPAREN')
+        @self.pg.production('make_expr : TMAKE typeexpr LBRACE args RBRACE')
+        def make_expr(p):
+            spos = p[0].getsourcepos()
+            if len(p) == 2:
+                return MakeExpr(self.builder, self.module, spos, p[1])
+            else:
+                if p[2].gettokentype() == 'LPAREN':
+                    return MakeExpr(self.builder, self.module, spos, p[1], args=p[3])
+                if p[2].gettokentype() == 'LPAREN':
+                    return MakeExpr(self.builder, self.module, spos, p[1], init=p[3])
+
+
+        @self.pg.production('make_expr : TMAKE TOWNED typeexpr')
+        @self.pg.production('make_expr : TMAKE TOWNED typeexpr LPAREN args RPAREN')
+        @self.pg.production('make_expr : TMAKE TOWNED typeexpr LBRACE args RBRACE')
+        def make_expr_owned(p):
+            spos = p[0].getsourcepos()
+            if len(p) == 3:
+                return MakeExpr(self.builder, self.module, spos, p[2])
+            else:
+                if p[3].gettokentype() == 'LPAREN':
+                    return MakeExpr(self.builder, self.module, spos, p[2], args=p[4])
+                if p[3].gettokentype() == 'LPAREN':
+                    return MakeExpr(self.builder, self.module, spos, p[2], init=p[4])
+
+
+        @self.pg.production('make_expr : TMAKE TSHARED typeexpr')
+        @self.pg.production('make_expr : TMAKE TSHARED typeexpr LPAREN args RPAREN')
+        @self.pg.production('make_expr : TMAKE TSHARED typeexpr LBRACE args RBRACE')
+        def make_expr_shared(p):
+            spos = p[0].getsourcepos()
+            if len(p) == 3:
+                return MakeSharedExpr(self.builder, self.module, spos, p[2])
+            else:
+                if   p[3].gettokentype() == 'LPAREN':
+                    return MakeSharedExpr(self.builder, self.module, spos, p[2], args=p[4])
+                elif p[3].gettokentype() == 'LBRACE':
+                    return MakeSharedExpr(self.builder, self.module, spos, p[2], init=p[4])
+
 
         @self.pg.production('expr : number')
         def expr_number(p):

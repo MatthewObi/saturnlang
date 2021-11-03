@@ -1,6 +1,6 @@
 from lexer import Lexer
 from sparser import Parser
-from codegen import CodeGen, compile_target
+from codegen import CodeGen
 from cachedmodule import CachedModule, cachedmods
 
 import sys
@@ -14,6 +14,8 @@ eval_files = []
 llfiles = []
 linkfiles = []
 
+compile_target = 'windows-x64'
+
 if len(sys.argv) > 1:
     if sys.argv[1] == '--clean':
         for f in glob.glob("*.o"):
@@ -23,6 +25,10 @@ if len(sys.argv) > 1:
         opt_level = 1
     if '-O2' in sys.argv:
         opt_level = 2
+
+    if '--target=wasm' in sys.argv:
+        compile_target = 'wasm'
+
 
 for f in glob.glob("*.sat"):
     mod_t = os.path.getmtime(f)
@@ -55,7 +61,7 @@ for ff in files:
     lexer = Lexer().get_lexer()
     tokens = lexer.lex(cmod.text_input)
 
-    codegen = CodeGen(ff, opt_level=opt_level)
+    codegen = CodeGen(ff, opt_level=opt_level, compile_target=compile_target)
 
     module = codegen.module
     builder = codegen.builder
@@ -103,6 +109,10 @@ for ff in files:
     parser = pg.get_parser()
     parser.parse(tokens).eval()
 
+    if compile_target == 'wasm':
+        if ff == 'main.sat':
+            codegen.create_entry()
+
     ir = codegen.create_ir()
     dest = ff[:-4]
     codegen.save_ir(dest + '.ll', ir)
@@ -128,7 +138,7 @@ if len(modifiedobjs) == 0:
 
 linkcmd = ''
 if compile_target == 'wasm':
-    linkcmd = 'wasm-ld -o main.wasm -entry main --export-all -L./test/sysroot/lib/wasm32-wasi -lc '
+    linkcmd = 'wasm-ld -o ./wasm/static/main.wasm -L./wasm/sysroot/lib/wasm32-wasi -lc -lrt "./wasm/sysroot/lib/wasm32-wasi/crt1.o" '
 elif compile_target == 'windows-x64':
     linkcmd = 'lld-link -subsystem:console -out:main.exe -defaultlib:libcmt -libpath:"C:/Program Files (x86)/Microsoft Visual Studio/2019/Community/VC/Tools/MSVC/14.26.28801/lib/x64" -libpath:"C:/Program Files (x86)/Windows Kits/10/Lib/10.0.18362.0/ucrt/x64" -libpath:"C:/Program Files (x86)/Windows Kits/10/Lib/10.0.18362.0/um/x64" -nologo '
 

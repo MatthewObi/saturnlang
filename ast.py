@@ -5,6 +5,45 @@ from serror import throw_saturn_error
 
 SCOPE = []
 DECL_SCOPE = []
+GLOBALS = {}
+
+class Scope:
+    def __init__(self, builder, variables={}, is_guarded=False, passthrough=[]):
+        self.builder = builder
+        self.vars = variables.copy()
+        self.is_guarded = is_guarded
+        self.passthrough = passthrough
+        self.defer = []
+        self.destructed = False
+
+    def push_defer(self, defer):
+        self.defer.append(defer)
+
+    def eval_deferred(self):
+        for stmt in self.defer:
+            stmt.eval()
+        self.defer = []
+
+    def call_destructors(self):
+        if not self.destructed:
+            for var in self.vars.values():
+                if var.type.has_dtor():
+                    fn = var.type.get_dtor()
+                    ovrld = fn.get_overload([var.type.get_pointer_to()])
+                    if ovrld:
+                        self.builder.call(ovrld, [var.irvalue])
+            self.destructed = True
+
+    def keys(self):
+        return self.vars.keys()
+
+    def __getitem__(self, key):
+        return self.vars[key]
+
+    def __setitem__(self, key, value):
+        self.vars[key] = value
+
+    
 
 def get_inner_scope():
     global SCOPE
@@ -12,22 +51,41 @@ def get_inner_scope():
 
 def check_name_in_scope(name):
     global SCOPE
+    global GLOBALS
     for i in range(len(SCOPE)):
         s = SCOPE[-1-i]
         if name in s.keys():
             return s[name]
+    if name in GLOBALS.keys():
+        return GLOBALS[name]
     return None
 
 def add_new_local(name, ptr):
     global SCOPE
     SCOPE[-1][name] = ptr
 
-def push_new_scope():
+def add_new_global(name, ptr):
+    global GLOBALS
+    GLOBALS[name] = ptr
+
+def push_new_scope(builder):
     global SCOPE
-    SCOPE.append({})
+    SCOPE.append(Scope(builder))
+
+def push_defer(defer):
+    global SCOPE
+    SCOPE[-1].push_defer(defer)
+
+def eval_defer_scope():
+    SCOPE[-1].eval_deferred()
+
+def eval_dtor_scope():
+    SCOPE[-1].call_destructors()
 
 def pop_inner_scope():
     global SCOPE
+    SCOPE[-1].call_destructors()
+    SCOPE[-1].eval_deferred()
     SCOPE.pop(-1)
 
 def get_inner_decl_scope():
@@ -206,7 +264,7 @@ class HalfFloat(Number):
         return i
 
     def consteval(self):
-        return float(self.value.strip('q'))
+        return float(self.value.strip('h'))
 
 
 class StringLiteral(Expr):
@@ -466,6 +524,7 @@ class LValue(Expr):
         self.name = name
         self.value = None
         self.is_constexpr = False
+        self.is_deref = False
 
     def get_type(self):
         name = self.get_name()
@@ -537,6 +596,14 @@ class LValue(Expr):
                 return Value('', fnty.get_pointer_to(), fn)
             else:
                 ptr = self.module.sglobals[name]
+        if ptr.type.is_reference():
+            i64 = ir.IntType(64)
+            deref = self.builder.load(ptr.irvalue)
+            v0 = self.builder.ptrtoint(deref, i64)
+            v1 = self.builder.and_(v0, i64(-2))
+            actualptr = self.builder.inttoptr(v1, self.get_ir_type())
+            print(f"Reference: {actualptr}\nType:{ptr.type.type}")
+            return Value(ptr.name, ptr.type.type, actualptr)
         return ptr
     
     def eval(self):
@@ -555,6 +622,13 @@ class LValue(Expr):
                 ptr = self.module.sglobals[name]
         if ptr.is_atomic():
             return self.builder.load_atomic(ptr.irvalue, 'seq_cst', 4)
+        if self.get_type().is_reference():
+            i64 = ir.IntType(64)
+            deref = self.builder.load(ptr.irvalue)
+            v0 = self.builder.ptrtoint(deref, i64)
+            v1 = self.builder.and_(v0, i64(-2))
+            actualptr = self.builder.inttoptr(v1, self.get_ir_type())
+            return self.builder.load(actualptr)
         return self.builder.load(ptr.irvalue)
 
 
@@ -566,6 +640,7 @@ class LValueField(Expr):
         self.fname = fname
         self.lvalue = lvalue
         self.is_constexpr = False
+        self.is_deref = False
 
     def get_type(self):
         stype = self.lvalue.get_type()
@@ -586,14 +661,19 @@ class LValueField(Expr):
         findex = stype.get_field_index(self.fname)
         #print('%s: %d' % (self.fname, findex))
         gep = None
-        if not ptr.type.is_pointer():
-            gep = self.builder.gep(ptr.irvalue, [
+        if ptr.type.is_pointer():
+            ld = self.builder.load(ptr.irvalue)
+            gep = self.builder.gep(ld, [
                 ir.Constant(ir.IntType(32), 0),
                 ir.Constant(ir.IntType(32), findex)
             ])
-        else:
+        elif ptr.type.is_reference():
             ld = self.builder.load(ptr.irvalue)
             gep = self.builder.gep(ld, [
+                ir.Constant(ir.IntType(32), findex)
+            ])
+        else:
+            gep = self.builder.gep(ptr.irvalue, [
                 ir.Constant(ir.IntType(32), 0),
                 ir.Constant(ir.IntType(32), findex)
             ])
@@ -644,6 +724,8 @@ class CastExpr(Expr):
         cast = None
         val = self.expr.eval()
         exprt = self.expr.get_type()
+        if exprt.is_reference():
+            exprt = exprt.type
         castt = self.get_type()
         if exprt.is_pointer():
             if castt.is_pointer():
@@ -654,6 +736,9 @@ class CastExpr(Expr):
                 #lhs = self.builder.ptrtoint(val, ir.IntType(64))
                 #rhs = self.builder.ptrtoint(ir.Constant(exprt.irtype, exprt.irtype.null), ir.IntType(64))
                 cast = self.builder.icmp_unsigned('!=', val, ir.Constant(exprt.irtype, exprt.irtype.null))
+        elif exprt.is_array():
+            if castt.is_pointer():
+                cast = self.builder.bitcast(val, castt.irtype)
         elif exprt.is_integer():
             if castt.is_pointer():
                 cast = self.builder.inttoptr(val, castt.irtype)
@@ -695,6 +780,111 @@ class CastExpr(Expr):
                 "Cannot cast expression of type '%s' to '%s'." % (str(exprt), str(castt))
             )
         return cast
+
+
+class MakeExpr(Expr):
+    """
+    A make expression for creating new variables on the heap.
+    make typeexpr;
+    make typeexpr(args);
+    make typeexpr{init};
+    make owned typeexpr;
+    make owned typeexpr(args);
+    make owned typeexpr{init};
+    """
+    def __init__(self, builder, module, spos, typeexpr, args=None, init=None):
+        self.builder = builder
+        self.module = module
+        self.spos = spos
+        self.mtype = typeexpr.type
+        self.type = self.mtype.get_pointer_to()
+        self.args = args
+        self.init = init
+
+    def get_type(self):
+        return self.type
+
+    def get_ir_type(self):
+        return self.type.irtype
+
+    def eval(self):
+        malloc_fn = self.module.aligned_malloc
+        sizeof = calc_sizeof_struct(self.builder, self.module, self.mtype)
+        aligned_sizeof = self.builder.add(self.builder.and_(sizeof, ir.Constant(ir.IntType(32), 1)), sizeof)
+        mallocptr = self.builder.call(malloc_fn, [ir.Constant(ir.IntType(32), 2), aligned_sizeof])
+        self.builder.call(self.module.memset, [
+            mallocptr,
+            ir.Constant(ir.IntType(8), 0),
+            aligned_sizeof,
+            ir.Constant(ir.IntType(1), 0),
+        ])
+        bitcast = self.builder.bitcast(mallocptr, self.type.irtype)
+        push_defer(DestroyExpr(self.builder, self.module, self.spos, bitcast, self.type))
+        return bitcast
+
+
+class DestroyExpr(Expr):
+    """
+    An expression for freeing memory from the heap.
+    destroy lvalue;
+    """
+    def __init__(self, builder, module, spos, ptr, stype):
+        self.builder = builder
+        self.module = module
+        self.spos = spos
+        self.type = stype
+        self.ptr = ptr
+
+    def get_type(self):
+        return self.type
+
+    def get_ir_type(self):
+        return self.type.irtype
+
+    def eval(self):
+        bitcast = self.builder.bitcast(self.ptr, ir.IntType(8).as_pointer())
+        self.builder.call(self.module.free, [bitcast])
+
+
+class MakeSharedExpr(Expr):
+    """
+    A make expression for creating new variables on the heap with shared ownership.
+    make shared typeexpr;
+    make shared typeexpr(args);
+    make shared typeexpr{init};
+    """
+    def __init__(self, builder, module, spos, typeexpr, args=None, init=None):
+        self.builder = builder
+        self.module = module
+        self.spos = spos
+        self.mtype = typeexpr.type
+        self.type = self.mtype.get_reference_to()
+        self.args = args
+        self.init = init
+
+    def get_type(self):
+        return self.type
+
+    def get_ir_type(self):
+        return self.type.irtype
+
+    def eval(self):
+        malloc_fn = self.module.aligned_malloc
+        sizeof = calc_sizeof_struct(self.builder, self.module, self.mtype)
+        aligned_sizeof = self.builder.add(self.builder.and_(sizeof, ir.Constant(ir.IntType(32), 1)), sizeof)
+        mallocptr = self.builder.call(malloc_fn, [ir.Constant(ir.IntType(32), 2), aligned_sizeof])
+        self.builder.call(self.module.memset, [
+            mallocptr,
+            ir.Constant(ir.IntType(8), 0),
+            aligned_sizeof,
+            ir.Constant(ir.IntType(1), 0),
+        ])
+        bitcast = self.builder.inttoptr(
+            self.builder.add(self.builder.ptrtoint(mallocptr, ir.IntType(64)), ir.Constant(ir.IntType(64), 1)),
+            self.type.irtype
+        )
+        #bitcast = self.builder.bitcast(mallocptr, self.type.irtype)
+        return bitcast
 
 
 class PostfixOp(Expr):
@@ -788,6 +978,7 @@ class PrefixOp(Expr):
         self.spos = spos
         self.right = right
         self.is_constexpr = False
+        self.is_deref = False
 
 
 class AddressOf(PrefixOp):
@@ -815,6 +1006,14 @@ class DerefOf(PrefixOp):
     An dereference of prefix operation.\n
     *right
     """
+    def __init__(self, builder, module, spos, right):
+        self.builder = builder
+        self.module = module
+        self.spos = spos
+        self.right = right
+        self.is_constexpr = False
+        self.is_deref = True
+
     def get_name(self):
         return self.right.get_name()
 
@@ -822,7 +1021,15 @@ class DerefOf(PrefixOp):
         return self.right.get_type().get_dereference_of()
     
     def get_pointer(self):
-        return Value("", self.get_type(), self.builder.load(self.right.get_pointer().irvalue))
+        sptr = self.right.get_pointer()
+        #print(sptr.name, sptr.qualifiers)
+        ql = sptr.qualifiers.copy()
+        qualifiers = []
+        for q in ql:
+            if q == 'immut' or q == 'readonly':
+                qualifiers.append(q)
+        #print(sptr.name, '=>', qualifiers)
+        return Value(sptr.name, self.get_type(), self.builder.load(self.right.get_pointer().irvalue), qualifiers=qualifiers)
 
     def eval(self):
         if not isinstance(self.right, LValue):
@@ -1448,27 +1655,42 @@ class Assignment():
     
     def eval(self):
         sptr = self.lvalue.get_pointer()
+        stype = sptr.type
+        ptr = sptr.irvalue
+        if stype.is_reference():
+            stype = stype.type
         if sptr.is_const() or sptr.is_immut():
             lineno = self.expr.getsourcepos().lineno
             colno = self.expr.getsourcepos().colno
+            if sptr.is_const():
+                msg = 'const'
+            if sptr.is_immut():
+                msg = 'immut'
             throw_saturn_error(self.builder, self.module, lineno, colno, 
-                "Cannot reassign to const variable, %s." % sptr.name
+                "Cannot reassign to %s variable, %s." % (msg, sptr.name)
             )
-        if sptr.type.is_struct():
-            if sptr.type.has_operator('='):
-                method = sptr.type.operator['=']
-                ptr = sptr.irvalue
+        if sptr.is_readonly() and self.lvalue.is_deref:
+            lineno = self.expr.getsourcepos().lineno
+            colno = self.expr.getsourcepos().colno
+            throw_saturn_error(self.builder, self.module, lineno, colno, 
+                "Cannot write to readonly pointer variable, %s." % (sptr.name)
+            )
+        if stype.is_struct():
+            if stype.has_operator('='):
+                method = stype.operator['=']
                 value = self.expr.eval()
-                ovrld = method.get_overload([sptr.type.get_pointer_to(), self.expr.get_type()])
+                ovrld = method.get_overload([stype.get_pointer_to(), self.expr.get_type()])
                 if not ovrld:
                     pass
                 self.builder.call(ovrld, [ptr, value])
                 return
-        ptr = sptr.irvalue
         value = self.expr.eval()
         #print("(%s) => (%s)" % (value, ptr))
         if sptr.is_atomic():
             self.builder.store_atomic(value, ptr, 'seq_cst', 4)
+            return
+        if isinstance(self.expr, Null):
+            self.builder.store(ir.Constant(ptr.type.pointee, 'null'), ptr)
             return
         self.builder.store(value, ptr)
 
@@ -1856,9 +2078,9 @@ class CodeBlock():
         self.stmts.append(stmt)
 
     def eval(self, builder=None):
-        push_new_scope()
         if builder is not None:
             self.builder = builder
+        push_new_scope(self.builder)
         for stmt in self.stmts:
             stmt.eval()
         pop_inner_scope()
@@ -1889,12 +2111,13 @@ class FuncArg():
     An definition of a function parameter.\n
     name : rtype, 
     """
-    def __init__(self, builder, module, spos, name, atype):
+    def __init__(self, builder, module, spos, name, atype, qualifiers=[]):
         self.builder = builder
         self.module = module
         self.spos = spos
         self.name = name
         self.atype = atype.type
+        self.qualifiers = qualifiers.copy()
 
     def getsourcepos(self):
         return self.spos
@@ -1902,7 +2125,7 @@ class FuncArg():
     def eval(self, func: ir.Function, decl=True):
         arg = ir.Argument(func, self.atype.irtype, name=self.name.value)
         if decl:
-            val = Value(self.name.value, self.atype, arg)
+            val = Value(self.name.value, self.atype, arg, qualifiers=self.qualifiers)
             add_new_local(self.name.value, val)
             return val
         else:
@@ -1910,8 +2133,8 @@ class FuncArg():
                 self.builder.position_at_start(self.builder.block)
                 ptr = self.builder.alloca(self.atype.irtype, name=self.name.value)
             self.builder.store(arg, ptr)
-            argval = Value(self.name.value, self.atype, arg)
-            val = Value(self.name.value, self.atype, ptr)
+            argval = Value(self.name.value, self.atype, arg, qualifiers=self.qualifiers)
+            val = Value(self.name.value, self.atype, ptr, qualifiers=self.qualifiers)
             add_new_local(self.name.value, val)
             return argval
 
@@ -1970,7 +2193,7 @@ class FuncDecl():
     A declaration and definition of a function.\n
     fn name(decl_args): rtype { block }
     """
-    def __init__(self, builder, module, spos, name, rtype, block, decl_args):
+    def __init__(self, builder, module, spos, name, rtype, block, decl_args, var_arg=False):
         self.builder = builder
         self.module = module
         self.spos = spos
@@ -1978,19 +2201,20 @@ class FuncDecl():
         self.rtype = rtype
         self.block = block
         self.decl_args = decl_args
+        self.var_arg = var_arg
 
     def getsourcepos(self):
         return self.spos
 
     def eval(self):
-        push_new_scope()
+        push_new_scope(self.builder)
         rtype = self.rtype
         argtypes = self.decl_args.get_arg_type_list()
-        fnty = ir.FunctionType(rtype.get_ir_type(), argtypes)
+        fnty = ir.FunctionType(rtype.get_ir_type(), argtypes, var_arg=self.var_arg)
         #print("%s (%s)" % (self.name.value, fnty))
         sfnty = FuncType("", fnty, rtype.type, self.decl_args.get_arg_stype_list())
         fname = self.name.value
-        if not self.builder.c_decl and not self.name.value == 'main':
+        if not self.builder.c_decl and not (self.name.value == 'main' or self.name.value == '_entry'):
             fname = mangle_name(self.name.value, sfnty.atypes)
         try:
             self.module.get_global(fname)
@@ -2033,12 +2257,11 @@ class FuncDecl():
             "isDefinition":True
         }, True)
         self.builder.position_at_start(block)
-        self.builder.defer = []
         fn.args = tuple(self.decl_args.get_arg_list(fn))
         self.block.eval()
         if not self.builder.block.is_terminated:
-            for stmt in self.builder.defer:
-                stmt.eval()
+            #for stmt in self.builder.defer:
+            #    stmt.eval()
             if isinstance(self.builder.function.function_type.return_type, ir.VoidType):
                 self.builder.ret_void()
             else:
@@ -2051,22 +2274,23 @@ class FuncDeclExtern():
     A declaration of an externally defined function.\n
     fn name(decl_args) : rtype; 
     """
-    def __init__(self, builder, module, spos, name, rtype, decl_args):
+    def __init__(self, builder, module, spos, name, rtype, decl_args, var_arg=False):
         self.builder = builder
         self.module = module
         self.spos = spos
         self.name = name
         self.rtype = rtype
         self.decl_args = decl_args
+        self.var_arg = var_arg
 
     def getsourcepos(self):
         return self.spos
 
     def eval(self):
-        push_new_scope()
+        push_new_scope(self.builder)
         rtype = self.rtype.type
         argtypes = self.decl_args.get_arg_type_list()
-        fnty = ir.FunctionType(rtype.irtype, argtypes)
+        fnty = ir.FunctionType(rtype.irtype, argtypes, var_arg=self.var_arg)
         #print("%s (%s)" % (self.name.value, fnty))
         sfnty = FuncType("", fnty, rtype, self.decl_args.get_arg_stype_list())
         fname = self.name.value
@@ -2102,13 +2326,13 @@ class GlobalVarDecl():
         return self.spos
 
     def eval(self):
-        vartype = get_type_by_name(self.builder, self.module, str(self.vtype))
-        gvar = ir.GlobalVariable(self.module, vartype, self.name.value)
+        self.vtype.eval()
+        vartype = self.vtype.type
+        #vartype = get_type_by_name(self.builder, self.module, str(self.vtype))
+        gvar = ir.GlobalVariable(self.module, vartype.irtype, self.name.value)
 
         if self.initval:
             gvar.initializer = self.initval.eval()
-        else:
-            gvar.initializer = ir.Constant(vartype, 0)
         
         ptr = Value(self.name.value, vartype, gvar)
         add_new_global(self.name.value, ptr)
@@ -2141,7 +2365,7 @@ class MethodDecl():
         return self.spos
 
     def eval(self):
-        push_new_scope()
+        push_new_scope(self.builder)
         rtype = self.rtype
         argtypes = self.decl_args.get_arg_type_list()
         fnty = ir.FunctionType(rtype.get_ir_type(), argtypes)
@@ -2200,12 +2424,12 @@ class MethodDecl():
             "isDefinition":True
         }, True)
         self.builder.position_at_start(block)
-        self.builder.defer = []
+        #self.builder.defer = []
         fn.args = tuple(self.decl_args.get_arg_list(fn))
         self.block.eval()
         if not self.builder.block.is_terminated:
-            for stmt in self.builder.defer:
-                stmt.eval()
+            eval_dtor_scope()
+            eval_defer_scope()
             if isinstance(self.builder.function.function_type.return_type, ir.VoidType):
                 self.builder.ret_void()
             else:
@@ -2237,7 +2461,7 @@ class MethodDeclExtern():
         return self.spos
 
     def eval(self):
-        push_new_scope()
+        push_new_scope(self.builder)
         rtype = self.rtype.type
         argtypes = self.decl_args.get_arg_type_list()
         fnty = ir.FunctionType(rtype.irtype, argtypes)
@@ -2264,14 +2488,14 @@ class VarDecl():
     name : vtype;\n
     name : vtype = initval;
     """
-    def __init__(self, builder, module, spos, name, vtype, initval=None, spec='none'):
+    def __init__(self, builder, module, spos, name, vtype, initval=None, spec=[]):
         self.name = name
         self.vtype = vtype
         self.builder = builder
         self.module = module
         self.spos = spos
         self.initval = initval
-        self.spec = spec
+        self.spec = spec.copy()
 
     def getsourcepos(self):
         return self.spos
@@ -2281,24 +2505,23 @@ class VarDecl():
         vartype = self.vtype.type
 
         quals = []
-        if self.spec == 'const':
-            if self.initval is None:
-                lineno = self.name.getsourcepos().lineno
-                colno = self.name.getsourcepos().colno
-                throw_saturn_error(self.builder, self.module, lineno, colno, 
-                    "Can't create const variable with no initial value."
-                )
-            quals.append('const')
-        elif self.spec == 'immut':
-            if self.initval is None:
-                lineno = self.name.getsourcepos().lineno
-                colno = self.name.getsourcepos().colno
-                throw_saturn_error(self.builder, self.module, lineno, colno, 
-                    "Can't create immut variable with no initial value."
-                )
-            quals.append('immut')
-        elif self.spec == 'atomic':
-            quals.append('atomic')
+        for i in range(len(self.spec)):
+            if self.spec[i][0] == 'const':
+                if self.initval is None:
+                    lineno = self.spec[i][1].lineno
+                    colno = self.spec[i][1].colno
+                    throw_saturn_error(self.builder, self.module, lineno, colno, 
+                        "Can't create const variable with no initial value."
+                    )
+            elif self.spec[i][0] == 'immut':
+                if self.initval is None:
+                    lineno = self.spec[i][1].lineno
+                    colno = self.spec[i][1].colno
+                    throw_saturn_error(self.builder, self.module, lineno, colno, 
+                        "Can't create immut variable with no initial value."
+                    )
+
+        quals = self.spec.copy()
 
         with self.builder.goto_entry_block():
             self.builder.position_at_start(self.builder.block)
@@ -2354,13 +2577,13 @@ class VarDeclAssign():
     An automatic variable declaration and assignment statement. Uses type inference.\n
     name := initval;
     """
-    def __init__(self, builder, module, spos, name, initval, spec='none'):
+    def __init__(self, builder, module, spos, name, initval, spec=[]):
         self.name = name
         self.builder = builder
         self.module = module
         self.spos = spos
         self.initval = initval
-        self.spec = spec
+        self.spec = spec.copy()
 
     def getsourcepos(self):
         return self.spos
@@ -2370,13 +2593,13 @@ class VarDeclAssign():
         vartype = self.initval.get_type()
         
         #print('New var:', vartype, val, self.initval.get_ir_type())
-        quals = []
-        if self.spec == 'const':
-            quals.append('const')
-        elif self.spec == 'immut':
-            quals.append('immut')
-        elif self.spec == 'atomic':
-            quals.append('atomic')
+        quals = [s[0] for s in self.spec.copy()]
+        #if self.spec == 'const':
+        #    quals.append('const')
+        #elif self.spec == 'immut':
+        #    quals.append('immut')
+        #elif self.spec == 'atomic':
+        #    quals.append('atomic')
         if str(vartype.irtype) == 'void':
             #print("%s (%s)" % (str(vartype), str(vartype.irtype)))
             lineno = self.initval.getsourcepos().lineno
@@ -2541,9 +2764,9 @@ class TypeDecl():
 
 
 def calc_sizeof_struct(builder, module, stype):
-    stypeptr = stype.as_pointer()
-    null = stypeptr(stypeptr.null)
-    gep = builder.gep(null, [ir.Constant(ir.IntType(32), 1)])
+    stypeptr = stype.irtype.as_pointer()
+    null = stypeptr('zeroinitializer')
+    gep = null.gep([ir.Constant(ir.IntType(32), 1)])
     size = builder.ptrtoint(gep, ir.IntType(32))
     return size
 
@@ -2613,7 +2836,7 @@ class StructDecl():
                 types[name].add_field(fld.name, fld.ftype, fld.initvalue)
         initfs = types[name].get_fields_with_init()
         if len(initfs) > 0:
-            push_new_scope()
+            push_new_scope(self.builder)
             structty = types[name]
             structptr = structty.irtype.as_pointer()
             fnty = ir.FunctionType(ir.VoidType(), [structptr])
@@ -2673,7 +2896,12 @@ class FuncCall(Expr):
         if ptr is None:
             if name not in self.module.sglobals:
                 sfn = self.module.sfuncs[self.lvalue.get_name()]
-                aargs = [arg.get_type() for arg in self.args]
+                aargs = []
+                for arg in self.args:
+                    if arg.get_type().is_reference():
+                        aargs.append(arg.get_type().type)
+                    else:
+                        aargs.append(arg.get_type())
                 ovrld = sfn.get_overload(aargs)
                 if not ovrld:
                     lineno = self.getsourcepos().lineno
@@ -2748,13 +2976,15 @@ class ReturnStatement(Statement):
     def eval(self):
         ret_block = self.builder.append_basic_block('ret')
         with self.builder.goto_block(ret_block):
-            for stmt in self.builder.defer:
-                stmt.eval()
+            eval_dtor_scope()
+            eval_defer_scope()
             if self.value is not None:
                 self.builder.ret(self.value.eval())
             else:
                 self.builder.ret_void()
         self.builder.branch(ret_block)
+        self.builder.goto_block(ret_block)
+        self.builder.position_at_start(ret_block)
 
 
 class FallthroughStatement(Statement):
@@ -2798,6 +3028,7 @@ class DeferStatement(Statement):
 
     def eval(self):
         """TODO: Actually implement defer in a non intrusive way."""
+        push_defer(self.stmt)
         #self.builder.defer.insert(0, self.stmt)
         pass
 
@@ -2985,7 +3216,7 @@ class ForStatement():
         self.builder.branch(init)
         self.builder.goto_block(init)
         self.builder.position_at_start(init)
-        push_new_scope()
+        push_new_scope(self.builder)
         name = self.it.get_name()
         ty = self.itexpr.get_type()
         ptr = Value(name, ty, self.builder.alloca(ty.irtype, name=name))

@@ -7,13 +7,12 @@ int64 = ir.IntType(64)
 double = ir.DoubleType()
 void = ir.VoidType()
 
-compile_target = 'windows-x64'
-
 class CodeGen():
-    def __init__(self, filename, opt_level):
+    def __init__(self, filename, opt_level, compile_target):
         self.binding = binding
         self.filename = filename
         self.opt_level = opt_level
+        self.compile_target = compile_target
         self.binding.initialize()
         self.binding.initialize_native_target()
         self.binding.initialize_native_asmprinter()
@@ -24,23 +23,29 @@ class CodeGen():
     def _config_llvm(self):
         # Config LLVM
         self.module = ir.Module(name=self.filename)
-        if compile_target == 'wasm':
+        if self.compile_target == 'wasm':
             self.module.triple = "wasm32-unknown-wasi"
-        elif compile_target == 'windows-x64':
+        elif self.compile_target == 'windows-x64':
             self.module.triple = "x86_64-pc-windows-msvc"
-        elif compile_target == 'linux-x64':
+        elif self.compile_target == 'linux-x64':
             self.module.triple = "x86_64-pc-linux-gcc"
+        print(self.module.triple)
         self.module.di_file = self.module.add_debug_info("DIFile", {
             "filename": "main.sat",
             "directory": "saturn",
         })
+        is_optimized = False
+        flags = ""
+        if self.opt_level > 0:
+            is_optimized = True
+            flags += f"O{self.opt_level}"
         self.module.di_compile_unit = self.module.add_debug_info("DICompileUnit", {
             "language": ir.DIToken("DW_LANG_C99"),
             "file": self.module.di_file,
             "producer": "llvmlite x.y",
             "runtimeVersion": 2,
-            "isOptimized": True,
-            "flags": "-O2"
+            "isOptimized": is_optimized,
+            "flags": flags
         }, is_distinct=True)
 
         self.module.di_types = {}
@@ -116,6 +121,20 @@ class CodeGen():
         llvm_dbg_decl = ir.Function(self.module, llvm_dbg_decl_ty, "llvm.dbg.addr")
         self.module.llvm_dbg_decl = llvm_dbg_decl
 
+        aligned_malloc_name = 'aligned_alloc'
+        if self.compile_target == 'windows-x64':
+            aligned_malloc_name = '_aligned_malloc'
+        aligned_malloc_ty = ir.FunctionType(int8ptr, [int32, int32])
+        aligned_malloc = ir.Function(self.module, aligned_malloc_ty, name=aligned_malloc_name)
+        self.module.aligned_malloc = aligned_malloc
+
+        free_name = 'free'
+        free_ty = ir.FunctionType(void, [int8ptr])
+        if self.compile_target == 'windows-x64':
+            free_name = '_aligned_free'
+        free = ir.Function(self.module, free_ty, name=free_name)
+        self.module.free = free
+        
         # Declare strlen
         # strlen_ty = ir.FunctionType(ir.IntType(32), [voidptr_ty])
         # strlen = ir.Function(self.module, strlen_ty, name="strlen")
@@ -128,6 +147,8 @@ class CodeGen():
         """
         # Create a LLVM module object from the IR
         llvm_ir = str(self.module)
+        with open('out.ll', 'w') as output_file:
+            output_file.write(llvm_ir)
         mod = self.binding.parse_assembly(llvm_ir.replace('target triple = ', 'source_filename = "%s"\ntarget triple = ' % self.filename))
         mod.name = self.module.name
         mod.verify()
@@ -163,6 +184,26 @@ class CodeGen():
 
     def create_ir(self):
         return self._compile_ir()
+
+    def create_entry(self):
+        i32 = int32
+        i8_ptr_ptr = ir.IntType(8).as_pointer().as_pointer()
+        _entry_ty = ir.FunctionType(i32, [i32, i8_ptr_ptr])
+        _entry = ir.Function(self.module, _entry_ty, name="_entry")
+        block = _entry.append_basic_block("entry")
+        self.builder.position_at_start(block)
+        _entry_args = [
+            ir.Argument(_entry, i32),
+            ir.Argument(_entry, i8_ptr_ptr)
+        ]
+        _entry.args = tuple(_entry_args)
+        argc = self.builder.alloca(i32)
+        self.builder.store(_entry_args[0], argc)
+        argv = self.builder.alloca(i8_ptr_ptr)
+        self.builder.store(_entry_args[1], argv)
+        ret_code = self.builder.call(self.module.get_global("main"), 
+            [self.builder.load(argc), self.builder.load(argv)])
+        self.builder.ret(ret_code)
 
     def save_ir(self, filename, ir):
         with open(filename, 'w') as output_file:

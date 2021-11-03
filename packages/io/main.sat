@@ -17,6 +17,7 @@ fn(*File) delete(): void {
         fclose(this.file);
         this.file = cast<*FILE>(null);
     }
+    return;
 }
 
 fn(*File) open(path: cstring, mode: cstring): int {
@@ -28,11 +29,9 @@ fn(*File) open(path: cstring, mode: cstring): int {
 
 fn(*File) readLine(): cstring {
     if !this.file then return "";
-    buffer : *byte;
-    buffer = malloc(100);
+    buffer := make [100]byte;
     res := fgets(cast<cstring>(buffer), 100, this.file);
     if res != null then return res;
-    free(buffer);
     return "";
 }
 
