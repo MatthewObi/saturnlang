@@ -40,6 +40,8 @@ class Lexer():
         self.lexer.add('TSTRUCT',      r'\bstruct\b')
         self.lexer.add('TENUM',        r'\benum\b')
         self.lexer.add('TOPERATOR',    r'\boperator\b')
+        self.lexer.add('TPUB',         r'\bpub\b')
+        self.lexer.add('TPRIV',        r'\bpriv\b')
         self.lexer.add('TNULL',        r'\bnull\b')
         self.lexer.add('TMAKE',        r'\bmake\b')
         self.lexer.add('TSHARED',      r'\bshared\b')
@@ -91,6 +93,12 @@ class Lexer():
         
         self.lexer.add('LANGLE',    r'!<')
 
+        self.lexer.add('LSHFTEQ',   r'<<=')
+        self.lexer.add('RSHFTEQ',   r'>>=')
+
+        self.lexer.add('LSHFT',     r'<<')
+        self.lexer.add('RSHFT',     r'>>')
+
         self.lexer.add('BOOLAND',   r'\&\&')
         self.lexer.add('BOOLOR',    r'\|\|')
         self.lexer.add('BOOLEQ',    r'==')
@@ -130,8 +138,9 @@ class Lexer():
         self.lexer.add('INT',      r'\d+')
         self.lexer.add('HEXINT',   r'0x([0-9A-Fa-f]+)')
         self.lexer.add('HEXLINT',  r'0x([0-9A-Fa-f]+)l')
-        self.lexer.add('BININT',   r'0b([0-9A-Fa-f]+)')
-        self.lexer.add('BINLINT',  r'0b([0-9A-Fa-f]+)l')
+        self.lexer.add('BININT',   r'0b([0-1]+)')
+        self.lexer.add('BINLINT',  r'0b([0-1]+)l')
+        self.lexer.add('BINBYTE',  r'0b([0-1]+)b')
 
         self.lexer.add('DOT', r'\.')
         self.lexer.add('ADD', r'\+')

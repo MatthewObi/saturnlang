@@ -1,38 +1,41 @@
 from rply import ParserGenerator, Token
-from ast import ( 
-    Program, CodeBlock, Statement, ReturnStatement, BreakStatement, ContinueStatement, FallthroughStatement, DeferStatement,
-    PackageDecl, ImportDecl, ImportDeclExtern, CIncludeDecl, CDeclareDecl, TypeDecl, StructField, StructDeclBody, StructDecl,
-    Sum, Sub, Mul, Div, Mod, And, Or, Xor, BinaryNot, BoolAnd, BoolOr, BoolNot, Negate, Print, 
+from ast import (
+    Program, CodeBlock, Statement, ReturnStatement, BreakStatement, ContinueStatement, FallthroughStatement,
+    DeferStatement,
+    PackageDecl, ImportDecl, ImportDeclExtern, CIncludeDecl, CDeclareDecl, TypeDecl, StructField, StructDeclBody,
+    StructDecl,
+    Sum, Sub, Mul, Div, Mod, ShiftLeft, ShiftRight, And, Or, Xor, BinaryNot, BoolAnd, BoolOr, BoolNot, Negate, Print,
     AddressOf, DerefOf, ElementOf, TupleElementOf,
-    Number, Integer, UInteger, Integer64, UInteger64, Float, Double, HalfFloat, Byte, StringLiteral, MultilineStringLiteral,
+    Integer, UInteger, Integer64, UInteger64, Float, Double, HalfFloat, Byte, StringLiteral, MultilineStringLiteral,
     StructLiteralElement, StructLiteralBody, StructLiteral, Null,
-    ArrayLiteralElement, ArrayLiteralBody, ArrayLiteral, TypeExpr, TupleTypeExpr, FuncTypeExpr,
+    ArrayLiteralElement, ArrayLiteralBody, ArrayLiteral, TypeExpr, TupleTypeExpr, OptionalTypeExpr, FuncTypeExpr,
     TupleLiteralElement, TupleLiteralBody, TupleLiteral,
-    FuncDecl, FuncDeclExtern, FuncArgList, FuncArg, GlobalVarDecl, VarDecl, VarDeclAssign, 
+    FuncDecl, FuncDeclExtern, FuncArgList, FuncArg, GlobalVarDecl, VarDecl, VarDeclAssign,
     MethodDecl, MethodDeclExtern,
     LValue, LValueField, FuncCall, MethodCall, CastExpr, SelectExpr, MakeExpr, MakeSharedExpr,
     Assignment, AddAssignment, SubAssignment, MulAssignment, ModAssignment, AndAssignment, OrAssignment, XorAssignment,
-    Boolean, Spaceship, BooleanEq, BooleanNeq, BooleanGte, BooleanGt, BooleanLte, BooleanLt, 
+    Boolean, Spaceship, BooleanEq, BooleanNeq, BooleanGte, BooleanGt, BooleanLte, BooleanLt,
     IfStatement, WhileStatement, DoWhileStatement, SwitchCase, SwitchDefaultCase, SwitchBody, SwitchStatement,
-    ForStatement, IterExpr
+    ForStatement, IterExpr, PointerTypeExpr, ArrayTypeExpr
 )
 from serror import throw_saturn_error
 
 
 class Parser():
-    def __init__(self, module, builder, decl_mode=False):
+    def __init__(self, module, builder, package, decl_mode=False):
         self.pg = ParserGenerator(
             # A list of all token names accepted by the parser.
             ['TPACKAGE', 'TIMPORT', 'TCINCLUDE', 'TCDECLARE',
              'INT', 'UINT', 'LONGINT', 'ULONGINT', 'BYTE', 'HALF', 'FLOAT', 'DOUBLE', 'STRING', 'MLSTRING',
              'IDENT', 'TPRINT', 'DOT', 'TRETURN', 'LPAREN', 'RPAREN', 'LBRACKET', 'RBRACKET',
-             'SEMICOLON', 'ADD', 'SUB', 'MUL', 'DIV', 'MOD', 'AND', 'OR', 'XOR', 'BOOLAND', 'BOOLOR',
-             'TFN', 'COLON', 'LBRACE', 'RBRACE', 'COMMA', 'CC', 
+             'SEMICOLON', 'ADD', 'SUB', 'MUL', 'DIV', 'MOD', 'LSHFT', 'RSHFT',
+             'AND', 'OR', 'XOR', 'BOOLAND', 'BOOLOR', 'BINNOT',
+             'TFN', 'TPUB', 'TPRIV', 'COLON', 'LBRACE', 'RBRACE', 'COMMA', 'CC',
              'EQ', 'CEQ', 'ADDEQ', 'SUBEQ', 'MULEQ', 'MODEQ', 'ANDEQ', 'OREQ', 'XOREQ',
              'TIF', 'TELSE', 'TWHILE', 'TTHEN', 'TDO', 'TBREAK', 'TCONTINUE', 'TFALLTHROUGH', 'TDEFER',
              'TSWITCH', 'TCASE', 'TDEFAULT', 'TFOR', 'TIN', 'DOTDOT', 'ELIPSES',
              'TCONST', 'TIMMUT', 'TMUT', 'TREADONLY', 'TNOCAPTURE', 'TATOMIC', 
-             'TTYPE', 'TSTRUCT', 'TTUPLE', 'TCAST', 'TOPERATOR', 'TMAKE', 'TSHARED', 'TOWNED',
+             'TTYPE', 'TSTRUCT', 'TTUPLE', 'TOPTIONAL', 'TCAST', 'TOPERATOR', 'TMAKE', 'TSHARED', 'TOWNED',
              'BOOLEQ', 'BOOLNEQ', 'BOOLGT', 'BOOLLT', 'BOOLGTE', 'BOOLLTE', 'SPACESHIP', 'BOOLNOT',
              'TTRUE', 'TFALSE', 'TNULL'],
 
@@ -42,19 +45,23 @@ class Parser():
                 ('left', ['BOOLEQ', 'BOOLNEQ', 'BOOLGT', 'BOOLLT', 'BOOLGTE', 'BOOLLTE', 'SPACESHIP']),
                 ('left', ['ADD', 'SUB']),
                 ('left', ['MUL', 'DIV', 'MOD']),
-                ('right', ['BOOLNOT'])
+                ('right', ['BOOLNOT', 'BINNOT'])
             ]
         )
         self.module = module
         self.builder = builder
+        self.package = package
         self.decl_mode = decl_mode
 
     def parse(self):
         @self.pg.production('program : program gstmt')
         @self.pg.production('program : gstmt')
+        @self.pg.production('program : ')
         def program(p):
-            if(len(p) == 1):
-                return Program(p[0])
+            if len(p) == 0:
+                return Program(self.package)
+            elif len(p) == 1:
+                return Program(self.package, p[0])
             else:
                 p[0].add(p[1])
                 return p[0]
@@ -72,44 +79,68 @@ class Parser():
         def gstmt(p):
            return p[0]
 
+        @self.pg.production('visibility_decl : TPUB')
+        @self.pg.production('visibility_decl : TPRIV')
+        def visibility_decl(p):
+            return p[0]
+
         @self.pg.production('func_decl : TFN IDENT LPAREN decl_args RPAREN COLON typeexpr LBRACE block RBRACE')
+        @self.pg.production('func_decl : visibility_decl TFN IDENT LPAREN decl_args RPAREN COLON typeexpr LBRACE block RBRACE')
         def func_decl(p):
-            name = p[1]
-            declargs = p[3]
-            rtype = p[6]
-            block = p[8]
-            spos = p[0].getsourcepos()
-            if not self.decl_mode:
-                return FuncDecl(self.builder, self.module, spos, name, rtype, block, declargs)
-            return FuncDeclExtern(self.builder, self.module, spos, name, rtype, declargs)
+            if p[0].gettokentype() == 'TFN':
+                name = p[1]
+                declargs = p[3]
+                rtype = p[6]
+                block = p[8]
+                spos = p[0].getsourcepos()
+                if not self.decl_mode:
+                    return FuncDecl(self.builder, self.module, self.package, spos, name, rtype, block, declargs)
+                return FuncDeclExtern(self.builder, self.module, self.package, spos, name, rtype, declargs)
+            else:
+                if self.decl_mode and p[0].gettokentype() == 'TPRIV':
+                    return None
+                if p[0].gettokentype() == 'TPRIV':
+                    visibility = 0
+                elif p[0].gettokentype() == 'TPUB':
+                    visibility = 2
+                else:
+                    visibility = 1
+                name = p[2]
+                declargs = p[4]
+                rtype = p[7]
+                block = p[9]
+                spos = p[0].getsourcepos()
+                if not self.decl_mode:
+                    return FuncDecl(self.builder, self.module, self.package, spos, name, rtype, block, declargs, visibility=visibility)
+                return FuncDeclExtern(self.builder, self.module, self.package, spos, name, rtype, declargs)
 
         @self.pg.production('func_decl : TFN IDENT LPAREN decl_args RPAREN LBRACE block RBRACE')
         def func_decl_retvoid(p):
             name = p[1]
             declargs = p[3]
             spostexpr = p[5].getsourcepos()
-            rtype = TypeExpr(self.builder, self.module, 
+            rtype = TypeExpr(self.builder, self.module, self.package,
                 spostexpr, 
-                LValue(self.builder, self.module, spostexpr, "void")
+                LValue(self.builder, self.module, self.package, spostexpr, "void")
             )
             block = p[6]
             spos = p[0].getsourcepos()
             if not self.decl_mode:
-                return FuncDecl(self.builder, self.module, spos, name, rtype, block, declargs)
-            return FuncDeclExtern(self.builder, self.module, spos, name, rtype, declargs)
+                return FuncDecl(self.builder, self.module, self.package, spos, name, rtype, block, declargs)
+            return FuncDeclExtern(self.builder, self.module, self.package, spos, name, rtype, declargs)
 
         @self.pg.production('func_decl : TFN IDENT LPAREN decl_args RPAREN LBRACE RBRACE')
         def func_decl_retvoid_empty(p):
             name = p[1]
             declargs = p[3]
             spostexpr = p[5].getsourcepos()
-            rtype = TypeExpr(self.builder, self.module, 
+            rtype = TypeExpr(self.builder, self.module, self.package,
                 spostexpr, 
-                LValue(self.builder, self.module, spostexpr, "void")
+                LValue(self.builder, self.module, self.package, spostexpr, "void")
             )
             spos = p[0].getsourcepos()
-            block = CodeBlock(self.builder, self.module, spos, None)
-            return FuncDecl(self.builder, self.module, spos, name, rtype, block, declargs)
+            block = CodeBlock(self.builder, self.module, self.package, spos, None)
+            return FuncDecl(self.builder, self.module, self.package, spos, name, rtype, block, declargs)
 
         @self.pg.production('func_decl_extern : TFN IDENT LPAREN decl_args RPAREN COLON typeexpr SEMICOLON')
         def func_decl_extern(p):
@@ -117,7 +148,7 @@ class Parser():
             declargs = p[3]
             rtype = p[6]
             spos = p[0].getsourcepos()
-            return FuncDeclExtern(self.builder, self.module, spos, name, rtype, declargs)
+            return FuncDeclExtern(self.builder, self.module, self.package, spos, name, rtype, declargs)
 
         @self.pg.production('func_decl_extern : TFN IDENT LPAREN decl_args COMMA ELIPSES RPAREN COLON typeexpr SEMICOLON')
         def func_decl_extern_varargs(p):
@@ -125,17 +156,17 @@ class Parser():
             declargs = p[3]
             rtype = p[8]
             spos = p[0].getsourcepos()
-            return FuncDeclExtern(self.builder, self.module, spos, name, rtype, declargs, var_arg=True)
+            return FuncDeclExtern(self.builder, self.module, self.package, spos, name, rtype, declargs, var_arg=True)
 
         @self.pg.production('decl_args : decl_args COMMA decl_arg')
         @self.pg.production('decl_args : decl_arg')
         @self.pg.production('decl_args : ')
         def decl_args(p):
             if len(p) == 0:
-                return FuncArgList(self.builder, self.module, None)
+                return FuncArgList(self.builder, self.module, self.package, None)
             if len(p) == 1:
                 spos = p[0].getsourcepos()
-                return FuncArgList(self.builder, self.module, spos, p[0])
+                return FuncArgList(self.builder, self.module, self.package, spos, p[0])
             else:
                 p[0].add(p[2])
                 return p[0]
@@ -145,21 +176,21 @@ class Parser():
             name = p[0]
             vtype = p[2]
             spos = p[0].getsourcepos()
-            return FuncArg(self.builder, self.module, spos, name, vtype)
+            return FuncArg(self.builder, self.module, self.package, spos, name, vtype)
 
         @self.pg.production('decl_arg : storage_spec_list IDENT COLON typeexpr')
         def decl_arg_spec(p):
             name = p[1]
             vtype = p[3]
             spos = p[1].getsourcepos()
-            return FuncArg(self.builder, self.module, spos, name, vtype, [i[0] for i in p[0]])
+            return FuncArg(self.builder, self.module, self.package, spos, name, vtype, [i[0] for i in p[0]])
 
         @self.pg.production('gvar_decl : IDENT COLON typeexpr SEMICOLON')
         def gvar_decl(p):
             name = p[0]
             vtype = p[2]
             spos = p[0].getsourcepos()
-            return GlobalVarDecl(self.builder, self.module, spos, name, vtype)
+            return GlobalVarDecl(self.builder, self.module, self.package, spos, name, vtype)
 
         @self.pg.production('gvar_decl : IDENT COLON typeexpr EQ expr SEMICOLON')
         def gvar_decl_init(p):
@@ -167,7 +198,7 @@ class Parser():
             vtype = p[2]
             initval = p[4]
             spos = p[0].getsourcepos()
-            return GlobalVarDecl(self.builder, self.module, spos, name, vtype, initval)
+            return GlobalVarDecl(self.builder, self.module, self.package, spos, name, vtype, initval)
 
         @self.pg.production('method_decl : TFN LPAREN MUL lvalue RPAREN IDENT LPAREN decl_args RPAREN COLON typeexpr LBRACE block RBRACE')
         def method_decl(p):
@@ -178,8 +209,8 @@ class Parser():
             block = p[12]
             spos = p[0].getsourcepos()
             if not self.decl_mode:
-                return MethodDecl(self.builder, self.module, spos, name, rtype, block, declargs, struct)
-            return MethodDeclExtern(self.builder, self.module, spos, name, rtype, declargs, struct)
+                return MethodDecl(self.builder, self.module, self.package, spos, name, rtype, block, declargs, struct)
+            return MethodDeclExtern(self.builder, self.module, self.package, spos, name, rtype, declargs, struct)
 
         @self.pg.production('method_decl : TFN LPAREN MUL lvalue RPAREN TOPERATOR EQ LPAREN decl_args RPAREN COLON typeexpr LBRACE block RBRACE')
         def method_decl_assign(p):
@@ -190,8 +221,8 @@ class Parser():
             block = p[13]
             spos = p[0].getsourcepos()
             if not self.decl_mode:
-                return MethodDecl(self.builder, self.module, spos, name, rtype, block, declargs, struct)
-            return MethodDeclExtern(self.builder, self.module, spos, name, rtype, declargs, struct)
+                return MethodDecl(self.builder, self.module, self.package, spos, name, rtype, block, declargs, struct)
+            return MethodDeclExtern(self.builder, self.module, self.package, spos, name, rtype, declargs, struct)
 
         @self.pg.production('method_decl : TFN LPAREN MUL lvalue RPAREN TOPERATOR SPACESHIP LPAREN decl_args RPAREN COLON typeexpr LBRACE block RBRACE')
         def method_decl_assign(p):
@@ -202,45 +233,71 @@ class Parser():
             block = p[13]
             spos = p[0].getsourcepos()
             if not self.decl_mode:
-                return MethodDecl(self.builder, self.module, spos, name, rtype, block, declargs, struct)
-            return MethodDeclExtern(self.builder, self.module, spos, name, rtype, declargs, struct)
+                return MethodDecl(self.builder, self.module, self.package, spos, name, rtype, block, declargs, struct)
+            return MethodDeclExtern(self.builder, self.module, self.package, spos, name, rtype, declargs, struct)
 
         @self.pg.production('pack_decl : TPACKAGE lvalue SEMICOLON')
         def pack_decl(p):
             spos = p[0].getsourcepos()
-            return PackageDecl(self.builder, self.module, spos, p[1])
+            return PackageDecl(self.builder, self.module, self.package, spos, p[1])
 
         @self.pg.production('import_decl : TIMPORT lvalue SEMICOLON')
         def import_decl(p):
             spos = p[0].getsourcepos()
             if not self.decl_mode:
-                return ImportDecl(self.builder, self.module, spos, p[1])
-            return ImportDeclExtern(self.builder, self.module, spos, p[1])
+                return ImportDecl(self.builder, self.module, self.package, spos, p[1])
+            return ImportDeclExtern(self.builder, self.module, self.package, spos, p[1])
+
+        @self.pg.production('import_decl : TIMPORT lvalue CC MUL SEMICOLON')
+        def import_decl_all(p):
+            spos = p[0].getsourcepos()
+            if not self.decl_mode:
+                return ImportDecl(self.builder, self.module, self.package, spos, p[1], import_all=True)
+            return ImportDeclExtern(self.builder, self.module, self.package, spos, p[1])
+
+        @self.pg.production('import_decl : TIMPORT lvalue CC LBRACE symbols_list RBRACE SEMICOLON')
+        def import_decl_symbols(p):
+            spos = p[0].getsourcepos()
+            if not self.decl_mode:
+                return ImportDecl(self.builder, self.module, self.package, spos, p[1], symbols_to_import=p[4])
+            return ImportDeclExtern(self.builder, self.module, self.package, spos, p[1])
+
+        @self.pg.production('symbols_list : lvalue')
+        @self.pg.production('symbols_list : symbols_list COMMA lvalue')
+        @self.pg.production('symbols_list : symbols_list COMMA')
+        def symbols_list(p):
+            if len(p) == 1:
+                return [p[0]]
+            elif len(p) == 2:
+                p[0].append(p[1])
+                return p[0]
+            else:
+                return p[0]
 
         @self.pg.production('c_include_decl : TCINCLUDE STRING SEMICOLON')
         def c_include_decl(p):
             spos = p[0].getsourcepos()
-            return CIncludeDecl(self.builder, self.module, spos, p[1])
+            return CIncludeDecl(self.builder, self.module, self.package, spos, p[1], decl_mode=self.decl_mode)
 
         @self.pg.production('c_declare_decl : TCDECLARE LBRACE gstmt_list RBRACE')
         def c_declare_decl(p):
             spos = p[0].getsourcepos()
-            return CDeclareDecl(self.builder, self.module, spos, p[2])
+            return CDeclareDecl(self.builder, self.module, self.package, spos, p[2])
 
         @self.pg.production('type_decl : TTYPE lvalue COLON typeexpr SEMICOLON')
         def type_decl(p):
             spos = p[0].getsourcepos()
-            return TypeDecl(self.builder, self.module, spos, p[1], p[3])
+            return TypeDecl(self.builder, self.module, self.package, spos, p[1], p[3])
 
         @self.pg.production('struct_decl : TTYPE lvalue COLON TSTRUCT LBRACE struct_decl_body RBRACE')
         def struct_decl(p):
             spos = p[0].getsourcepos()
-            return StructDecl(self.builder, self.module, spos, p[1], p[5], self.decl_mode)
+            return StructDecl(self.builder, self.module, self.package, spos, p[1], p[5], self.decl_mode)
 
         @self.pg.production('struct_decl : TTYPE lvalue COLON TSTRUCT SEMICOLON')
         def struct_decl_opaque(p):
             spos = p[0].getsourcepos()
-            return StructDecl(self.builder, self.module, spos, p[1], None, self.decl_mode)
+            return StructDecl(self.builder, self.module, self.package, spos, p[1], None, self.decl_mode)
 
         @self.pg.production('struct_decl_body : struct_decl_body struct_decl_field')
         @self.pg.production('struct_decl_body : struct_decl_field')
@@ -252,22 +309,22 @@ class Parser():
                 return p[0]
             elif len(p) == 1:
                 spos = p[0].getsourcepos()
-                sdb = StructDeclBody(self.builder, self.module, spos)
+                sdb = StructDeclBody(self.builder, self.module, self.package, spos)
                 sdb.add(p[0])
                 return sdb
             else:
                 spos = None
-                return StructDeclBody(self.builder, self.module, spos)
+                return StructDeclBody(self.builder, self.module, self.package, spos)
 
         @self.pg.production('struct_decl_field : IDENT COLON typeexpr SEMICOLON')
         def struct_decl_field(p):
             spos = p[0].getsourcepos()
-            return StructField(self.builder, self.module, spos, p[0], p[2])
+            return StructField(self.builder, self.module, self.package, spos, p[0], p[2])
 
         @self.pg.production('struct_decl_field : IDENT COLON typeexpr EQ expr SEMICOLON')
         def struct_decl_field_init(p):
             spos = p[0].getsourcepos()
-            return StructField(self.builder, self.module, spos, p[0], p[2], p[4])
+            return StructField(self.builder, self.module, self.package, spos, p[0], p[2], p[4])
 
         @self.pg.production('gstmt_list : ')
         @self.pg.production('gstmt_list : gstmt')
@@ -286,17 +343,22 @@ class Parser():
         def block(p):
             if(len(p) == 1):
                 spos = p[0].getsourcepos()
-                return CodeBlock(self.builder, self.module, spos, p[0])
+                return CodeBlock(self.builder, self.module, self.package, spos, p[0])
             else:
                 p[0].add(p[1])
                 return p[0]
+
+        @self.pg.production('stmt : SEMICOLON')
+        def stmt_empty(p):
+            spos = p[0].getsourcepos()
+            return Statement(self.builder, self.module, self.package, spos, None)
 
         @self.pg.production('stmt : expr SEMICOLON')
         @self.pg.production('stmt : TRETURN expr SEMICOLON')
         def stmt(p):
             if len(p) == 3:
                 spos = p[0].getsourcepos()
-                return ReturnStatement(self.builder, self.module, spos, p[1])
+                return ReturnStatement(self.builder, self.module, self.package, spos, p[1])
             else:
                 return p[0]
 
@@ -304,48 +366,48 @@ class Parser():
         @self.pg.production('stmt : TRETURN SEMICOLON')
         def stmt_retvoid(p):
             spos = p[0].getsourcepos()
-            return ReturnStatement(self.builder, self.module, spos, None)
+            return ReturnStatement(self.builder, self.module, self.package, spos, None)
 
         @self.pg.production('stmt : TBREAK SEMICOLON')
         def stmt_break(p):
             spos = p[0].getsourcepos()
-            return BreakStatement(self.builder, self.module, spos, None)
+            return BreakStatement(self.builder, self.module, self.package, spos, None)
 
         @self.pg.production('stmt : TCONTINUE SEMICOLON')
         def stmt_continue(p):
             spos = p[0].getsourcepos()
-            return ContinueStatement(self.builder, self.module, spos, None)
+            return ContinueStatement(self.builder, self.module, self.package, spos, None)
 
         @self.pg.production('stmt : TFALLTHROUGH SEMICOLON')
         def stmt_fallthrough(p):
             spos = p[0].getsourcepos()
-            return FallthroughStatement(self.builder, self.module, spos, None)
+            return FallthroughStatement(self.builder, self.module, self.package, spos, None)
 
         @self.pg.production('stmt : TDEFER stmt')
         def stmt_defer(p):
             spos = p[0].getsourcepos()
-            block = CodeBlock(self.builder, self.module, p[1].getsourcepos(), p[1])
-            return DeferStatement(self.builder, self.module, spos, block)
+            block = CodeBlock(self.builder, self.module, self.package, p[1].getsourcepos(), p[1])
+            return DeferStatement(self.builder, self.module, self.package, spos, block)
 
         @self.pg.production('stmt : TDEFER LBRACE block RBRACE')
         def stmt_defer_block(p):
             spos = p[0].getsourcepos()
-            return DeferStatement(self.builder, self.module, spos, p[2])
+            return DeferStatement(self.builder, self.module, self.package, spos, p[2])
 
         @self.pg.production('stmt : IDENT COLON typeexpr SEMICOLON')
         def stmt_var_decl(p):
             spos = p[0].getsourcepos()
-            return VarDecl(self.builder, self.module, spos, p[0], p[2])
+            return VarDecl(self.builder, self.module, self.package, spos, p[0], p[2])
 
         @self.pg.production('stmt : IDENT COLON typeexpr EQ expr SEMICOLON')
         def stmt_var_decl_eq(p):
             spos = p[0].getsourcepos()
-            return VarDecl(self.builder, self.module, spos, p[0], p[2], p[4])
+            return VarDecl(self.builder, self.module, self.package, spos, p[0], p[2], p[4])
 
         @self.pg.production('stmt : storage_spec_list IDENT COLON typeexpr EQ expr SEMICOLON')
         def stmt_var_decl_eq_spec(p):
             spos = p[1].getsourcepos()
-            return VarDecl(self.builder, self.module, spos, p[1], p[3], p[5], p[0])
+            return VarDecl(self.builder, self.module, self.package, spos, p[1], p[3], p[5], p[0])
 
         @self.pg.production('storage_spec_list : storage_spec')
         @self.pg.production('storage_spec_list : storage_spec_list storage_spec')
@@ -383,73 +445,79 @@ class Parser():
         @self.pg.production('stmt : IDENT CEQ expr SEMICOLON')
         def stmt_var_decl_ceq(p):
             spos = p[0].getsourcepos()
-            return VarDeclAssign(self.builder, self.module, spos, p[0], p[2])
+            return VarDeclAssign(self.builder, self.module, self.package, spos, p[0], p[2])
 
         @self.pg.production('stmt : storage_spec_list IDENT CEQ expr SEMICOLON')
         def stmt_var_decl_ceq_spec(p):
             spos = p[1].getsourcepos()
-            return VarDeclAssign(self.builder, self.module, spos, p[1], p[3], p[0])
+            return VarDeclAssign(self.builder, self.module, self.package, spos, p[1], p[3], p[0])
 
         @self.pg.production('stmt : lvalue_expr EQ expr SEMICOLON')
         def stmt_assign(p):
             spos = p[0].getsourcepos()
-            return Assignment(self.builder, self.module, spos, p[0], p[2])
+            return Assignment(self.builder, self.module, self.package, spos, p[0], p[2])
 
         @self.pg.production('stmt : lvalue_expr ADDEQ expr SEMICOLON')
         def stmt_assign_add(p):
             spos = p[0].getsourcepos()
-            return AddAssignment(self.builder, self.module, spos, p[0], p[2])
+            return AddAssignment(self.builder, self.module, self.package, spos, p[0], p[2])
 
         @self.pg.production('stmt : lvalue_expr SUBEQ expr SEMICOLON')
         def stmt_assign_sub(p):
             spos = p[0].getsourcepos()
-            return SubAssignment(self.builder, self.module, spos, p[0], p[2])
+            return SubAssignment(self.builder, self.module, self.package, spos, p[0], p[2])
 
         @self.pg.production('stmt : lvalue_expr MULEQ expr SEMICOLON')
         def stmt_assign_mul(p):
             spos = p[0].getsourcepos()
-            return MulAssignment(self.builder, self.module, spos, p[0], p[2])
+            return MulAssignment(self.builder, self.module, self.package, spos, p[0], p[2])
 
         @self.pg.production('stmt : lvalue_expr MODEQ expr SEMICOLON')
         def stmt_assign_mul(p):
             spos = p[0].getsourcepos()
-            return ModAssignment(self.builder, self.module, spos, p[0], p[2])
+            return ModAssignment(self.builder, self.module, self.package, spos, p[0], p[2])
 
         @self.pg.production('stmt : lvalue_expr ANDEQ expr SEMICOLON')
         def stmt_assign_and(p):
             spos = p[0].getsourcepos()
-            return AndAssignment(self.builder, self.module, spos, p[0], p[2])
+            return AndAssignment(self.builder, self.module, self.package, spos, p[0], p[2])
 
         @self.pg.production('stmt : lvalue_expr OREQ expr SEMICOLON')
         def stmt_assign_or(p):
             spos = p[0].getsourcepos()
-            return OrAssignment(self.builder, self.module, spos, p[0], p[2])
+            return OrAssignment(self.builder, self.module, self.package, spos, p[0], p[2])
 
         @self.pg.production('stmt : lvalue_expr XOREQ expr SEMICOLON')
         def stmt_assign_xor(p):
             spos = p[0].getsourcepos()
-            return XorAssignment(self.builder, self.module, spos, p[0], p[2])
+            return XorAssignment(self.builder, self.module, self.package, spos, p[0], p[2])
 
         @self.pg.production('typeexpr : lvalue')
         @self.pg.production('typeexpr : MUL typeexpr')
-        @self.pg.production('typeexpr : LBRACKET INT RBRACKET typeexpr')
+        @self.pg.production('typeexpr : AND typeexpr')
+        @self.pg.production('typeexpr : LBRACKET expr RBRACKET typeexpr')
         def typeexpr(p):
             spos = p[0].getsourcepos()
             if len(p) == 1:
-                return TypeExpr(self.builder, self.module, spos, p[0])
+                return TypeExpr(self.builder, self.module, self.package, spos, p[0], self.decl_mode)
             else:
                 if p[0].gettokentype() == 'MUL':
-                    p[1].add_pointer_qualifier()
-                    return p[1]
+                    return PointerTypeExpr(self.builder, self.module, self.package, spos, p[1])
+                elif p[0].gettokentype() == 'AND':
+                    return PointerTypeExpr(self.builder, self.module, self.package, spos, p[1])
                 else:
                     size = p[1]
-                    p[3].add_array_qualifier(size)
-                    return p[3]
+                    return ArrayTypeExpr(self.builder, self.module, self.package, spos, p[3], size)
 
         @self.pg.production('typeexpr : TTUPLE LPAREN tuple_type_list RPAREN')
         def typeexpr_tuple(p):
             spos = p[0].getsourcepos()
-            return TupleTypeExpr(self.builder, self.module, spos, p[2])
+            return TupleTypeExpr(self.builder, self.module, self.package, spos, p[2])
+
+        @self.pg.production('typeexpr : TOPTIONAL LPAREN typeexpr RPAREN')
+        def typeexpr_optional(p):
+            spos = p[0].getsourcepos()
+            return OptionalTypeExpr(self.builder, self.module, self.package, spos, p[2])
 
         @self.pg.production('tuple_type_list : ')
         @self.pg.production('tuple_type_list : typeexpr')
@@ -466,7 +534,7 @@ class Parser():
         @self.pg.production('typeexpr : TFN LPAREN func_arg_type_list RPAREN typeexpr')
         def typeexpr_func(p):
             spos = p[0].getsourcepos()
-            return FuncTypeExpr(self.builder, self.module, spos, p[2], p[4])
+            return FuncTypeExpr(self.builder, self.module, self.package, spos, p[2], p[4])
 
         @self.pg.production('func_arg_type_list : ')
         @self.pg.production('func_arg_type_list : typeexpr')
@@ -491,24 +559,24 @@ class Parser():
         @self.pg.production('stmt : TWHILE expr LBRACE block RBRACE')
         def stmt_while(p):
             spos = p[0].getsourcepos()
-            return WhileStatement(self.builder, self.module, spos, p[1], p[3])
+            return WhileStatement(self.builder, self.module, self.package, spos, p[1], p[3])
 
         @self.pg.production('stmt : TWHILE expr TDO stmt')
         def stmt_while_do(p):
             spos = p[0].getsourcepos()
-            block = CodeBlock(self.builder, self.module, p[3].getsourcepos(), p[3])
-            return WhileStatement(self.builder, self.module, spos, p[1], block)
+            block = CodeBlock(self.builder, self.module, self.package, p[3].getsourcepos(), p[3])
+            return WhileStatement(self.builder, self.module, self.package, spos, p[1], block)
 
         @self.pg.production('stmt : TDO LBRACE block RBRACE TWHILE expr SEMICOLON')
         def stmt_dowhile(p):
             spos = p[0].getsourcepos()
-            return DoWhileStatement(self.builder, self.module, spos, p[5], p[2])
+            return DoWhileStatement(self.builder, self.module, self.package, spos, p[5], p[2])
         
         @self.pg.production('stmt : TDO expr TWHILE expr SEMICOLON')
         def stmt_dowhile_expr(p):
             spos = p[0].getsourcepos()
-            block = CodeBlock(self.builder, self.module, p[1].getsourcepos(), p[1])
-            return DoWhileStatement(self.builder, self.module, spos, p[3], block)
+            block = CodeBlock(self.builder, self.module, self.package, p[1].getsourcepos(), p[1])
+            return DoWhileStatement(self.builder, self.module, self.package, spos, p[3], block)
 
         @self.pg.production('stmt : for_stmt')
         def stmt_for(p):
@@ -517,34 +585,34 @@ class Parser():
         @self.pg.production('if_stmt : TIF expr LBRACE block RBRACE')
         def if_stmt(p):
             spos = p[0].getsourcepos()
-            return IfStatement(self.builder, self.module, spos, p[1], p[3])
+            return IfStatement(self.builder, self.module, self.package, spos, p[1], p[3])
 
         @self.pg.production('if_stmt : TIF expr LBRACE block RBRACE TELSE LBRACE block RBRACE')
         def if_stmt_else(p):
             spos = p[0].getsourcepos()
-            return IfStatement(self.builder, self.module, spos, p[1], p[3], el=p[7])
+            return IfStatement(self.builder, self.module, self.package, spos, p[1], p[3], el=p[7])
 
         @self.pg.production('if_stmt : TIF expr TTHEN stmt')
         def if_stmt_then(p):
             spos = p[0].getsourcepos()
-            block = CodeBlock(self.module, self.builder, p[3].getsourcepos(), p[3])
-            return IfStatement(self.builder, self.module, spos, p[1], block)
+            block = CodeBlock(self.module, self.builder, self.package, p[3].getsourcepos(), p[3])
+            return IfStatement(self.builder, self.module, self.package, spos, p[1], block)
 
         @self.pg.production('if_stmt : TIF expr TTHEN stmt TELSE stmt')
         def if_stmt_then_else(p):
             spos = p[0].getsourcepos()
-            ifblock = CodeBlock(self.module, self.builder, p[3].getsourcepos(), p[3])
-            elblock = CodeBlock(self.module, self.builder, p[5].getsourcepos(), p[5])
-            return IfStatement(self.builder, self.module, spos, p[1], ifblock, el=elblock)
+            ifblock = CodeBlock(self.module, self.builder, self.package, p[3].getsourcepos(), p[3])
+            elblock = CodeBlock(self.module, self.builder, self.package, p[5].getsourcepos(), p[5])
+            return IfStatement(self.builder, self.module, self.package, spos, p[1], ifblock, el=elblock)
 
         @self.pg.production('switch_stmt : TSWITCH lvalue_expr LBRACE switch_body RBRACE')
         @self.pg.production('switch_stmt : TSWITCH lvalue_expr LBRACE RBRACE')
         def switch_stmt(p):
             spos = p[0].getsourcepos()
             if len(p) == 5:
-                return SwitchStatement(self.builder, self.module, spos, p[1], p[3])
+                return SwitchStatement(self.builder, self.module, self.package, spos, p[1], p[3])
             else:
-                return SwitchStatement(self.builder, self.module, spos, p[1])
+                return SwitchStatement(self.builder, self.module, self.package, spos, p[1])
 
         @self.pg.production('switch_body : switch_body case_expr')
         @self.pg.production('switch_body : switch_body default_case_expr')
@@ -555,7 +623,7 @@ class Parser():
             if len(p) == 2:
                 if isinstance(p[1], SwitchDefaultCase):
                     if p[0].default_case is not None:
-                        throw_saturn_error(self.builder, self.module, spos.lineno, spos.colno, 
+                        throw_saturn_error(self.builder, self.module, spos.lineno, spos.colno,
                             "Cannot have more than one default case in a switch statement."
                         )
                     p[0].set_default(p[1])
@@ -565,14 +633,14 @@ class Parser():
                     return p[0]
             else:
                 if isinstance(p[0], SwitchDefaultCase):
-                    return SwitchBody(self.builder, self.module, spos, [], p[0])
+                    return SwitchBody(self.builder, self.module, self.package, spos, [], p[0])
                 else:
-                    return SwitchBody(self.builder, self.module, spos, [p[0]])
+                    return SwitchBody(self.builder, self.module, self.package, spos, [p[0]])
 
         @self.pg.production('case_expr : TCASE expr COLON')
         def case_expr(p):
             spos = p[0].getsourcepos()
-            return SwitchCase(self.builder, self.module, spos, p[1], [])
+            return SwitchCase(self.builder, self.module, self.package, spos, p[1], [])
         
         @self.pg.production('case_expr : case_expr stmt')
         def case_expr_stmt(p):
@@ -584,7 +652,7 @@ class Parser():
         def default_case_expr(p):
             if not isinstance(p[0], SwitchDefaultCase):
                 spos = p[0].getsourcepos()
-                return SwitchDefaultCase(self.builder, self.module, spos, [])
+                return SwitchDefaultCase(self.builder, self.module, self.package, spos, [])
             else:
                 p[0].add_stmt(p[1])
                 return p[0]
@@ -592,13 +660,13 @@ class Parser():
         @self.pg.production('for_stmt : TFOR lvalue TIN iter_expr LBRACE block RBRACE')
         def for_stmt(p):
             spos = p[0].getsourcepos()
-            return ForStatement(self.builder, self.module, spos, p[1], p[3], p[5])
+            return ForStatement(self.builder, self.module, self.package, spos, p[1], p[3], p[5])
 
         @self.pg.production('for_stmt : TFOR lvalue TIN iter_expr TDO stmt')
         def for_stmt_do(p):
             spos = p[0].getsourcepos()
-            block = CodeBlock(self.builder, self.module, p[5].getsourcepos(), p[5])
-            return ForStatement(self.builder, self.module, spos, p[1], p[3], block)
+            block = CodeBlock(self.builder, self.module, self.package, p[5].getsourcepos(), p[5])
+            return ForStatement(self.builder, self.module, self.package, spos, p[1], p[3], block)
 
         @self.pg.production('stmt : LBRACE block RBRACE')
         def block_stmt(p):
@@ -609,40 +677,45 @@ class Parser():
         def iter_expr_const(p):
             if len(p) == 3:
                 spos = p[0].getsourcepos()
-                return IterExpr(self.builder, self.module, spos, p[0], p[2])
+                return IterExpr(self.builder, self.module, self.package, spos, p[0], p[2])
             else:
                 spos = p[0].getsourcepos()
-                return IterExpr(self.builder, self.module, spos, p[0], p[2], p[4])
+                return IterExpr(self.builder, self.module, self.package, spos, p[0], p[2], p[4])
 
         @self.pg.production('iter_expr : expr ELIPSES expr')
         @self.pg.production('iter_expr : expr ELIPSES expr COLON expr')
         def iter_expr_const_inclusive(p):
             if len(p) == 3:
                 spos = p[0].getsourcepos()
-                return IterExpr(self.builder, self.module, spos, p[0], p[2], inclusive=True)
+                return IterExpr(self.builder, self.module, self.package, spos, p[0], p[2], inclusive=True)
             else:
                 spos = p[0].getsourcepos()
-                return IterExpr(self.builder, self.module, spos, p[0], p[2], p[4], inclusive=True)
+                return IterExpr(self.builder, self.module, self.package, spos, p[0], p[2], p[4], inclusive=True)
 
         @self.pg.production('expr : AND expr')
         @self.pg.production('expr : BOOLNOT expr')
+        @self.pg.production('expr : BINNOT expr')
         @self.pg.production('expr : SUB expr')
         def expr_unary(p):
             right = p[1]
             operator = p[0]
             spos = p[0].getsourcepos()
             if operator.gettokentype() == 'AND':
-                return AddressOf(self.builder, self.module, spos, right)
+                return AddressOf(self.builder, self.module, self.package, spos, right)
             elif operator.gettokentype() == 'BOOLNOT':
-                return BoolNot(self.builder, self.module, spos, right)
+                return BoolNot(self.builder, self.module, self.package, spos, right)
+            elif operator.gettokentype() == 'BINNOT':
+                return BinaryNot(self.builder, self.module, self.package, spos, right)
             elif operator.gettokentype() == 'SUB':
-                return Negate(self.builder, self.module, spos, right)
+                return Negate(self.builder, self.module, self.package, spos, right)
 
         @self.pg.production('expr : expr ADD expr')
         @self.pg.production('expr : expr SUB expr')
         @self.pg.production('expr : expr MUL expr')
         @self.pg.production('expr : expr DIV expr')
         @self.pg.production('expr : expr MOD expr')
+        @self.pg.production('expr : expr LSHFT expr')
+        @self.pg.production('expr : expr RSHFT expr')
         @self.pg.production('expr : expr AND expr')
         @self.pg.production('expr : expr OR expr')
         @self.pg.production('expr : expr XOR expr')
@@ -661,46 +734,50 @@ class Parser():
             operator = p[1]
             spos = p[0].getsourcepos()
             if operator.gettokentype() == 'ADD':
-                return Sum(self.builder, self.module, spos, left, right)
+                return Sum(self.builder, self.module, self.package, spos, left, right)
             elif operator.gettokentype() == 'SUB':
-                return Sub(self.builder, self.module, spos, left, right)
+                return Sub(self.builder, self.module, self.package, spos, left, right)
             elif operator.gettokentype() == 'MUL':
-                return Mul(self.builder, self.module, spos, left, right)
+                return Mul(self.builder, self.module, self.package, spos, left, right)
             elif operator.gettokentype() == 'DIV':
-                return Div(self.builder, self.module, spos, left, right)
+                return Div(self.builder, self.module, self.package, spos, left, right)
             elif operator.gettokentype() == 'MOD':
-                return Mod(self.builder, self.module, spos, left, right)
+                return Mod(self.builder, self.module, self.package, spos, left, right)
+            elif operator.gettokentype() == 'LSHFT':
+                return ShiftLeft(self.builder, self.module, self.package, spos, left, right)
+            elif operator.gettokentype() == 'RSHFT':
+                return ShiftRight(self.builder, self.module, self.package, spos, left, right)
             elif operator.gettokentype() == 'AND':
-                return And(self.builder, self.module, spos, left, right)
+                return And(self.builder, self.module, self.package, spos, left, right)
             elif operator.gettokentype() == 'OR':
-                return Or(self.builder, self.module, spos, left, right)
+                return Or(self.builder, self.module, self.package, spos, left, right)
             elif operator.gettokentype() == 'XOR':
-                return Xor(self.builder, self.module, spos, left, right)
+                return Xor(self.builder, self.module, self.package, spos, left, right)
             elif operator.gettokentype() == 'SPACESHIP':
-                return Spaceship(self.builder, self.module, spos, left, right)
+                return Spaceship(self.builder, self.module, self.package, spos, left, right)
             elif operator.gettokentype() == 'BOOLEQ':
-                return BooleanEq(self.builder, self.module, spos, left, right)
+                return BooleanEq(self.builder, self.module, self.package, spos, left, right)
             elif operator.gettokentype() == 'BOOLNEQ':
-                return BooleanNeq(self.builder, self.module, spos, left, right)
+                return BooleanNeq(self.builder, self.module, self.package, spos, left, right)
             elif operator.gettokentype() == 'BOOLGTE':
-                return BooleanGte(self.builder, self.module, spos, left, right)
+                return BooleanGte(self.builder, self.module, self.package, spos, left, right)
             elif operator.gettokentype() == 'BOOLGT':
-                return BooleanGt(self.builder, self.module, spos, left, right)
+                return BooleanGt(self.builder, self.module, self.package, spos, left, right)
             elif operator.gettokentype() == 'BOOLLTE':
-                return BooleanLte(self.builder, self.module, spos, left, right)
+                return BooleanLte(self.builder, self.module, self.package, spos, left, right)
             elif operator.gettokentype() == 'BOOLLT':
-                return BooleanLt(self.builder, self.module, spos, left, right)
+                return BooleanLt(self.builder, self.module, self.package, spos, left, right)
             elif operator.gettokentype() == 'BOOLAND':
-                return BoolAnd(self.builder, self.module, spos, left, right)
+                return BoolAnd(self.builder, self.module, self.package, spos, left, right)
             elif operator.gettokentype() == 'BOOLOR':
-                return BoolOr(self.builder, self.module, spos, left, right)
+                return BoolOr(self.builder, self.module, self.package, spos, left, right)
 
         @self.pg.production('expr : TCAST BOOLLT typeexpr BOOLGT LPAREN expr RPAREN')
         def expr_cast(p):
             spos = p[0].getsourcepos()
             ctype = p[2]
             cexpr = p[5]
-            return CastExpr(self.builder, self.module, spos, ctype, cexpr)
+            return CastExpr(self.builder, self.module, self.package, spos, ctype, cexpr)
 
         @self.pg.production('expr : TIF expr TTHEN expr TELSE expr')
         def expr_select(p):
@@ -708,19 +785,19 @@ class Parser():
             a = p[3]
             cond = p[1]
             b = p[5]
-            return SelectExpr(self.builder, self.module, spos, cond, a, b)
+            return SelectExpr(self.builder, self.module, self.package, spos, cond, a, b)
 
         @self.pg.production('func_call : lvalue LPAREN args RPAREN')
         def func_call(p):
             name = p[0]
             spos = p[0].getsourcepos()
-            return FuncCall(self.builder, self.module, spos, name, p[2])
+            return FuncCall(self.builder, self.module, self.package, spos, name, p[2])
 
         @self.pg.production('func_call : lvalue LPAREN RPAREN')
         def func_call_empty(p):
             name = p[0]
             spos = p[0].getsourcepos()
-            return FuncCall(self.builder, self.module, spos, name, [])
+            return FuncCall(self.builder, self.module, self.package, spos, name, [])
 
         @self.pg.production('expr : func_call')
         def expr_func_call(p):
@@ -729,7 +806,7 @@ class Parser():
         @self.pg.production('expr : TPRINT LPAREN args RPAREN')
         def expr_print_call(p):
             spos = p[0].getsourcepos()
-            return Print(self.builder, self.module, spos, p[2])
+            return Print(self.builder, self.module, self.package, spos, p[2])
 
         @self.pg.production('expr : LPAREN expr RPAREN')
         def expr_parens(p):
@@ -749,14 +826,14 @@ class Parser():
         def lvalue(p):
             spos = p[0].getsourcepos()
             if(len(p) == 1):
-                return LValue(self.builder, self.module, spos, p[0].value)
+                return LValue(self.builder, self.module, self.package, spos, p[0].value)
             else:
-                return LValue(self.builder, self.module, spos, p[2].value, p[0])
+                return LValue(self.builder, self.module, self.package, spos, p[2].value, p[0])
 
         @self.pg.production('lvalue : lvalue DOT IDENT')
         def lvalue_dot(p):
             spos = p[0].getsourcepos()
-            return LValueField(self.builder, self.module, spos, p[0], p[2].value)
+            return LValueField(self.builder, self.module, self.package, spos, p[0], p[2].value)
 
         @self.pg.production('lvalue_expr : lvalue')
         @self.pg.production('lvalue_expr : MUL lvalue')
@@ -766,21 +843,21 @@ class Parser():
             if len(p) == 1:
                 return p[0]
             elif len(p) == 4:
-                return ElementOf(self.builder, self.module, spos, p[0], p[2])
+                return ElementOf(self.builder, self.module, self.package, spos, p[0], p[2])
             else:
                 if p[0].gettokentype() == 'MUL':
-                    return DerefOf(self.builder, self.module, spos, p[1])
+                    return DerefOf(self.builder, self.module, self.package, spos, p[1])
 
         
         @self.pg.production('lvalue_expr : lvalue DOT func_call')
         def lvalue_expr_method(p):
             spos = p[0].getsourcepos()
-            return MethodCall(self.builder, self.module, spos, p[0], p[2].lvalue, p[2].args)
+            return MethodCall(self.builder, self.module, self.package, spos, p[0], p[2].lvalue, p[2].args)
 
         @self.pg.production('lvalue_expr : lvalue DOT INT')
         def lvalue_expr_tuple_element(p):
             spos = p[0].getsourcepos()
-            return TupleElementOf(self.builder, self.module, spos, p[0], p[2].value)
+            return TupleElementOf(self.builder, self.module, self.package, spos, p[0], p[2].value)
 
         @self.pg.production('expr : lvalue_expr')
         def expr_lvalue(p):
@@ -805,7 +882,7 @@ class Parser():
         @self.pg.production('struct_literal : typeexpr LBRACE struct_literal_body RBRACE')
         def struct_literal(p):
             spos = p[1].getsourcepos()
-            return StructLiteral(self.builder, self.module, spos, p[0], p[2])
+            return StructLiteral(self.builder, self.module, self.package, spos, p[0], p[2])
 
         @self.pg.production('struct_literal_body : struct_literal_body COMMA struct_literal_element')
         @self.pg.production('struct_literal_body : struct_literal_body COMMA')
@@ -813,10 +890,10 @@ class Parser():
         @self.pg.production('struct_literal_body : ')
         def struct_literal_body(p):
             if len(p) == 0:
-                return StructLiteralBody(self.builder, self.module, None)
+                return StructLiteralBody(self.builder, self.module, self.package, None)
             elif len(p) == 1:
                 spos = p[0].getsourcepos()
-                body = StructLiteralBody(self.builder, self.module, spos)
+                body = StructLiteralBody(self.builder, self.module, self.package, spos)
                 body.add_field(p[0].name, p[0].expr)
                 return body
             elif len(p) == 2:
@@ -828,12 +905,12 @@ class Parser():
         @self.pg.production('struct_literal_element : IDENT COLON expr')
         def struct_literal_element(p):
             spos = p[0].getsourcepos()
-            return StructLiteralElement(self.builder, self.module, spos, p[0], p[2])
+            return StructLiteralElement(self.builder, self.module, self.package, spos, p[0], p[2])
 
         @self.pg.production('array_literal : LBRACKET RBRACKET typeexpr LBRACE array_literal_body RBRACE')
         def array_literal(p):
             spos = p[1].getsourcepos()
-            return ArrayLiteral(self.builder, self.module, spos, p[2], p[4])
+            return ArrayLiteral(self.builder, self.module, self.package, spos, p[2], p[4])
 
         @self.pg.production('array_literal_body : array_literal_body COMMA array_literal_element')
         @self.pg.production('array_literal_body : array_literal_body COMMA')
@@ -841,10 +918,10 @@ class Parser():
         @self.pg.production('array_literal_body : ')
         def array_literal_body(p):
             if len(p) == 0:
-                return ArrayLiteralBody(self.builder, self.module, None)
+                return ArrayLiteralBody(self.builder, self.module, self.package, None)
             elif len(p) == 1:
                 spos = p[0].getsourcepos()
-                body = ArrayLiteralBody(self.builder, self.module, spos)
+                body = ArrayLiteralBody(self.builder, self.module, self.package, spos)
                 body.add_element(p[0].expr)
                 return body
             elif len(p) == 2:
@@ -856,12 +933,12 @@ class Parser():
         @self.pg.production('array_literal_element : expr')
         def array_literal_element(p):
             spos = p[0].getsourcepos()
-            return ArrayLiteralElement(self.builder, self.module, spos, p[0])
+            return ArrayLiteralElement(self.builder, self.module, self.package, spos, p[0])
 
         @self.pg.production('tuple_literal : TTUPLE LBRACE tuple_literal_body RBRACE')
         def tuple_literal(p):
             spos = p[1].getsourcepos()
-            return TupleLiteral(self.builder, self.module, spos, p[2])
+            return TupleLiteral(self.builder, self.module, self.package, spos, p[2])
 
         @self.pg.production('tuple_literal_body : tuple_literal_body COMMA tuple_literal_element')
         @self.pg.production('tuple_literal_body : tuple_literal_body COMMA')
@@ -869,10 +946,10 @@ class Parser():
         @self.pg.production('tuple_literal_body : ')
         def tuple_literal_body(p):
             if len(p) == 0:
-                return TupleLiteralBody(self.builder, self.module, None)
+                return TupleLiteralBody(self.builder, self.module, self.package, None)
             elif len(p) == 1:
                 spos = p[0].getsourcepos()
-                body = TupleLiteralBody(self.builder, self.module, spos)
+                body = TupleLiteralBody(self.builder, self.module, self.package, spos)
                 body.add_element(p[0].expr)
                 return body
             elif len(p) == 2:
@@ -884,7 +961,7 @@ class Parser():
         @self.pg.production('tuple_literal_element : expr')
         def tuple_literal_element(p):
             spos = p[0].getsourcepos()
-            return TupleLiteralElement(self.builder, self.module, spos, p[0])
+            return TupleLiteralElement(self.builder, self.module, self.package, spos, p[0])
 
         @self.pg.production('make_expr : TMAKE typeexpr')
         @self.pg.production('make_expr : TMAKE typeexpr LPAREN args RPAREN')
@@ -892,13 +969,12 @@ class Parser():
         def make_expr(p):
             spos = p[0].getsourcepos()
             if len(p) == 2:
-                return MakeExpr(self.builder, self.module, spos, p[1])
+                return MakeExpr(self.builder, self.module, self.package, spos, p[1])
             else:
                 if p[2].gettokentype() == 'LPAREN':
-                    return MakeExpr(self.builder, self.module, spos, p[1], args=p[3])
+                    return MakeExpr(self.builder, self.module, self.package, spos, p[1], args=p[3])
                 if p[2].gettokentype() == 'LPAREN':
-                    return MakeExpr(self.builder, self.module, spos, p[1], init=p[3])
-
+                    return MakeExpr(self.builder, self.module, self.package, spos, p[1], init=p[3])
 
         @self.pg.production('make_expr : TMAKE TOWNED typeexpr')
         @self.pg.production('make_expr : TMAKE TOWNED typeexpr LPAREN args RPAREN')
@@ -906,12 +982,12 @@ class Parser():
         def make_expr_owned(p):
             spos = p[0].getsourcepos()
             if len(p) == 3:
-                return MakeExpr(self.builder, self.module, spos, p[2])
+                return MakeExpr(self.builder, self.module, self.package, spos, p[2])
             else:
                 if p[3].gettokentype() == 'LPAREN':
-                    return MakeExpr(self.builder, self.module, spos, p[2], args=p[4])
+                    return MakeExpr(self.builder, self.module, self.package, spos, p[2], args=p[4])
                 if p[3].gettokentype() == 'LPAREN':
-                    return MakeExpr(self.builder, self.module, spos, p[2], init=p[4])
+                    return MakeExpr(self.builder, self.module, self.package, spos, p[2], init=p[4])
 
 
         @self.pg.production('make_expr : TMAKE TSHARED typeexpr')
@@ -920,12 +996,12 @@ class Parser():
         def make_expr_shared(p):
             spos = p[0].getsourcepos()
             if len(p) == 3:
-                return MakeSharedExpr(self.builder, self.module, spos, p[2])
+                return MakeSharedExpr(self.builder, self.module, self.package, spos, p[2])
             else:
                 if   p[3].gettokentype() == 'LPAREN':
-                    return MakeSharedExpr(self.builder, self.module, spos, p[2], args=p[4])
+                    return MakeSharedExpr(self.builder, self.module, self.package, spos, p[2], args=p[4])
                 elif p[3].gettokentype() == 'LBRACE':
-                    return MakeSharedExpr(self.builder, self.module, spos, p[2], init=p[4])
+                    return MakeSharedExpr(self.builder, self.module, self.package, spos, p[2], init=p[4])
 
 
         @self.pg.production('expr : number')
@@ -943,31 +1019,31 @@ class Parser():
         def number(p):
             spos = p[0].getsourcepos()
             if p[0].gettokentype() == 'INT':
-                return Integer(self.builder, self.module, spos, p[0].value)
+                return Integer(self.builder, self.module, self.package, spos, p[0].value)
             elif p[0].gettokentype() == 'UINT':
-                return UInteger(self.builder, self.module, spos, p[0].value)
+                return UInteger(self.builder, self.module, self.package, spos, p[0].value)
             elif p[0].gettokentype() == 'LONGINT':
-                return Integer64(self.builder, self.module, spos, p[0].value)
+                return Integer64(self.builder, self.module, self.package, spos, p[0].value)
             elif p[0].gettokentype() == 'ULONGINT':
-                return UInteger64(self.builder, self.module, spos, p[0].value)
+                return UInteger64(self.builder, self.module, self.package, spos, p[0].value)
             elif p[0].gettokentype() == 'BYTE':
-                return Byte(self.builder, self.module, spos, p[0].value)
+                return Byte(self.builder, self.module, self.package, spos, p[0].value)
             elif p[0].gettokentype() == 'HALF':
-                return HalfFloat(self.builder, self.module, spos, p[0].value)
+                return HalfFloat(self.builder, self.module, self.package, spos, p[0].value)
             elif p[0].gettokentype() == 'FLOAT':
-                return Float(self.builder, self.module, spos, p[0].value)
+                return Float(self.builder, self.module, self.package, spos, p[0].value)
             elif p[0].gettokentype() == 'DOUBLE':
-                return Double(self.builder, self.module, spos, p[0].value)
+                return Double(self.builder, self.module, self.package, spos, p[0].value)
         
         @self.pg.production('expr : STRING')
         def expr_string(p):
             spos = p[0].getsourcepos()
-            return StringLiteral(self.builder, self.module, spos, p[0].value)
+            return StringLiteral(self.builder, self.module, self.package, spos, p[0].value)
 
         @self.pg.production('expr : MLSTRING')
         def expr_mlstring(p):
             spos = p[0].getsourcepos()
-            return MultilineStringLiteral(self.builder, self.module, spos, p[0].value)
+            return MultilineStringLiteral(self.builder, self.module, self.package, spos, p[0].value)
 
         @self.pg.production('expr : boolexpr')
         def expr_bool(p):
@@ -978,14 +1054,14 @@ class Parser():
         def expr_bool_literal(p):
             spos = p[0].getsourcepos()
             if p[0].gettokentype() == 'TTRUE':
-                return Boolean(self.builder, self.module, spos, True)
+                return Boolean(self.builder, self.module, self.package, spos, True)
             else:
-                return Boolean(self.builder, self.module, spos, False)
+                return Boolean(self.builder, self.module, self.package, spos, False)
 
         @self.pg.production('expr : TNULL')
         def expr_null(p):
             spos = p[0].getsourcepos()
-            return Null(self.builder, self.module, spos)
+            return Null(self.builder, self.module, self.package, spos)
 
         @self.pg.error
         def error_handle(token):

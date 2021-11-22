@@ -124,10 +124,18 @@ dmypy.json
 # Pyre type checker
 .pyre/
 
+# Pycharm
+.idea/
+
+# VS Code
+.vscode/ 
+
 #llvm
 *.s
 *.ll
 *.o
+*.wasm
 *.exe
 concepttest/
 test/
+symbols.json

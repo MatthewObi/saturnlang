@@ -1,6 +1,8 @@
 package main;
-import string;
-import cmath;
+import string::*;
+import cmath::{floor};
+
+//c_include "test.h";
 
 fn ptrfun(x: *int) {
     *x = 5;
@@ -19,6 +21,10 @@ fn(*Vector2) getX(): int {
 
 fn(*Vector2) setX(newX : int): void {
     this.x = newX;
+}
+
+fn join16(a: byte, b: byte): uint16 {
+    return (cast<uint16>(a) << cast<uint16>(8)) | cast<uint16>(b);
 }
 
 type IVector2 : tuple(int, int);
@@ -93,6 +99,8 @@ fn main(argc: int, argv: CStringArray): int {
 
     v2 := Vector2 {x: 0, y: 11};
     printf("Vector2 (x: %d, y: %d)\n", v2.x, v2.y);
+
+    v2_2 := Vector2 {x: v2.y, y: v2.x};
 
     v2.x = 5;
     v2.y = 14;

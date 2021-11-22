@@ -1,14 +1,21 @@
 from llvmlite import ir
 from rply import Token
-from typesys import TupleType, Type, make_tuple_type, types, FuncType, StructType, Value, mangle_name, print_types, Func
+from typesys import TupleType, Type, make_tuple_type, types, FuncType, StructType, Value, mangle_name, print_types, \
+    Func, make_optional_type
 from serror import throw_saturn_error
+from package import Visibility, LinkageType, Package
 
 SCOPE = []
 DECL_SCOPE = []
 GLOBALS = {}
 
+
 class Scope:
-    def __init__(self, builder, variables={}, is_guarded=False, passthrough=[]):
+    def __init__(self, builder, variables=None, is_guarded=False, passthrough=None):
+        if passthrough is None:
+            passthrough = []
+        if variables is None:
+            variables = {}
         self.builder = builder
         self.vars = variables.copy()
         self.is_guarded = is_guarded
@@ -43,11 +50,11 @@ class Scope:
     def __setitem__(self, key, value):
         self.vars[key] = value
 
-    
 
 def get_inner_scope():
     global SCOPE
     return SCOPE[-1]
+
 
 def check_name_in_scope(name):
     global SCOPE
@@ -60,27 +67,29 @@ def check_name_in_scope(name):
         return GLOBALS[name]
     return None
 
+
 def add_new_local(name, ptr):
     global SCOPE
     SCOPE[-1][name] = ptr
 
-def add_new_global(name, ptr):
-    global GLOBALS
-    GLOBALS[name] = ptr
 
 def push_new_scope(builder):
     global SCOPE
     SCOPE.append(Scope(builder))
 
+
 def push_defer(defer):
     global SCOPE
     SCOPE[-1].push_defer(defer)
 
+
 def eval_defer_scope():
     SCOPE[-1].eval_deferred()
 
+
 def eval_dtor_scope():
     SCOPE[-1].call_destructors()
+
 
 def pop_inner_scope():
     global SCOPE
@@ -88,9 +97,11 @@ def pop_inner_scope():
     SCOPE[-1].eval_deferred()
     SCOPE.pop(-1)
 
+
 def get_inner_decl_scope():
     global DECL_SCOPE
     return DECL_SCOPE[-1]
+
 
 def check_name_in_decl_scope(name):
     global DECL_SCOPE
@@ -100,26 +111,42 @@ def check_name_in_decl_scope(name):
             return s[name]
     return None
 
+
 def add_new_decl_local(name, ty):
     global DECL_SCOPE
     DECL_SCOPE[-1][name] = ty
+
 
 def push_new_decl_scope():
     global DECL_SCOPE
     DECL_SCOPE.append({})
 
+
 def pop_inner_decl_scope():
     global DECL_SCOPE
     SCOPE.pop(-1)
 
-class Expr():
+
+class ASTNode:
     """
-    An expression. Base class for integer and float constants.
+    A single node in the abstract syntax tree.
     """
-    def __init__(self, builder, module, spos):
+    def __init__(self, builder, module, package, spos):
         self.builder = builder
         self.module = module
+        self.package = package
         self.spos = spos
+
+    def getsourcepos(self):
+        return self.spos
+
+
+class Expr(ASTNode):
+    """
+    An expression which can be used as the value in other expressions/statements.
+    """
+    def __init__(self, builder, module, package, spos):
+        super().__init__(builder, module, package, spos)
         self.is_constexpr = False
 
     def getsourcepos(self):
@@ -129,16 +156,15 @@ class Expr():
         return types['void']
 
     def get_ir_type(self):
-        return self.get_type().irtype
+        return self.get_type().get_ir_type()
+
 
 class Number(Expr):
     """
     A number constant. Base class for integer and float constants.
     """
-    def __init__(self, builder, module, spos, value):
-        self.builder = builder
-        self.module = module
-        self.spos = spos
+    def __init__(self, builder, module, package, spos, value):
+        super().__init__(builder, module, package, spos)
         self.value = value
         self.type = self.get_type()
         self.is_constexpr = True
@@ -271,10 +297,8 @@ class StringLiteral(Expr):
     """
     A null terminated string literal. (cstring)
     """
-    def __init__(self, builder, module, spos, value):
-        self.builder = builder
-        self.module = module
-        self.spos = spos
+    def __init__(self, builder, module, package, spos, value):
+        super().__init__(builder, module, package, spos)
         self.value = value
         self.raw_value = str(value).strip("\"") + '\0'
         self.type = self.get_type()
@@ -297,14 +321,13 @@ class StringLiteral(Expr):
         self.value = self.builder.bitcast(global_fmt, self.type.irtype)
         return self.value
 
+
 class MultilineStringLiteral(Expr):
     """
     A multiline null terminated string literal. (cstring)
     """
-    def __init__(self, builder, module, spos, value):
-        self.builder = builder
-        self.module = module
-        self.spos = spos
+    def __init__(self, builder, module, package, spos, value):
+        super().__init__(builder, module, package, spos)
         self.value = value
         self.type = self.get_type()
 
@@ -331,10 +354,8 @@ class Boolean(Expr):
     """
     A boolean constant. (bool)
     """
-    def __init__(self, builder, module, spos, value: bool):
-        self.builder = builder
-        self.module = module
-        self.spos = spos
+    def __init__(self, builder, module, package, spos, value: bool):
+        super().__init__(builder, module, package, spos)
         self.value = value
         self.is_constexpr = True
 
@@ -353,10 +374,8 @@ class Null(Expr):
     """
     A null constant. (null_t)
     """
-    def __init__(self, builder, module, spos):
-        self.builder = builder
-        self.module = module
-        self.spos = spos
+    def __init__(self, builder, module, package, spos):
+        super().__init__(builder, module, package, spos)
 
     def get_type(self):
         return types['null_t']
@@ -368,16 +387,14 @@ class Null(Expr):
 
 
 class ArrayLiteralElement(Expr):
-    def __init__(self, builder, module, spos, expr, index=-1):
-        self.builder = builder
-        self.module = module
-        self.spos = spos
+    def __init__(self, builder, module, package, spos, expr, index=-1):
+        super().__init__(builder, module, package, spos)
         self.expr = expr
         self.index = index
 
 
-class ArrayLiteralBody():
-    def __init__(self, builder, module, spos):
+class ArrayLiteralBody:
+    def __init__(self, builder, module, package, spos):
         self.builder = builder
         self.module = module
         self.spos = spos
@@ -391,16 +408,14 @@ class ArrayLiteral(Expr):
     """
     An array literal constant.
     """
-    def __init__(self, builder, module, spos, atype, body):
-        self.builder = builder
-        self.module = module
-        self.spos = spos
+    def __init__(self, builder, module, package, spos, atype, body):
+        super().__init__(builder, module, package, spos)
         self.atype = atype
         self.body = body
         self.type = self.get_type()
 
     def get_type(self):
-        return self.atype.type.get_array_of(len(self.body.values))
+        return self.atype.get_type().get_array_of(len(self.body.values))
 
     def eval(self):
         vals = []
@@ -411,16 +426,14 @@ class ArrayLiteral(Expr):
 
 
 class StructLiteralElement(Expr):
-    def __init__(self, builder, module, spos, name, expr):
-        self.builder = builder
-        self.module = module
-        self.spos = spos
+    def __init__(self, builder, module, package, spos, name, expr):
+        super().__init__(builder, module, package, spos)
         self.name = name
         self.expr = expr
 
 
-class StructLiteralBody():
-    def __init__(self, builder, module, spos):
+class StructLiteralBody:
+    def __init__(self, builder, module, package, spos):
         self.builder = builder
         self.module = module
         self.spos = spos
@@ -434,38 +447,50 @@ class StructLiteral(Expr):
     """
     A struct literal constant.
     """
-    def __init__(self, builder, module, spos, stype, body):
-        self.builder = builder
-        self.module = module
-        self.spos = spos
+    def __init__(self, builder, module, package, spos, stype, body):
+        super().__init__(builder, module, package, spos)
         self.stype = stype
         self.body = body
         self.type = self.get_type()
 
     def get_type(self):
-        return self.stype.type
+        return self.stype.get_type()
 
     def eval(self):
-        membervals = []
-        for val in self.body.values.values():
-            membervals.append(val.eval())
-        c = ir.Constant(self.stype.get_ir_type(), membervals)
-        return c
+        name = self.module.get_unique_name("_unnamed_struct_literal")
+        with self.builder.goto_entry_block():
+            self.builder.position_at_start(self.builder.block)
+            ptr = self.builder.alloca(self.type.irtype, name=name)
+        val = Value(name, self.type, ptr)
+        add_new_local(name, val)
+        #for m in membervals:
+        #    gep = self.builder.gep()
+        #c = ir.Constant(self.stype.get_ir_type(), membervals)
+        for name, value in self.body.values.items():
+            gep = self.builder.gep(ptr, [
+                ir.Constant(ir.IntType(32), 0),
+                ir.Constant(ir.IntType(32), self.type.get_field_index(name))
+            ])
+            res = value.eval()
+            if isinstance(res, ir.Constant) and res.constant == 'null':
+                self.builder.store(ir.Constant(gep.type.pointee, gep.type.pointee.null), gep)
+            else:
+                self.builder.store(res, gep)
+        return self.builder.load(ptr)
 
 
 class TupleLiteralElement(Expr):
-    def __init__(self, builder, module, spos, expr):
-        self.builder = builder
-        self.module = module
-        self.spos = spos
+    def __init__(self, builder, module, package, spos, expr):
+        super().__init__(builder, module, package, spos)
         self.expr = expr
 
+    def get_type(self):
+        return self.expr.get_type()
 
-class TupleLiteralBody():
-    def __init__(self, builder, module, spos):
-        self.builder = builder
-        self.module = module
-        self.spos = spos
+
+class TupleLiteralBody(ASTNode):
+    def __init__(self, builder, module, package, spos):
+        super().__init__(builder, module, package, spos)
         self.elements = []
 
     def add_element(self, expr):
@@ -476,10 +501,8 @@ class TupleLiteral(Expr):
     """
     A tuple literal.
     """
-    def __init__(self, builder, module, spos, body):
-        self.builder = builder
-        self.module = module
-        self.spos = spos
+    def __init__(self, builder, module, package, spos, body):
+        super().__init__(builder, module, package, spos)
         self.ttype = make_tuple_type(body.elements)
         self.body = body
         self.type = self.get_type()
@@ -508,7 +531,7 @@ class TupleLiteral(Expr):
                 self.builder.store(ir.Constant(gep.type.pointee, gep.type.pointee.null), gep)
             else:
                 self.builder.store(res, gep)
-            i+=1
+            i += 1
         return self.builder.load(ptr)
 
         
@@ -516,10 +539,8 @@ class LValue(Expr):
     """
     Expression representing a named value in memory.
     """
-    def __init__(self, builder, module, spos, name, lhs=None):
-        self.builder = builder
-        self.module = module
-        self.spos = spos
+    def __init__(self, builder, module, package, spos, name, lhs=None):
+        super().__init__(builder, module, package, spos)
         self.lhs = lhs
         self.name = name
         self.value = None
@@ -530,20 +551,19 @@ class LValue(Expr):
         name = self.get_name()
         ptr = check_name_in_scope(name)
         if ptr is None:
-            if name not in self.module.sglobals:
-                if name not in self.module.sfuncs:
-                    lineno = self.getsourcepos().lineno
-                    colno = self.getsourcepos().colno
-                    throw_saturn_error(self.builder, self.module, lineno, colno, 
-                        "Could not find lvalue '%s' in current scope." % name
-                    )
-                ptr = self.module.sfuncs[name]
+            ptr = self.package.lookup_symbol(name)
+            if ptr is None:
+                lineno = self.getsourcepos().lineno
+                colno = self.getsourcepos().colno
+                throw_saturn_error(self.builder, self.module, lineno, colno,
+                                   f"Could not find lvalue '{name}' in current scope.")
+            if isinstance(ptr, Func):
+                ptr = self.package.lookup_symbol(name)
                 key = list(ptr.overloads.keys())[0]
                 begin = '_Z%d' % len(name)
                 key = begin + name + key[3:]
                 fnty = self.module.sfunctys[key]
                 return fnty
-            ptr = self.module.sglobals[name]
         # if ptr.type.is_pointer():
         #     return ptr.type.get_dereference_of()
         return ptr.type
@@ -553,7 +573,14 @@ class LValue(Expr):
         #print(name)
         ptr = check_name_in_scope(name)
         if ptr is None:
-            ptr = self.module.get_global(name)
+            ptr = self.package.lookup_symbol(name)
+            if ptr is None:
+                lineno = self.getsourcepos().lineno
+                colno = self.getsourcepos().colno
+                throw_saturn_error(self.builder, self.module, lineno, colno,
+                                   f"Could not find lvalue '{name}' in current scope.")
+            ptr = ptr.irvalue
+            #ptr = self.module.get_global(name)
         else:
             ptr = ptr.irvalue
         if ptr.type.is_pointer:
@@ -580,22 +607,29 @@ class LValue(Expr):
         name = self.get_name()
         ptr = check_name_in_scope(name)
         if ptr is None:
-            if name not in self.module.sglobals:
-                if name not in self.module.sfuncs:
-                    lineno = self.getsourcepos().lineno
-                    colno = self.getsourcepos().colno
-                    throw_saturn_error(self.builder, self.module, lineno, colno, 
-                        "Could not find lvalue '%s' in current scope." % name
-                    )
-                ptr = self.module.sfuncs[name]
+            ptr = self.package.lookup_symbol(name)
+            if ptr is None:
+                lineno = self.getsourcepos().lineno
+                colno = self.getsourcepos().colno
+                throw_saturn_error(self.builder, self.module, lineno, colno,
+                                   f"Could not find lvalue '{name}' in current scope.")
+            if isinstance(ptr, Func):
+                # if name not in self.module.sglobals:
+                #     if name not in self.module.sfuncs:
+                #         lineno = self.getsourcepos().lineno
+                #         colno = self.getsourcepos().colno
+                #         throw_saturn_error(self.builder, self.module, lineno, colno,
+                #             "Could not find lvalue '%s' in current scope." % name
+                #         )
+                # ptr = self.module.sfuncs[name]
                 key = list(ptr.overloads.keys())[0]
-                fn = ptr.overloads[key]
+                fn = ptr.overloads[key].fn
                 begin = '_Z%d' % len(name)
                 key = begin + name + key[3:]
                 fnty = self.module.sfunctys[key]
                 return Value('', fnty.get_pointer_to(), fn)
-            else:
-                ptr = self.module.sglobals[name]
+            # else:
+            #    ptr = self.module.sglobals[name]
         if ptr.type.is_reference():
             i64 = ir.IntType(64)
             deref = self.builder.load(ptr.irvalue)
@@ -610,16 +644,24 @@ class LValue(Expr):
         name = self.get_name()
         ptr = check_name_in_scope(name)
         if ptr is None:
-            if name not in self.module.sglobals:
-                if name not in self.module.sfuncs:
-                    lineno = self.getsourcepos().lineno
-                    colno = self.getsourcepos().colno
-                    throw_saturn_error(self.builder, self.module, lineno, colno, 
-                        "Could not find lvalue '%s' in current scope." % name
-                    )
-                ptr = self.module.sfuncs[name]
-            else:
-                ptr = self.module.sglobals[name]
+            ptr = self.package.lookup_symbol(name)
+            if ptr is None:
+                lineno = self.getsourcepos().lineno
+                colno = self.getsourcepos().colno
+                throw_saturn_error(self.builder, self.module, lineno, colno,
+                                   f"Could not find lvalue '{name}' in current scope.")
+            if isinstance(ptr, Func):
+                ptr = ptr.get_default_overload()
+            # if name not in self.module.sglobals:
+            #     if name not in self.module.sfuncs:
+            #         lineno = self.getsourcepos().lineno
+            #         colno = self.getsourcepos().colno
+            #         throw_saturn_error(self.builder, self.module, lineno, colno,
+            #             "Could not find lvalue '%s' in current scope." % name
+            #         )
+            #     ptr = self.module.sfuncs[name].get_default_overload()
+            # else:
+            #     ptr = self.module.sglobals[name]
         if ptr.is_atomic():
             return self.builder.load_atomic(ptr.irvalue, 'seq_cst', 4)
         if self.get_type().is_reference():
@@ -633,16 +675,15 @@ class LValue(Expr):
 
 
 class LValueField(Expr):
-    def __init__(self, builder, module, spos, lvalue, fname):
-        self.builder = builder
-        self.module = module
-        self.spos = spos
+    def __init__(self, builder, module, package, spos, lvalue, fname):
+        super().__init__(builder, module, package, spos)
         self.fname = fname
         self.lvalue = lvalue
         self.is_constexpr = False
         self.is_deref = False
 
     def get_type(self):
+        #print(type(self.lvalue.get_type()))
         stype = self.lvalue.get_type()
         return stype.get_field_type(stype.get_field_index(self.fname))
 
@@ -659,6 +700,12 @@ class LValueField(Expr):
         stype = self.lvalue.get_type()
         ptr = self.lvalue.get_pointer()
         findex = stype.get_field_index(self.fname)
+        if findex == -1:
+            lineno = self.getsourcepos().lineno
+            colno = self.getsourcepos().colno
+            throw_saturn_error(self.builder, self.module, lineno, colno,
+                               f"Cannot find field {self.fname} in struct {stype.name}."
+                               )
         #print('%s: %d' % (self.fname, findex))
         gep = None
         if ptr.type.is_pointer():
@@ -689,6 +736,12 @@ class LValueField(Expr):
         #     )
         ptr = self.lvalue.get_pointer()
         findex = stype.get_field_index(self.fname)
+        if findex == -1:
+            lineno = self.getsourcepos().lineno
+            colno = self.getsourcepos().colno
+            throw_saturn_error(self.builder, self.module, lineno, colno,
+                               f"Cannot find field {self.fname} in struct {stype.name}."
+                               )
         if not ptr.type.is_pointer():
             gep = self.builder.gep(ptr.irvalue, [
                 ir.Constant(ir.IntType(32), 0),
@@ -702,7 +755,6 @@ class LValueField(Expr):
                 ir.Constant(ir.IntType(32), findex)
             ])
             return self.builder.load(gep)
-        return None
 
 
 class CastExpr(Expr):
@@ -710,15 +762,14 @@ class CastExpr(Expr):
     A cast operation.\n
     cast<ctype>(expr)
     """
-    def __init__(self, builder, module, spos, ctype, expr):
-        self.builder = builder
-        self.module = module
-        self.spos = spos
+    def __init__(self, builder, module, package, spos, ctype, expr):
+        super().__init__(builder, module, package, spos)
         self.ctype = ctype
         self.expr = expr
+        self.is_constexpr = expr.is_constexpr
 
     def get_type(self):
-        return self.ctype.type
+        return self.ctype.get_type()
 
     def eval(self):
         cast = None
@@ -784,30 +835,33 @@ class CastExpr(Expr):
 
 class MakeExpr(Expr):
     """
-    A make expression for creating new variables on the heap.
-    make typeexpr;
-    make typeexpr(args);
-    make typeexpr{init};
-    make owned typeexpr;
-    make owned typeexpr(args);
+    A make expression for creating new variables on the heap.\n
+    make typeexpr;\n
+    make typeexpr(args);\n
+    make typeexpr{init};\n
+    make owned typeexpr;\n
+    make owned typeexpr(args);\n
     make owned typeexpr{init};
     """
-    def __init__(self, builder, module, spos, typeexpr, args=None, init=None):
-        self.builder = builder
-        self.module = module
-        self.spos = spos
-        self.mtype = typeexpr.type
-        self.type = self.mtype.get_pointer_to()
+    def __init__(self, builder, module, package, spos, typeexpr, args=None, init=None):
+        super().__init__(builder, module, package, spos)
+        self.typeexpr = typeexpr
+        self.mtype = None
+        self.type = None
         self.args = args
         self.init = init
 
     def get_type(self):
+        if self.type is None:
+            self.mtype = self.typeexpr.get_type()
+            self.type = self.mtype.get_pointer_to()
         return self.type
 
     def get_ir_type(self):
-        return self.type.irtype
+        return self.get_type().get_ir_type()
 
     def eval(self):
+        self.get_type()
         malloc_fn = self.module.aligned_malloc
         sizeof = calc_sizeof_struct(self.builder, self.module, self.mtype)
         aligned_sizeof = self.builder.add(self.builder.and_(sizeof, ir.Constant(ir.IntType(32), 1)), sizeof)
@@ -819,7 +873,7 @@ class MakeExpr(Expr):
             ir.Constant(ir.IntType(1), 0),
         ])
         bitcast = self.builder.bitcast(mallocptr, self.type.irtype)
-        push_defer(DestroyExpr(self.builder, self.module, self.spos, bitcast, self.type))
+        push_defer(DestroyExpr(self.builder, self.module, self.package, self.spos, bitcast, self.type))
         return bitcast
 
 
@@ -828,10 +882,8 @@ class DestroyExpr(Expr):
     An expression for freeing memory from the heap.
     destroy lvalue;
     """
-    def __init__(self, builder, module, spos, ptr, stype):
-        self.builder = builder
-        self.module = module
-        self.spos = spos
+    def __init__(self, builder, module, package, spos, ptr, stype):
+        super().__init__(builder, module, package, spos)
         self.type = stype
         self.ptr = ptr
 
@@ -848,27 +900,30 @@ class DestroyExpr(Expr):
 
 class MakeSharedExpr(Expr):
     """
-    A make expression for creating new variables on the heap with shared ownership.
-    make shared typeexpr;
-    make shared typeexpr(args);
+    A make expression for creating new variables on the heap with shared ownership.\n
+    make shared typeexpr;\n
+    make shared typeexpr(args);\n
     make shared typeexpr{init};
     """
-    def __init__(self, builder, module, spos, typeexpr, args=None, init=None):
-        self.builder = builder
-        self.module = module
-        self.spos = spos
-        self.mtype = typeexpr.type
-        self.type = self.mtype.get_reference_to()
+    def __init__(self, builder, module, package, spos, typeexpr, args=None, init=None):
+        super().__init__(builder, module, package, spos)
+        self.typeexpr = typeexpr
+        self.mtype = None
+        self.type = None
         self.args = args
         self.init = init
 
     def get_type(self):
+        if self.type is None:
+            self.mtype = self.typeexpr.get_type()
+            self.type = self.mtype.get_reference_to()
         return self.type
 
     def get_ir_type(self):
-        return self.type.irtype
+        return self.get_type().get_ir_type()
 
     def eval(self):
+        self.get_type()
         malloc_fn = self.module.aligned_malloc
         sizeof = calc_sizeof_struct(self.builder, self.module, self.mtype)
         aligned_sizeof = self.builder.add(self.builder.and_(sizeof, ir.Constant(ir.IntType(32), 1)), sizeof)
@@ -895,10 +950,8 @@ class PostfixOp(Expr):
     def get_type(self):
         return self.left.get_type()
 
-    def __init__(self, builder, module, spos, left, expr):
-        self.builder = builder
-        self.module = module
-        self.spos = spos
+    def __init__(self, builder, module, package, spos, left, expr):
+        super().__init__(builder, module, package, spos)
         self.left = left
         self.expr = expr
         self.is_constexpr = self.left.is_constexpr and self.expr.is_constexpr
@@ -972,10 +1025,8 @@ class PrefixOp(Expr):
     def get_type(self):
         return self.right.get_type()
 
-    def __init__(self, builder, module, spos, right):
-        self.builder = builder
-        self.module = module
-        self.spos = spos
+    def __init__(self, builder, module, package, spos, right):
+        super().__init__(builder, module, package, spos)
         self.right = right
         self.is_constexpr = False
         self.is_deref = False
@@ -1006,7 +1057,7 @@ class DerefOf(PrefixOp):
     An dereference of prefix operation.\n
     *right
     """
-    def __init__(self, builder, module, spos, right):
+    def __init__(self, builder, module, package, spos, right):
         self.builder = builder
         self.module = module
         self.spos = spos
@@ -1089,9 +1140,9 @@ class BoolNot(PrefixOp):
     def eval(self):
         tv = None
         if not self.right.get_type().is_bool():
-            tv = CastExpr(self.builder, self.module, self.spos, 
-                TypeExpr(self.builder, self.module, self.spos, 
-                LValue(self.builder, self.module, self.spos, 'bool')), self.right).eval()
+            tv = CastExpr(self.builder, self.module, self.package, self.spos,
+                TypeExpr(self.builder, self.module, self.package, self.spos,
+                LValue(self.builder, self.module, self.package, self.spos, 'bool')), self.right).eval()
         else:
             tv = self.right.eval()
         ntv = self.builder.xor(tv, ir.Constant(ir.IntType(1), 1))
@@ -1106,10 +1157,8 @@ class SelectExpr(Expr):
     A ternary selection operation.\n
     if cond then a else b
     """
-    def __init__(self, builder, module, spos, cond, a, b):
-        self.builder = builder
-        self.module = module
-        self.spos = spos
+    def __init__(self, builder, module, package, spos, cond, a, b):
+        super().__init__(builder, module, package, spos)
         self.cond = cond
         self.a = a
         self.b = b
@@ -1131,10 +1180,8 @@ class BinaryOp(Expr):
             return self.left.get_type()
         return types['void']
 
-    def __init__(self, builder, module, spos, left, right):
-        self.builder = builder
-        self.module = module
-        self.spos = spos
+    def __init__(self, builder, module, package, spos, left, right):
+        super().__init__(builder, module, package, spos)
         self.left = left
         self.right = right
         self.is_constexpr = left.is_constexpr and right.is_constexpr
@@ -1271,6 +1318,56 @@ class Mod(BinaryOp):
         return self.left.consteval() % self.right.consteval()
 
 
+class ShiftLeft(BinaryOp):
+    """
+    A bit shift left operation.\n
+    left << right
+    """
+    def eval(self):
+        i = None
+        ty = self.get_type()
+        if ty.is_integer():
+            i = self.builder.shl(self.left.eval(), self.right.eval())
+        else:
+            lineno = self.spos.lineno
+            colno = self.spos.colno
+            throw_saturn_error(self.builder, self.module, lineno, colno,
+                "Attempting to perform a bit shift with two operands of incompatible types (%s and %s). Please cast one of the operands." % (
+                str(self.left.get_type()),
+                str(self.right.get_type())
+            ))
+        return i
+
+    def consteval(self):
+        return self.left.consteval() << self.right.consteval()
+
+
+class ShiftRight(BinaryOp):
+    """
+    A bit shift right operation.\n
+    left >> right
+    """
+    def eval(self):
+        i = None
+        ty = self.get_type()
+        if ty.is_unsigned():
+            i = self.builder.lshr(self.left.eval(), self.right.eval())
+        elif ty.is_integer():
+            i = self.builder.ashr(self.left.eval(), self.right.eval())
+        else:
+            lineno = self.spos.lineno
+            colno = self.spos.colno
+            throw_saturn_error(self.builder, self.module, lineno, colno,
+                "Attempting to perform a bit shift with two operands of incompatible types (%s and %s). Please cast one of the operands." % (
+                str(self.left.get_type()),
+                str(self.right.get_type())
+            ))
+        return i
+
+    def consteval(self):
+        return self.left.consteval() >> self.right.consteval()
+
+
 class And(BinaryOp):
     """
     An and bitwise binary operation.\n
@@ -1389,6 +1486,8 @@ class BoolCmpOp(BinaryOp):
     Base class for boolean comparison binary operations.
     """
     def getcmptype(self):
+        #print(type(self.left), type(self.right))
+        #print(self.left.get_type(), self.right.get_type())
         ltype = self.left.get_type()
         rtype = self.right.get_type()
         if ltype.is_pointer() and isinstance(self.right, Null):
@@ -1638,15 +1737,13 @@ class BooleanLte(BoolCmpOp):
         return self.left.consteval() <= self.right.consteval()
 
 
-class Assignment():
+class Assignment(ASTNode):
     """
     Assignment statement to a defined variable.\n
     lvalue = expr;
     """
-    def __init__(self, builder, module, spos, lvalue, expr):
-        self.builder = builder
-        self.module = module
-        self.spos = spos
+    def __init__(self, builder, module, package, spos, lvalue, expr):
+        super().__init__(builder, module, package, spos)
         self.lvalue = lvalue
         self.expr = expr
 
@@ -1692,6 +1789,7 @@ class Assignment():
         if isinstance(self.expr, Null):
             self.builder.store(ir.Constant(ptr.type.pointee, 'null'), ptr)
             return
+        # print(value, ptr)
         self.builder.store(value, ptr)
 
 
@@ -1779,11 +1877,11 @@ class DivAssignment(Assignment):
         else:
             value = self.builder.load_atomic(ptr.irvalue, 'seq_cst', 4)
         res = None
-        if get_type().is_unsigned():
+        if self.lvalue.get_type().is_unsigned():
             res = self.builder.udiv(value, self.expr.eval())
-        elif get_type().is_integer():
+        elif self.lvalue.get_type().is_integer():
             res = self.builder.sdiv(value, self.expr.eval())
-        elif get_type().is_float():
+        elif self.lvalue.get_type().is_float():
             res = self.builder.fdiv(value, self.expr.eval())
         else:
             lineno = self.expr.getsourcepos().lineno
@@ -1816,11 +1914,11 @@ class ModAssignment(Assignment):
         else:
             value = self.builder.load_atomic(ptr.irvalue, 'seq_cst', 4)
         res = None
-        if get_type().is_unsigned():
+        if self.lvalue.get_type().is_unsigned():
             res = self.builder.urem(value, self.expr.eval())
-        elif get_type().is_integer():
+        elif self.lvalue.get_type().is_integer():
             res = self.builder.srem(value, self.expr.eval())
-        elif get_type().is_float():
+        elif self.lvalue.get_type().is_float():
             res = self.builder.frem(value, self.expr.eval())
         else:
             lineno = self.expr.getsourcepos().lineno
@@ -1897,104 +1995,137 @@ class XorAssignment(Assignment):
             self.builder.atomic_rmw('xor', ptr.irvalue, self.expr.eval(), 'seq_cst')
 
 
-class Program():
+class Program:
     """
     Base node for AST
     """
-    def __init__(self, stmt):
-        self.stmts = [stmt]
+    def __init__(self, package, stmt=None):
+        self.package = package
+        self.stmts = []
+        if stmt is not None:
+            self.stmts.append(stmt)
 
     def add(self, stmt):
         self.stmts.append(stmt)
+
+    def generate_symbols(self):
+        for stmt in self.stmts:
+            if hasattr(stmt, 'generate_symbol'):
+                stmt.generate_symbol(self.package)
 
     def eval(self):
         for stmt in self.stmts:
             stmt.eval()
 
 
-class PackageDecl():
-    def __init__(self, builder, module, spos, lvalue):
-        self.builder = builder
-        self.module = module
-        self.spos = spos
+class PackageDecl(ASTNode):
+    def __init__(self, builder, module, package, spos, lvalue):
+        super().__init__(builder, module, package, spos)
         self.lvalue = lvalue
 
     def eval(self):
         self.builder.package = self.lvalue.get_name()
 
 
-class ImportDecl():
+class ImportDecl(ASTNode):
     """
     A statement that reads and imports another package.
     """
-    def __init__(self, builder, module, spos, lvalue):
-        self.builder = builder
-        self.module = module
-        self.spos = spos
+    def __init__(self, builder, module, package, spos, lvalue, symbols_to_import=None, import_all=False):
+        super().__init__(builder, module, package, spos)
         self.lvalue = lvalue
+        self.import_all = import_all
+        if symbols_to_import is None:
+            symbols_to_import = []
+        self.symbols_to_import = symbols_to_import
 
     def eval(self):
         from sparser import Parser
         from lexer import Lexer
-        from cachedmodule import CachedModule, cachedmods
+        from cachedmodule import CachedModule
+        import os.path
 
-        path = './packages/' + self.lvalue.get_name() + '/main.sat'
-        if path not in cachedmods.keys():
-            text_input = ""
-            with open(path) as f:
-                text_input = f.read()
-            
-            cmod = CachedModule(path, text_input)
-            cachedmods[path] = cmod
-            
-        cmod = cachedmods[path]
+        base_path = './packages/' + self.lvalue.get_name()
+        symbols_path = base_path + '/symbols.json'
+        if os.path.isfile(symbols_path):
+            package = Package(self.lvalue.get_name())
+            package.load_symbols_from_file(self.module, symbols_path)
 
-        lexer = Lexer().get_lexer()
-        tokens = lexer.lex(cmod.text_input)
+            if not self.import_all:
+                self.package.import_package(package)
+                if len(self.symbols_to_import) > 0:
+                    self.package.import_symbols_from_package(package, self.symbols_to_import)
+            else:
+                self.package.import_package(package)
+                self.package.import_all_symbols_from_package(package)
+        else:
+            path = base_path + '/main.sat'
+            if path not in self.package.cachedmods.keys():
+                text_input = ""
+                with open(path) as f:
+                    text_input = f.read()
 
-        self.builder.filestack.append(cmod.text_input)
-        self.builder.filestack_idx += 1
+                cmod = CachedModule(path, text_input)
+                self.package.cachedmods[path] = cmod
 
-        self.module.filestack.append(path)
-        self.module.filestack_idx += 1
+            cmod = self.package.cachedmods[path]
 
-        pg = Parser(self.module, self.builder)
-        pg.parse()
+            lexer = Lexer().get_lexer()
+            tokens = lexer.lex(cmod.text_input)
 
-        self.builder.filestack.pop(-1)
-        self.builder.filestack_idx -= 1
+            self.builder.filestack.append(cmod.text_input)
+            self.builder.filestack_idx += 1
 
-        self.module.filestack.pop(-1)
-        self.module.filestack_idx -= 1
+            self.module.filestack.append(path)
+            self.module.filestack_idx += 1
 
-        parser = pg.get_parser()
-        parser.parse(tokens).eval()
+            package = self.package
+            if not self.import_all:
+                package = Package(self.lvalue.get_name())
+                pg = Parser(self.module, self.builder, package)
+                pg.parse()
+            else:
+                pg = Parser(self.module, self.builder, package)
+                pg.parse()
+
+            self.builder.filestack.pop(-1)
+            self.builder.filestack_idx -= 1
+
+            self.module.filestack.pop(-1)
+            self.module.filestack_idx -= 1
+
+            parser = pg.get_parser()
+            parser.parse(tokens).eval()
+
+            if not self.import_all:
+                self.package.import_package(package)
+                if len(self.symbols_to_import) > 0:
+                    self.package.import_symbols_from_package(package, self.symbols_to_import)
 
 
-class ImportDeclExtern():
+class ImportDeclExtern(ASTNode):
     """
     A statement that reads and imports another package's declarations.
     """
-    def __init__(self, builder, module, spos, lvalue):
-        self.builder = builder
-        self.module = module
-        self.spos = spos
+    def __init__(self, builder, module, package, spos, lvalue):
+        super().__init__(builder, module, package, spos)
         self.lvalue = lvalue
-        
+        return
+
         from sparser import Parser
         from lexer import Lexer
-        from cachedmodule import CachedModule, cachedmods
+        from cachedmodule import CachedModule
 
         path = './packages/' + self.lvalue.get_name() + '/main.sat'
-        if path not in cachedmods.keys():
+        if path not in self.builder.cachedmods.keys():
             text_input = ""
             with open(path) as f:
                 text_input = f.read()
             
             cmod = CachedModule(path, text_input)
-            cachedmods[path] = cmod
+            self.builder.cachedmods[path] = cmod
             
-        cmod = cachedmods[path]
+        cmod = self.builder.cachedmods[path]
 
         lexer = Lexer().get_lexer()
         tokens = lexer.lex(cmod.text_input)
@@ -2005,7 +2136,7 @@ class ImportDeclExtern():
         self.module.filestack.append(path)
         self.module.filestack_idx += 1
 
-        pg = Parser(self.module, self.builder, True)
+        pg = Parser(self.module, self.builder, self.package, True)
         pg.parse()
 
         self.builder.filestack.pop(-1)
@@ -2021,34 +2152,32 @@ class ImportDeclExtern():
         pass
 
 
-class CIncludeDecl():
+class CIncludeDecl(ASTNode):
     """
     A statement that reads and imports a C header file.
     """
-    def __init__(self, builder, module, spos, string):
-        self.builder = builder
-        self.module = module
-        self.spos = spos
+    def __init__(self, builder, module, package, spos, string, decl_mode=False):
+        super().__init__(builder, module, package, spos)
         self.string = string
+        self.decl_mode = decl_mode
+        print("Including C file...")
+        import cparser
+        path = str(self.string.value).strip('"')
+        cparser.parse_c_file(self.builder, self.module, self.package, path)
 
     def eval(self):
         """
         TODO: Add C parsing functionality.
         """
-        #import cparser
-        #path = str(self.string.value).strip('"')
-        #cparser.parse_c_file(self.builder, self.module, path)
         pass
         
 
-class CDeclareDecl():
+class CDeclareDecl(ASTNode):
     """
     Creates a block of C declarations.
     """
-    def __init__(self, builder, module, spos, cblock):
-        self.builder = builder
-        self.module = module
-        self.spos = spos
+    def __init__(self, builder, module, package, spos, cblock):
+        super().__init__(builder, module, package, spos)
         self.cblock = cblock
 
     def eval(self):
@@ -2058,21 +2187,16 @@ class CDeclareDecl():
         self.builder.c_decl = False
 
 
-class CodeBlock():
+class CodeBlock(ASTNode):
     """
     A block of multiple statements with an enclosing scope.
     """
-    def __init__(self, builder, module, spos, stmt):
-        self.builder = builder
-        self.module = module
-        self.spos = spos
+    def __init__(self, builder, module, package, spos, stmt):
+        super().__init__(builder, module, package, spos)
         if stmt is not None:
             self.stmts = [stmt]
         else:
             self.stmts = []
-
-    def getsourcepos(self):
-        return self.spos
 
     def add(self, stmt):
         self.stmts.append(stmt)
@@ -2094,6 +2218,7 @@ def get_type_by_name(builder, module, name):
         return types[name].irtype
     return types["int"].irtype
 
+
 def from_type_get_name(builder, module, t):
     if t == ir.IntType(32):
         return "int"
@@ -2106,45 +2231,48 @@ def from_type_get_name(builder, module, t):
     return "bool"
 
 
-class FuncArg():
+class FuncArg(ASTNode):
     """
     An definition of a function parameter.\n
     name : rtype, 
     """
-    def __init__(self, builder, module, spos, name, atype, qualifiers=[]):
-        self.builder = builder
-        self.module = module
-        self.spos = spos
+    def __init__(self, builder, module, package, spos, name, atype, qualifiers=None):
+        super().__init__(builder, module, package, spos)
+        if qualifiers is None:
+            qualifiers = []
         self.name = name
-        self.atype = atype.type
+        self.atype = atype
+        self.type = None
         self.qualifiers = qualifiers.copy()
-
-    def getsourcepos(self):
-        return self.spos
     
     def eval(self, func: ir.Function, decl=True):
-        arg = ir.Argument(func, self.atype.irtype, name=self.name.value)
+        self.type = self.atype.get_type()
+        self.type.irtype = self.type.get_ir_type()
+
+        arg = ir.Argument(func, self.type.irtype, name=self.name.value)
+        if 'sret' in self.qualifiers:
+            arg.add_attribute('sret')
         if decl:
-            val = Value(self.name.value, self.atype, arg, qualifiers=self.qualifiers)
+            val = Value(self.name.value, self.type, arg, qualifiers=self.qualifiers)
             add_new_local(self.name.value, val)
             return val
         else:
             with self.builder.goto_entry_block():
                 self.builder.position_at_start(self.builder.block)
-                ptr = self.builder.alloca(self.atype.irtype, name=self.name.value)
+                ptr = self.builder.alloca(self.type.irtype, name=self.name.value)
             self.builder.store(arg, ptr)
-            argval = Value(self.name.value, self.atype, arg, qualifiers=self.qualifiers)
-            val = Value(self.name.value, self.atype, ptr, qualifiers=self.qualifiers)
+            argval = Value(self.name.value, self.type, arg, qualifiers=self.qualifiers)
+            val = Value(self.name.value, self.type, ptr, qualifiers=self.qualifiers)
             add_new_local(self.name.value, val)
             return argval
 
 
-
-class FuncArgList():
+class FuncArgList(ASTNode):
     """
     A list of arguments for a function.
     """
-    def __init__(self, builder, module, spos, arg=None):
+    def __init__(self, builder, module, package, spos, arg=None):
+        super().__init__(builder, module, package, spos)
         if arg is not None:
             self.args = [arg]
         else:
@@ -2171,14 +2299,17 @@ class FuncArgList():
     def get_arg_type_list(self):
         atypes = []
         for arg in self.args:
-            atypes.append(arg.atype.irtype)
+            atypes.append(arg.type.irtype)
         return atypes
 
     def get_arg_stype_list(self):
         atypes = []
         for arg in self.args:
-            atypes.append(arg.atype)
+            atypes.append(arg.type)
         return atypes
+
+    def get_arg_decl_type_list(self):
+        return [arg.atype for arg in self.args]
 
     def eval(self, func):
         eargs = []
@@ -2187,62 +2318,130 @@ class FuncArgList():
         return eargs
 
 
-
-class FuncDecl():
+class FuncDecl(ASTNode):
     """
     A declaration and definition of a function.\n
     fn name(decl_args): rtype { block }
     """
-    def __init__(self, builder, module, spos, name, rtype, block, decl_args, var_arg=False):
-        self.builder = builder
-        self.module = module
-        self.spos = spos
+    def __init__(self, builder, module, package, spos, name, rtype, block, decl_args, var_arg=False,
+                 visibility=Visibility.DEFAULT):
+        super().__init__(builder, module, package, spos)
         self.name = name
         self.rtype = rtype
         self.block = block
         self.decl_args = decl_args
         self.var_arg = var_arg
+        self.visibility = visibility
 
-    def getsourcepos(self):
-        return self.spos
+    def generate_symbol(self, package):
+        if package.lookup_symbol(self.name.value) is None:
+            rtype = self.rtype.get_type()
+            if rtype.is_struct() and rtype.is_value():
+                self.decl_args.add(FuncArg(
+                    self.builder,
+                    self.module,
+                    self.package,
+                    self.rtype.spos,
+                    Token('IDENT', 'ret', self.spos),
+                    rtype.get_pointer_to(), ['sret']))
+            decltypes = self.decl_args.get_arg_decl_type_list()
+            sargtypes = [decltype.get_type() for decltype in decltypes]
+            argtypes = [sargtype.get_ir_type() for sargtype in sargtypes]
+            fnty = ir.FunctionType(rtype.get_ir_type(), argtypes, var_arg=self.var_arg)
+            #print(f"fn {self.name.value} ({[str(stype) for stype in sargtypes]}): {str(rtype)};")
+            # print("%s (%s)" % (self.name.value, fnty))
+            sfnty = FuncType("", fnty, rtype, sargtypes)
+            fname = self.name.value
+            if not self.builder.c_decl and not (self.name.value == 'main' or self.name.value == '_entry'):
+                fname = mangle_name(self.name.value, sfnty.atypes)
+            try:
+                self.module.get_global(fname)
+                text_input = self.builder.filestack[self.builder.filestack_idx]
+                lines = text_input.splitlines()
+                lineno = self.name.getsourcepos().lineno
+                colno = self.name.getsourcepos().colno
+                if lineno > 1:
+                    line1 = lines[lineno - 2]
+                    line2 = lines[lineno - 1]
+                    print("%s\n%s\n%s^" % (line1, line2, "~" * (colno - 1)))
+                else:
+                    line1 = lines[lineno - 1]
+                    print("%s\n%s^" % (line1, "~" * (colno - 1)))
+                raise RuntimeError("%s (%d:%d): Redefining global value, %s, as function." % (
+                    self.module.filestack[self.module.filestack_idx],
+                    lineno,
+                    colno,
+                    self.name.value
+                ))
+            except(KeyError):
+                pass
+            fn = ir.Function(self.module, fnty, fname)
+            if self.name.value not in self.module.sfuncs:
+                fn_symbol = package.add_symbol(self.name.value, Func(self.name.value, sfnty.rtype, visibility=self.visibility))
+                fn_symbol.add_overload(sfnty.atypes, fn)
+            else:
+                symbol = package[self.name.value]
+                symbol.add_overload(sfnty.atypes, fn)
 
     def eval(self):
         push_new_scope(self.builder)
+        rtype = self.rtype.get_type()
+
+        if rtype.is_struct() and rtype.is_value():
+            self.decl_args.add(FuncArg(
+                self.builder,
+                self.module,
+                self.package,
+                self.rtype.spos,
+                Token('IDENT', 'ret', self.spos),
+                PointerTypeExpr(self.builder,
+                                self.module,
+                                self.package,
+                                self.rtype.spos,
+                                self.rtype), ['sret']))
         rtype = self.rtype
-        argtypes = self.decl_args.get_arg_type_list()
+
+        decltypes = self.decl_args.get_arg_decl_type_list()
+        sargtypes = [decltype.get_type() for decltype in decltypes]
+        argtypes = [argtype.get_ir_type() for argtype in sargtypes]
+
         fnty = ir.FunctionType(rtype.get_ir_type(), argtypes, var_arg=self.var_arg)
+        #print(f"fn {self.name.value} ({[str(stype) for stype in sargtypes]}): {str(self.rtype.type)};")
         #print("%s (%s)" % (self.name.value, fnty))
-        sfnty = FuncType("", fnty, rtype.type, self.decl_args.get_arg_stype_list())
+        sfnty = FuncType("", fnty, rtype.type, sargtypes)
         fname = self.name.value
         if not self.builder.c_decl and not (self.name.value == 'main' or self.name.value == '_entry'):
             fname = mangle_name(self.name.value, sfnty.atypes)
-        try:
-            self.module.get_global(fname)
-            text_input = self.builder.filestack[self.builder.filestack_idx]
-            lines = text_input.splitlines()
-            lineno = self.name.getsourcepos().lineno
-            colno = self.name.getsourcepos().colno
-            if lineno > 1:
-                line1 = lines[lineno - 2]
-                line2 = lines[lineno - 1]
-                print("%s\n%s\n%s^" % (line1, line2, "~" * (colno - 1)))
-            else:
-                line1 = lines[lineno - 1]
-                print("%s\n%s^" % (line1, "~" * (colno - 1)))
-            raise RuntimeError("%s (%d:%d): Redefining global value, %s, as function." % (
-                self.module.filestack[self.module.filestack_idx],
-                lineno,
-                colno,
-                self.name.value
-            ))
-        except(KeyError):
-            pass
-        fn = ir.Function(self.module, fnty, fname)
-        if self.name.value not in self.module.sfuncs:
-            self.module.sfuncs[self.name.value] = Func(self.name.value, sfnty.rtype)
-            self.module.sfuncs[self.name.value].add_overload(sfnty.atypes, fn)
+        symbol = self.package.lookup_symbol(self.name.value)
+        #print(fname)
+        if symbol is not None and symbol.get_overload(sfnty.atypes) is not None:
+            fn = symbol.get_overload(sfnty.atypes)
+            if not fn.is_declaration:
+                text_input = self.builder.filestack[self.builder.filestack_idx]
+                lines = text_input.splitlines()
+                lineno = self.name.getsourcepos().lineno
+                colno = self.name.getsourcepos().colno
+                if lineno > 1:
+                    line1 = lines[lineno - 2]
+                    line2 = lines[lineno - 1]
+                    print("%s\n%s\n%s^" % (line1, line2, "~" * (colno - 1)))
+                else:
+                    line1 = lines[lineno - 1]
+                    print("%s\n%s^" % (line1, "~" * (colno - 1)))
+                raise RuntimeError("%s (%d:%d): Redefining global value, %s, as function." % (
+                    self.module.filestack[self.module.filestack_idx],
+                    lineno,
+                    colno,
+                    self.name.value
+                ))
         else:
-            self.module.sfuncs[self.name.value].add_overload(sfnty.atypes, fn)
+            fn = ir.Function(self.module, fnty, fname)
+            if self.name.value not in self.module.sfuncs:
+                self.module.sfuncs[self.name.value] = Func(self.name.value, sfnty.rtype, visibility=self.visibility)
+                self.package.add_symbol(self.name.value, self.module.sfuncs[self.name.value])
+                self.module.sfuncs[self.name.value].add_overload(sfnty.atypes, fn)
+            else:
+                self.module.sfuncs[self.name.value].add_overload(sfnty.atypes, fn)
         #print("New function:", fname)
         sfnty.name = fname
         self.module.sfunctys[fname] = sfnty
@@ -2269,15 +2468,13 @@ class FuncDecl():
         pop_inner_scope()
 
 
-class FuncDeclExtern():
+class FuncDeclExtern(ASTNode):
     """
     A declaration of an externally defined function.\n
     fn name(decl_args) : rtype; 
     """
-    def __init__(self, builder, module, spos, name, rtype, decl_args, var_arg=False):
-        self.builder = builder
-        self.module = module
-        self.spos = spos
+    def __init__(self, builder, module, package, spos, name, rtype, decl_args, var_arg=False):
+        super().__init__(builder, module, package, spos)
         self.name = name
         self.rtype = rtype
         self.decl_args = decl_args
@@ -2288,11 +2485,16 @@ class FuncDeclExtern():
 
     def eval(self):
         push_new_scope(self.builder)
-        rtype = self.rtype.type
-        argtypes = self.decl_args.get_arg_type_list()
+        rtype = self.rtype.get_type()
+
+        decltypes = self.decl_args.get_arg_decl_type_list()
+        sargtypes = [decltype.get_type() for decltype in decltypes]
+        argtypes = [argtype.get_ir_type() for argtype in sargtypes]
+        #print(self.name, rtype, *argtypes)
+
         fnty = ir.FunctionType(rtype.irtype, argtypes, var_arg=self.var_arg)
         #print("%s (%s)" % (self.name.value, fnty))
-        sfnty = FuncType("", fnty, rtype, self.decl_args.get_arg_stype_list())
+        sfnty = FuncType("", fnty, rtype, sargtypes)
         fname = self.name.value
         if not self.builder.c_decl:
             fname = mangle_name(self.name.value, sfnty.atypes)
@@ -2301,76 +2503,83 @@ class FuncDeclExtern():
         #self.module.sfunctys[self.name.value] = sfnty
         if self.name.value not in self.module.sfuncs:
             self.module.sfuncs[self.name.value] = Func(self.name.value, sfnty.rtype)
+            self.package.add_symbol(self.name.value, self.module.sfuncs[self.name.value])
             self.module.sfuncs[self.name.value].add_overload(sfnty.atypes, fn)
         else:
             self.module.sfuncs[self.name.value].add_overload(sfnty.atypes, fn)
         pop_inner_scope()
 
 
-class GlobalVarDecl():
+class GlobalVarDecl(ASTNode):
     """
     A global variable declaration statement.\n
     name : vtype;\n
     name : vtype = initval;
     """
-    def __init__(self, builder, module, spos, name, vtype, initval=None, spec='none'):
+    def __init__(self, builder, module, package, spos, name, vtype, initval=None, spec='none',
+                 visibility=Visibility.DEFAULT):
+        super().__init__(builder, module, package, spos)
         self.name = name
         self.vtype = vtype
-        self.builder = builder
-        self.module = module
-        self.spos = spos
         self.initval = initval
         self.spec = spec
+        self.visibility = visibility
 
     def getsourcepos(self):
         return self.spos
+
+    def generate_symbol(self):
+        self.vtype.eval()
+        vartype = self.vtype.get_type()
+        return Value(self.name.value, vartype, None, objtype='global', visibility=self.visibility)
 
     def eval(self):
         self.vtype.eval()
         vartype = self.vtype.type
         #vartype = get_type_by_name(self.builder, self.module, str(self.vtype))
         gvar = ir.GlobalVariable(self.module, vartype.irtype, self.name.value)
+        gvar.align = 4
+        gvar.linkage = LinkageType.VALUE[self.visibility]
 
         if self.initval:
             gvar.initializer = self.initval.eval()
         
-        ptr = Value(self.name.value, vartype, gvar)
-        add_new_global(self.name.value, ptr)
+        ptr = Value(self.name.value, vartype, gvar, visibility=self.visibility)
+        self.package.add_symbol(self.name.value, ptr)
+        # add_new_global(self.name.value, ptr)
         return ptr
 
 
-class MethodDecl():
+class MethodDecl(ASTNode):
     """
     A declaration and definition of a method.\n
     fn(*struct) name(decl_args): rtype { block }
     """
-    def __init__(self, builder, module, spos, name, rtype, block, decl_args, struct):
-        self.builder = builder
-        self.module = module
-        self.spos = spos
+    def __init__(self, builder, module, package, spos, name, rtype, block, decl_args, struct):
+        super().__init__(builder, module, package, spos)
         self.name = name
         self.rtype = rtype
         self.block = block
         self.decl_args = decl_args
         self.struct = struct
         thisarg = FuncArg(
-            self.builder, self.module, self.struct.getsourcepos(), Token('IDENT', 'this'), 
-                TypeExpr(self.builder, self.module, self.struct.getsourcepos(), self.struct)
+            self.builder, self.module, self.package, self.struct.getsourcepos(), Token('IDENT', 'this'),
+                TypeExpr(self.builder, self.module, self.package, self.struct.getsourcepos(), self.struct)
         )
         thisarg.atype = thisarg.atype.get_pointer_to()
         self.decl_args.prepend(thisarg)
 
-
-    def getsourcepos(self):
-        return self.spos
-
     def eval(self):
         push_new_scope(self.builder)
-        rtype = self.rtype
-        argtypes = self.decl_args.get_arg_type_list()
+        rtype = self.rtype.get_type()
+
+        decltypes = self.decl_args.get_arg_decl_type_list()
+        sargtypes = [decltype.get_type() for decltype in decltypes]
+        argtypes = [sargtype.get_ir_type() for sargtype in sargtypes]
+
         fnty = ir.FunctionType(rtype.get_ir_type(), argtypes)
         #print("%s (%s)" % (self.name.value, fnty))
-        sfnty = FuncType("", fnty, rtype.type, self.decl_args.get_arg_stype_list())
+        sfnty = FuncType("", fnty, rtype, sargtypes)
         name = self.struct.get_name() + '.' + self.name.value
         fname = name
         if not self.builder.c_decl:
@@ -2437,36 +2646,36 @@ class MethodDecl():
         pop_inner_scope()
 
 
-class MethodDeclExtern():
+class MethodDeclExtern(ASTNode):
     """
     A declaration of an externally defined method.\n
     fn(*struct) name(decl_args) : rtype; 
     """
-    def __init__(self, builder, module, spos, name, rtype, decl_args, struct):
-        self.builder = builder
-        self.module = module
-        self.spos = spos
+    def __init__(self, builder, module, package, spos, name, rtype, decl_args, struct):
+        super().__init__(builder, module, package, spos)
         self.name = name
         self.rtype = rtype
         self.decl_args = decl_args
         self.struct = struct
         thisarg = FuncArg(
-            self.builder, self.module, self.struct.getsourcepos(), Token('IDENT', 'this'), 
-                TypeExpr(self.builder, self.module, self.struct.getsourcepos(), self.struct)
+            self.builder, self.module, self.package, self.struct.getsourcepos(), Token('IDENT', 'this'),
+                TypeExpr(self.builder, self.module, self.package, self.struct.getsourcepos(), self.struct)
         )
         thisarg.atype = thisarg.atype.get_pointer_to()
         self.decl_args.prepend(thisarg)
 
-    def getsourcepos(self):
-        return self.spos
-
     def eval(self):
         push_new_scope(self.builder)
-        rtype = self.rtype.type
-        argtypes = self.decl_args.get_arg_type_list()
+        rtype = self.rtype.get_type()
+        rtype.irtype = rtype.get_ir_type()
+
+        decltypes = self.decl_args.get_arg_decl_type_list()
+        sargtypes = [decltype.get_type() for decltype in decltypes]
+        argtypes = [sargtype.get_ir_type() for sargtype in sargtypes]
+
         fnty = ir.FunctionType(rtype.irtype, argtypes)
         #print("%s (%s)" % (self.name.value, fnty))
-        sfnty = FuncType("", fnty, rtype, self.decl_args.get_arg_stype_list())
+        sfnty = FuncType("", fnty, rtype, sargtypes)
         name = self.struct.get_name() + '.' + self.name.value
         fname = name
         if not self.builder.c_decl:
@@ -2482,27 +2691,23 @@ class MethodDeclExtern():
         pop_inner_scope()
 
 
-class VarDecl():
+class VarDecl(ASTNode):
     """
     A local varible declaration statement.\n
     name : vtype;\n
     name : vtype = initval;
     """
-    def __init__(self, builder, module, spos, name, vtype, initval=None, spec=[]):
+    def __init__(self, builder, module, package, spos, name, vtype, initval=None, spec=None):
+        super().__init__(builder, module, package, spos)
+        if spec is None:
+            spec = []
         self.name = name
         self.vtype = vtype
-        self.builder = builder
-        self.module = module
-        self.spos = spos
         self.initval = initval
         self.spec = spec.copy()
 
-    def getsourcepos(self):
-        return self.spos
-
     def eval(self):
-        self.vtype.eval()
-        vartype = self.vtype.type
+        vartype = self.vtype.get_type()
 
         quals = []
         for i in range(len(self.spec)):
@@ -2572,21 +2777,18 @@ class VarDecl():
         return ptr
 
 
-class VarDeclAssign():
+class VarDeclAssign(ASTNode):
     """
     An automatic variable declaration and assignment statement. Uses type inference.\n
     name := initval;
     """
-    def __init__(self, builder, module, spos, name, initval, spec=[]):
+    def __init__(self, builder, module, package, spos, name, initval, spec=None):
+        super().__init__(builder, module, package, spos)
+        if spec is None:
+            spec = []
         self.name = name
-        self.builder = builder
-        self.module = module
-        self.spos = spos
         self.initval = initval
         self.spec = spec.copy()
-
-    def getsourcepos(self):
-        return self.spos
 
     def eval(self):
         val = self.initval.eval()
@@ -2594,12 +2796,6 @@ class VarDeclAssign():
         
         #print('New var:', vartype, val, self.initval.get_ir_type())
         quals = [s[0] for s in self.spec.copy()]
-        #if self.spec == 'const':
-        #    quals.append('const')
-        #elif self.spec == 'immut':
-        #    quals.append('immut')
-        #elif self.spec == 'atomic':
-        #    quals.append('atomic')
         if str(vartype.irtype) == 'void':
             #print("%s (%s)" % (str(vartype), str(vartype.irtype)))
             lineno = self.initval.getsourcepos().lineno
@@ -2639,44 +2835,51 @@ class VarDeclAssign():
         return ptr
 
 
-class TypeExpr():
+class TypeExpr(ASTNode):
     """
     Expression representing a Saturn type.
     """
-    def __init__(self, builder, module, spos, lvalue):
-        self.builder = builder
-        self.module = module
-        self.spos = spos
+    def __init__(self, builder, module, package, spos, lvalue, decl_mode=False):
+        super().__init__(builder, module, package, spos)
         self.lvalue = lvalue
-        lname = self.lvalue.get_name()
-        if lname not in types.keys():
-            #print(*types.keys())
-            raise RuntimeError("%s (%d:%d): Undefined type, %s, used in typeexpr." % (
-                self.module.filestack[self.module.filestack_idx],
-                self.spos.lineno,
-                self.spos.colno,
-                lname
-            ))
-        self.base_type = types[lvalue.get_name()]
-        self.type = types[lvalue.get_name()]
+        self.type = None
+        self.base_type = None
         self.quals = []
 
     def get_ir_type(self):
-        return self.type.irtype
+        return self.get_type().get_ir_type()
 
     def get_type(self):
+        if self.type is None:
+            lname = self.lvalue.get_name()
+            if lname not in types.keys():
+                type_symbol = self.package.lookup_symbol(lname)
+                if type_symbol is None:
+                    # print(*types.keys())
+                    raise RuntimeError("%s (%d:%d): Undefined type, %s, used in typeexpr." % (
+                        self.module.filestack[self.module.filestack_idx],
+                        self.spos.lineno,
+                        self.spos.colno,
+                        lname
+                    ))
+            else:
+                type_symbol = types[lname]
+            self.base_type = type_symbol
+            self.type = type_symbol
+            if self.type is None:
+                raise RuntimeError("%s (%d:%d): Undefined type, %s, used in typeexpr." % (
+                    self.module.filestack[self.module.filestack_idx],
+                    self.spos.lineno,
+                    self.spos.colno,
+                    lname
+                ))
         return self.type
 
-    def add_pointer_qualifier(self):
-        self.type = self.type.get_pointer_to()
-        self.quals.append(['*'])
-
-    def add_array_qualifier(self, size):
-        self.type = self.type.get_array_of(int(size.value))
-        self.quals.append(['[]', int(size.value)])
-
     def is_pointer(self):
-        return self.type.is_pointer()
+        return self.get_type().is_pointer()
+
+    def get_pointer_to(self):
+        return PointerTypeExpr(self.builder, self.module, self.package, self.spos, self)
 
     def eval(self):
         self.type = types[self.lvalue.get_name()]
@@ -2687,14 +2890,57 @@ class TypeExpr():
                 self.type = self.type.get_array_of(qual[1])
 
 
+class PointerTypeExpr(TypeExpr):
+    """
+    Expression representing a pointer to a Saturn type.
+    """
+    def __init__(self, builder, module, package, spos, pointee, decl_mode=False):
+        super().__init__(builder, module, package, spos, None)
+        self.pointee = pointee
+
+    def get_type(self):
+        if self.type is None:
+            self.type = self.pointee.get_type().get_pointer_to()
+        return self.type
+
+    def eval(self):
+        pass
+
+
+class ArrayTypeExpr(TypeExpr):
+    """
+    Expression representing an array a Saturn type.
+    """
+    def __init__(self, builder, module, package, spos, element, size, decl_mode=False):
+        super().__init__(builder, module, package, spos, None)
+        self.element = element
+        self.size = size
+
+    def get_type(self):
+        if not self.size.is_constexpr:
+            lineno = self.spos.lineno
+            colno = self.spos.colno
+            throw_saturn_error(self.builder, self.module, lineno, colno,
+                               "Can't determine array size. Array size must be calculable at compile time."
+                               )
+        size = self.size.consteval()
+        if self.type is None:
+            self.type = self.element.get_type().get_array_of(size)
+        return self.type
+
+    def eval(self):
+        pass
+
+
 class TupleTypeExpr(TypeExpr):
     """
     Expression representing a Saturn tuple type.\n
     tuple(typeexprs...)
     """
-    def __init__(self, builder, module, spos, typeexprs):
+    def __init__(self, builder, module, package, spos, typeexprs):
         self.builder = builder
         self.module = module
+        self.package = package
         self.spos = spos
         self.types = typeexprs
         for ty in self.types:
@@ -2715,14 +2961,34 @@ class TupleTypeExpr(TypeExpr):
         pass
 
 
+class OptionalTypeExpr(TypeExpr):
+    """
+    Expression representing a Saturn optional type.\n
+    optional(typeexpr)
+    """
+    def __init__(self, builder, module, package, spos, typeexpr):
+        self.builder = builder
+        self.module = module
+        self.package = package
+        self.spos = spos
+        self.base = typeexpr.get_type()
+        self.type = make_optional_type(self.base_type)
+        self.base_type = self.type
+        self.quals = []
+
+    def eval(self):
+        pass
+
+
 class FuncTypeExpr(TypeExpr):
     """
     Expression representing a Saturn function type.\n
     fn(argtypeexprs...) rettypeexpr
     """
-    def __init__(self, builder, module, spos, argtypeexprs, rettypeexpr):
+    def __init__(self, builder, module, package, spos, argtypeexprs, rettypeexpr):
         self.builder = builder
         self.module = module
+        self.package = package
         self.spos = spos
         self.args = argtypeexprs
         for ty in self.args:
@@ -2745,19 +3011,25 @@ class FuncTypeExpr(TypeExpr):
         pass
 
 
-class TypeDecl():
+class TypeDecl(ASTNode):
     """
     A type declaration.\n
     type lvalue : ltype;
     """
-    def __init__(self, builder, module, spos, lvalue, ltype):
-        self.builder = builder
-        self.module = module
-        self.spos = spos
+    def __init__(self, builder, module, package, spos, lvalue, ltype):
+        super().__init__(builder, module, package, spos)
         self.lvalue = lvalue
-        self.type = ltype
-        name = self.lvalue.get_name()
-        types[name] = self.type.type
+        self.ltype = ltype
+        self.package.add_symbol(self.lvalue.get_name(), self.ltype.get_type())
+        self.type = None
+
+    def get_type(self):
+        if self.type is None:
+            name = self.lvalue.get_name()
+            types[name] = self.ltype.get_type()
+            self.package[name] = self.ltype.get_type()
+            self.type = types[name]
+        return self.type
 
     def eval(self):
         pass
@@ -2771,33 +3043,30 @@ def calc_sizeof_struct(builder, module, stype):
     return size
 
 
-class StructField():
-    def __init__(self, builder, module, spos, name, ftype, initvalue = None):
-        self.builder = builder
-        self.module = module
-        self.spos = spos
+class StructField(ASTNode):
+    def __init__(self, builder, module, package, spos, name, ftype, initvalue=None):
+        super().__init__(builder, module, package, spos)
         self.name = name
-        self.ftype = ftype.type
+        self.ftype = ftype
+        self.type = None
         self.initvalue = initvalue
 
-    def getsourcepos(self):
-        return self.spos
+    def get_type(self):
+        if self.type is None:
+            self.type = self.ftype.get_type()
+        return self.type
 
 
-class StructDeclBody():
-    def __init__(self, builder, module, spos):
-        self.builder = builder
-        self.module = module
-        self.spos = spos
+
+class StructDeclBody(ASTNode):
+    def __init__(self, builder, module, package, spos):
+        super().__init__(builder, module, package, spos)
         self.fields = []
-
-    def getsourcepos(self):
-        return self.spos
 
     def get_ir_types(self):
         ir_types = []
         for f in self.fields:
-            ir_types.append(f.ftype.irtype)
+            ir_types.append(f.ftype.get_type().get_ir_type())
         return ir_types
 
     def get_fields(self):
@@ -2807,24 +3076,23 @@ class StructDeclBody():
         self.fields.append(field)
 
 
-class StructDecl():
+class StructDecl(ASTNode):
     """
     A struct declaration expression.\n
     type lvalue : struct { body }
     """
-    def __init__(self, builder, module, spos, lvalue, body, decl_mode):
-        self.builder = builder
-        self.module = module
-        self.spos = spos
+    def __init__(self, builder, module, package, spos, lvalue, body, decl_mode):
+        super().__init__(builder, module, package, spos)
         self.lvalue = lvalue
         self.body = body
         self.ctor = None
         self.decl_mode = decl_mode
         name = self.lvalue.get_name()
         types[name] = StructType(name, self.module.context.get_identified_type(name), [])
+        self.package.add_symbol(name, types[name])
         if self.body is not None:
             for fld in self.body.get_fields():
-                types[name].add_field(fld.name, fld.ftype, fld.initvalue)
+                types[name].add_field(fld.name, fld.ftype.get_type(), fld.initvalue)
 
     def eval(self):
         name = self.lvalue.get_name()
@@ -2833,7 +3101,7 @@ class StructDecl():
             idstruct.set_body(*self.body.get_ir_types())
             types[name].irtype = idstruct
             for fld in self.body.get_fields():
-                types[name].add_field(fld.name, fld.ftype, fld.initvalue)
+                types[name].add_field(fld.name, fld.get_type(), fld.initvalue)
         initfs = types[name].get_fields_with_init()
         if len(initfs) > 0:
             push_new_scope(self.builder)
@@ -2851,9 +3119,16 @@ class StructDecl():
                 block = fn.append_basic_block("entry")
                 self.builder.position_at_start(block)
                 for fld in initfs:
+                    i = structty.get_field_index(fld.name)
+                    if i == -1:
+                        lineno = self.getsourcepos().lineno
+                        colno = self.getsourcepos().colno
+                        throw_saturn_error(self.builder, self.module, lineno, colno,
+                                           f"Cannot find field '{fld.name}' in struct '{structty.name}'"
+                                           )
                     gep = self.builder.gep(thisptr, [
                         ir.Constant(ir.IntType(32), 0),
-                        ir.Constant(ir.IntType(32), structty.get_field_index(fld.name))
+                        ir.Constant(ir.IntType(32), i)
                     ])
                     if fld.irvalue.constant == 'null':
                         self.builder.store(ir.Constant(gep.type.pointee, gep.type.pointee.null), gep)
@@ -2868,10 +3143,8 @@ class FuncCall(Expr):
     Function call expression.\n
     lvalue(args)
     """
-    def __init__(self, builder, module, spos, lvalue, args):
-        self.builder = builder
-        self.module = module
-        self.spos = spos
+    def __init__(self, builder, module, package, spos, lvalue, args):
+        super().__init__(builder, module, package, spos)
         self.lvalue = lvalue
         self.args = args
         self.is_constexpr = False
@@ -2881,7 +3154,9 @@ class FuncCall(Expr):
         ptr = check_name_in_scope(name)
         if ptr is None:
             if name not in self.module.sglobals:
-                return self.module.sfuncs[name].rtype
+                symbol = self.package.lookup_symbol(name)
+                return symbol.rtype
+                #  return self.module.sfuncs[name].rtype
             return self.module.sglobals[name].rtype
         return ptr.type
 
@@ -2894,8 +3169,15 @@ class FuncCall(Expr):
         ptr = check_name_in_scope(name)
         sfn = None
         if ptr is None:
-            if name not in self.module.sglobals:
-                sfn = self.module.sfuncs[self.lvalue.get_name()]
+            ptr = self.package.lookup_symbol(name)
+            if ptr is None:
+                lineno = self.getsourcepos().lineno
+                colno = self.getsourcepos().colno
+                throw_saturn_error(self.builder, self.module, lineno, colno,
+                                   f"Cannot find lvalue {self.lvalue.get_name()}.")
+            if isinstance(ptr, Func):
+                #sfn = self.module.sfuncs[self.lvalue.get_name()]
+                sfn = ptr
                 aargs = []
                 for arg in self.args:
                     if arg.get_type().is_reference():
@@ -2909,9 +3191,23 @@ class FuncCall(Expr):
                     throw_saturn_error(self.builder, self.module, lineno, colno, 
                         "Cannot find overload for function %s with argument types (%s)." % (self.lvalue.get_name(), print_types(aargs))
                     )
+                # print("Overload:", ovrld.module.name, name, self.module.name, (ovrld.module.name == self.module.name))
+                try:
+                    self.module.get_global(ovrld.name)
+                except KeyError:
+                    ovrld = ir.Function(self.module,
+                                        ir.FunctionType(sfn.rtype.get_ir_type(),
+                                                        [aarg.get_ir_type() for aarg in aargs]),
+                                        mangle_name(name, aargs))
+                    # lineno = self.getsourcepos().lineno
+                    # colno = self.getsourcepos().colno
+                    # throw_saturn_error(self.builder, self.module, lineno, colno,
+                    #                    "Function %s not defined in current module." % (
+                    #                    self.lvalue.get_name())
+                    #                    )
                 args = [arg.eval() for arg in self.args]
                 return self.builder.call(ovrld, args, self.lvalue.get_name())
-            ptr = self.module.sglobals[name]
+            #ptr = self.module.sglobals[name]
         args = [arg.eval() for arg in self.args]
         fn = self.builder.load(ptr.irvalue)
         return self.builder.call(fn, args)
@@ -2923,10 +3219,8 @@ class MethodCall(Expr):
     Method call expression.\n
     callee.lvalue(args)
     """
-    def __init__(self, builder, module, spos, callee, lvalue, args):
-        self.builder = builder
-        self.module = module
-        self.spos = spos
+    def __init__(self, builder, module, package, spos, callee, lvalue, args):
+        super().__init__(builder, module, package, spos)
         self.callee = callee
         self.lvalue = lvalue
         self.args = args
@@ -2944,7 +3238,7 @@ class MethodCall(Expr):
         sfn = self.module.sfuncs[name]
         #print(name, self.module.sfuncs[name], sfn.overloads)
         sargs = [arg for arg in self.args]
-        sargs.insert(0, AddressOf(self.builder, self.module, self.spos, self.callee))
+        sargs.insert(0, AddressOf(self.builder, self.module, self.package, self.spos, self.callee))
         aargs = [arg.get_type() for arg in sargs]
         ovrld = sfn.get_overload(aargs)
         if not ovrld:
@@ -2957,15 +3251,16 @@ class MethodCall(Expr):
         return self.builder.call(ovrld, args, name)
 
 
-class Statement():
-    def __init__(self, builder, module, spos, value):
-        self.builder = builder
-        self.module = module
-        self.spos = spos
+class Statement(ASTNode):
+    def __init__(self, builder, module, package, spos, value):
+        super().__init__(builder, module, package, spos)
         self.value = value
 
     def getsourcepos(self):
         return self.spos
+
+    def eval(self):
+        pass
 
 
 class ReturnStatement(Statement):
@@ -3020,9 +3315,10 @@ class DeferStatement(Statement):
     defer stmt;\n
     defer { block }
     """
-    def __init__(self, builder, module, spos, stmt):
+    def __init__(self, builder, module, package, spos, stmt):
         self.builder = builder
         self.module = module
+        self.package = package
         self.spos = spos
         self.stmt = stmt
 
@@ -3033,57 +3329,61 @@ class DeferStatement(Statement):
         pass
 
 
-class IfStatement():
+class IfStatement(ASTNode):
     """
     If statement.\n
     if boolexpr { then }\n
     if boolexpr { then } else { el }
     """
-    def __init__(self, builder, module, spos, boolexpr, then, elseif=[], el=None):
-        self.builder = builder
-        self.module = module
-        self.spos = spos
+    def __init__(self, builder, module, package, spos, boolexpr, then, elseif=[], el=None):
+        super().__init__(builder, module, package, spos)
         self.boolexpr = boolexpr
         self.then = then
+        self.elseif = elseif
         self.el = el
-
-    def getsourcepos(self):
-        return self.spos
 
     def eval(self):
         bexpr = self.boolexpr.eval()
-        then = self.builder.append_basic_block(self.module.get_unique_name("then"))
-        el = None
-        if self.el is not None:
-            el = self.builder.append_basic_block(self.module.get_unique_name("else"))
-        after = self.builder.append_basic_block(self.module.get_unique_name("after"))
-        if self.el is not None:
-            self.builder.cbranch(bexpr, then, el)
+        if self.el is None:
+            with self.builder.if_then(bexpr):
+                self.then.eval()
         else:
-            self.builder.cbranch(bexpr, then, after)
-        self.builder.goto_block(then)
-        self.builder.position_at_start(then)
-        self.then.eval()
-        if not self.builder.block.is_terminated:
-            self.builder.branch(after)
-        if self.el is not None:
-            self.builder.goto_block(el)
-            self.builder.position_at_start(el)
-            self.el.eval()
-            self.builder.branch(after)
-        self.builder.goto_block(after)
-        self.builder.position_at_start(after)
+            with self.builder.if_else(bexpr) as (then, otherwise):
+                with then:
+                    self.then.eval()
+                with otherwise:
+                    self.el.eval()
+        # return
+        # then = self.builder.append_basic_block(self.module.get_unique_name("then"))
+        # el = None
+        # if self.el is not None:
+        #     el = self.builder.append_basic_block(self.module.get_unique_name("else"))
+        # after = self.builder.append_basic_block(self.module.get_unique_name("after"))
+        # if self.el is not None:
+        #     self.builder.cbranch(bexpr, then, el)
+        # else:
+        #     self.builder.cbranch(bexpr, then, after)
+        # self.builder.goto_block(then)
+        # self.builder.position_at_start(then)
+        # self.then.eval()
+        # if not self.builder.block.is_terminated:
+        #     self.builder.branch(after)
+        # if self.el is not None:
+        #     self.builder.goto_block(el)
+        #     self.builder.position_at_start(el)
+        #     self.el.eval()
+        #     self.builder.branch(after)
+        # self.builder.goto_block(after)
+        # self.builder.position_at_start(after)
 
 
-class WhileStatement():
+class WhileStatement(ASTNode):
     """
     While loop statement.\n
     while boolexpr { loop }
     """
-    def __init__(self, builder, module, spos, boolexpr, loop):
-        self.builder = builder
-        self.module = module
-        self.spos = spos
+    def __init__(self, builder, module, package, spos, boolexpr, loop):
+        super().__init__(builder, module, package, spos)
         self.boolexpr = boolexpr
         self.loop = loop
 
@@ -3108,20 +3408,15 @@ class WhileStatement():
         self.builder.position_at_start(after)
 
 
-class DoWhileStatement():
+class DoWhileStatement(ASTNode):
     """
     Do-While loop statement.\n
     do { loop } while boolexpr;
     """
-    def __init__(self, builder, module, spos, boolexpr, loop):
-        self.builder = builder
-        self.module = module
-        self.spos = spos
+    def __init__(self, builder, module, package, spos, boolexpr, loop):
+        super().__init__(builder, module, package, spos)
         self.boolexpr = boolexpr
         self.loop = loop
-
-    def getsourcepos(self):
-        return self.spos
 
     def eval(self):
         loop = self.builder.append_basic_block(self.module.get_unique_name("while"))
@@ -3140,7 +3435,7 @@ class DoWhileStatement():
         self.builder.position_at_start(after)
 
 
-class IterExpr():
+class IterExpr(ASTNode):
     """
     An expression representing an iteration.\n
     a .. b \n
@@ -3148,17 +3443,12 @@ class IterExpr():
     a ... b \n
     a ... b : c
     """
-    def __init__(self, builder, module, spos, a, b, c=None, inclusive=False):
-        self.builder = builder
-        self.module = module
-        self.spos = spos
+    def __init__(self, builder, module, package, spos, a, b, c=None, inclusive=False):
+        super().__init__(builder, module, package, spos)
         self.a = a
         self.b = b
         self.c = c
         self.inclusive = inclusive
-
-    def getsourcepos(self):
-        return self.spos
 
     def get_type(self):
         return self.a.get_type()
@@ -3174,12 +3464,12 @@ class IterExpr():
         inc = self.get_inc_amount()
         if inc.constant > 0:
             if self.inclusive:
-                return BooleanLte(self.builder, self.module, self.spos, loopvar, tocheck).eval()
-            return BooleanLt(self.builder, self.module, self.spos, loopvar, tocheck).eval()
+                return BooleanLte(self.builder, self.module, self.package, self.spos, loopvar, tocheck).eval()
+            return BooleanLt(self.builder, self.module, self.package, self.spos, loopvar, tocheck).eval()
         else:
             if self.inclusive:
-                return BooleanGte(self.builder, self.module, self.spos, loopvar, tocheck).eval()
-            return BooleanGt(self.builder, self.module, self.spos, loopvar, tocheck).eval()
+                return BooleanGte(self.builder, self.module, self.package, self.spos, loopvar, tocheck).eval()
+            return BooleanGt(self.builder, self.module, self.package, self.spos, loopvar, tocheck).eval()
 
     def get_inc_amount(self):
         if self.c is None:
@@ -3188,28 +3478,23 @@ class IterExpr():
 
     def eval_loop_inc(self, loopvar):
         if self.c is not None:
-            AddAssignment(self.builder, self.module, self.spos, loopvar, self.c).eval()
+            AddAssignment(self.builder, self.module, self.package, self.spos, loopvar, self.c).eval()
         else:
             ptr = loopvar.get_pointer()
             add = self.builder.add(self.builder.load(ptr.irvalue), ir.Constant(ir.IntType(32), 1))
             self.builder.store(add, ptr.irvalue)
 
 
-class ForStatement():
+class ForStatement(ASTNode):
     """
     For loop statement.\n
     for it in itexpr { loop }
     """
-    def __init__(self, builder, module, spos, it, itexpr, loop):
-        self.builder = builder
-        self.module = module
-        self.spos = spos
+    def __init__(self, builder, module, package, spos, it, itexpr, loop):
+        super().__init__(builder, module, package, spos)
         self.it = it
         self.itexpr = itexpr
         self.loop = loop
-
-    def getsourcepos(self):
-        return self.spos
 
     def eval(self):
         init = self.builder.append_basic_block(self.module.get_unique_name("for.init"))
@@ -3248,20 +3533,17 @@ class ForStatement():
         pop_inner_scope()
 
 
-class SwitchCase():
+class SwitchCase(ASTNode):
     """
     Switch statement case
     case expr: stmts
     """
-    def __init__(self, builder, module, spos, expr, stmts=[]):
-        self.builder = builder
-        self.module = module
-        self.spos = spos
+    def __init__(self, builder, module, package, spos, expr, stmts=None):
+        super().__init__(builder, module, package, spos)
+        if stmts is None:
+            stmts = []
         self.expr = expr
         self.stmts = stmts
-
-    def getsourcepos(self):
-        return self.spos
 
     def add_stmt(self, stmt):
         self.stmts.append(stmt)
@@ -3276,23 +3558,23 @@ class SwitchDefaultCase(SwitchCase):
     Switch statement case
     case expr: stmts
     """
-    def __init__(self, builder, module, spos, stmts=[]):
+    def __init__(self, builder, module, package, spos, stmts=None):
+        if stmts is None:
+            stmts = []
         self.builder = builder
         self.module = module
+        self.package = package
         self.spos = spos
         self.stmts = stmts
 
 
-class SwitchBody():
-    def __init__(self, builder, module, spos, cases=[], default_case=None):
-        self.builder = builder
-        self.module = module
-        self.spos = spos
+class SwitchBody(ASTNode):
+    def __init__(self, builder, module, package, spos, cases=None, default_case=None):
+        super().__init__(builder, module, package, spos)
+        if cases is None:
+            cases = []
         self.cases = cases
         self.default_case = default_case
-
-    def getsourcepos(self):
-        return self.spos
 
     def add_case(self, case):
         self.cases.append(case)
@@ -3301,20 +3583,15 @@ class SwitchBody():
         self.default_case = case
 
 
-class SwitchStatement():
+class SwitchStatement(ASTNode):
     """
     While loop statement.\n
     switch expr { case_stmt ... default_case_stmt }
     """
-    def __init__(self, builder, module, spos, expr, body=None):
-        self.builder = builder
-        self.module = module
-        self.spos = spos
+    def __init__(self, builder, module, package, spos, expr, body=None):
+        super().__init__(builder, module, package, spos)
         self.expr = expr
         self.body = body
-
-    def getsourcepos(self):
-        return self.spos
 
     def eval(self):
         sexpr = self.expr.eval()
@@ -3363,19 +3640,12 @@ class SwitchStatement():
         self.builder.position_at_start(after)
 
 
-class Print():
-    def __init__(self, builder, module, spos, value):
-        self.builder = builder
-        self.module = module
-        self.spos = spos
+class Print(ASTNode):
+    def __init__(self, builder, module, package, spos, value):
+        super().__init__(builder, module, package, spos)
         self.value = value
-
-    def getsourcepos(self):
-        return self.spos
 
     def eval(self):
         # Call Print Function
-        args = []
-        for value in self.value:
-            args.append(value.eval())
+        args = [value.eval() for value in self.value]
         self.builder.call(self.module.get_global("printf"), args)

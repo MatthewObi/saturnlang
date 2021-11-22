@@ -7,7 +7,8 @@ int64 = ir.IntType(64)
 double = ir.DoubleType()
 void = ir.VoidType()
 
-class CodeGen():
+
+class CodeGen:
     def __init__(self, filename, opt_level, compile_target):
         self.binding = binding
         self.filename = filename
@@ -48,7 +49,7 @@ class CodeGen():
             "flags": flags
         }, is_distinct=True)
 
-        self.module.di_types = {}
+        self.module.di_types = dict()
         self.module.di_types["int"] = self.module.add_debug_info("DIBasicType", {
             "name": "int",
             "size": 32,
