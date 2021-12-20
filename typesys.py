@@ -9,10 +9,11 @@ class Type(Symbol):
     irtype: the underlying llvm type of this semantic type.\n
     tclass: a category for how the type is treated semantically.\n
     qualifiers: adds special qualifiers to the base type (pointers, arrays, const, immut...)\n
-    traits: special instances that change how a type is treated by the compiler.
+    traits: special instances that change how a type is treated by the compiler.\n
+    c_decl: Whether the function is a C declaration.\n
     """
-    def __init__(self, name, tclass, irtype=None, qualifiers=None, traits=None):
-        super().__init__(name, visibility=Visibility.PUBLIC, link_type=LinkageType.DEFAULT)
+    def __init__(self, name, tclass, irtype=None, qualifiers=None, traits=None, c_decl=False):
+        super().__init__(name, visibility=Visibility.PUBLIC, link_type=LinkageType.DEFAULT, c_decl=c_decl)
         if traits is None:
             traits = []
         if qualifiers is None:
@@ -138,6 +139,9 @@ class Type(Symbol):
     def is_actual_pointer(self):
         return ('ptr',) in self.qualifiers
 
+    def is_byte_pointer(self):
+        return self.is_actual_pointer() and (self.name == 'byte' or self.name == 'C::char')
+
     def is_value(self):
         return not (self.is_array() or self.is_pointer())
 
@@ -174,6 +178,9 @@ class Type(Symbol):
     def is_reference(self):
         return ('ref',) in self.qualifiers
 
+    def is_void(self):
+        return self.tclass == 'void'
+
     def is_iterable(self):
         return self.is_array() or self.is_string()
 
@@ -189,21 +196,29 @@ class Type(Symbol):
     def has_dtor(self):
         return False
 
-    def to_dict(self):
+    def to_dict(self, full_def=True):
         d = super().to_dict()
-        d['type'] = 'type'
-        if isinstance(self.irtype, ir.IdentifiedStructType):
-            s = "{ "
-            for element in self.irtype.elements:
-                s += str(element) + ", "
-            s = s[:-2] + " }"
-            d['irtype'] = s
-        else:
-            d['irtype'] = str(self.irtype)
+        d['symbol_type'] = 'type'
+        d['type'] = {}
+        dt = d['type']
+        for q in self.qualifiers:
+            if q[0] == 'ptr':
+                dt['type'] = 'pointer'
+                dt['pointee'] = {}
+                dt = dt['pointee']
+            elif q[0] == 'array':
+                dt['type'] = 'array'
+                dt['size'] = q[1]
+                dt['element'] = {}
+                dt = dt['element']
+        dt['type'] = 'named'
+        dt['name'] = self.name
+        dt['tclass'] = self.tclass
         d['tclass'] = self.tclass
         d['traits'] = self.traits
         d['name'] = self.name
         d['qualifiers'] = self.qualifiers
+        # print(d)
         return d
 
     def __str__(self):
@@ -231,6 +246,8 @@ class Type(Symbol):
                 return True
             if self.is_array() and other.is_array():
                 return True
+        if self.tclass == other.tclass and self.is_integer():
+            return True
         return False
 
     def is_convertable(self, other):
@@ -258,12 +275,28 @@ types = {
     "cstring":  Type("cstring", 'string',   ir.IntType(8).as_pointer(), traits=['TOpaquePtr']),
     "null_t":   Type("null_t",  'null',     ir.IntType(8).as_pointer(), traits=['TNoDereference', 'TOpaquePtr']),
     # C types
-    "C::float":     Type("C::float",    'float',    ir.FloatType(), ),
-    "C::double":    Type("C::double",   'float',    ir.DoubleType(), ),
-    "C::int":       Type("C::int",      'int',      ir.IntType(32), ),
-    "C::void":      Type("C::void",     'void',     ir.VoidType(), ),
-    "C::char":      Type("C::char",     'int',      ir.IntType(8), ),
-    "C::unsigned":  Type("C::unsigned", 'uint',     ir.IntType(32), ),
+    "C::float":                 Type("C::float",                'float',    ir.FloatType(),  c_decl=True),
+    "C::double":                Type("C::double",               'float',    ir.DoubleType(), c_decl=True),
+    "C::long.double":           Type("C::long.double",          'float',    ir.DoubleType(), c_decl=True),
+    "C::int":                   Type("C::int",                  'int',      ir.IntType(32),  c_decl=True),
+    "C::short":                 Type("C::short",                'int',      ir.IntType(16),  c_decl=True),
+    "C::long":                  Type("C::long",                 'int',      ir.IntType(32),  c_decl=True),
+    "C::long.long":             Type("C::long.long",            'int',      ir.IntType(64),  c_decl=True),
+    "C::void":                  Type("C::void",                 'void',     ir.VoidType(),   c_decl=True),
+    "C::char":                  Type("C::char",                 'int',      ir.IntType(8),   c_decl=True),
+    "C::unsigned":              Type("C::unsigned",             'uint',     ir.IntType(32),  c_decl=True),
+    "C::signed.char":           Type("C::signed.char",          'int',      ir.IntType(8),   c_decl=True),
+    "C::unsigned.char":         Type("C::unsigned.char",        'uint',     ir.IntType(8),   c_decl=True),
+    "C::unsigned.int":          Type("C::unsigned.int",         'uint',     ir.IntType(32),  c_decl=True),
+    "C::unsigned.short":        Type("C::unsigned.short",       'uint',     ir.IntType(16),  c_decl=True),
+    "C::unsigned.long":         Type("C::unsigned.long",        'uint',     ir.IntType(32),  c_decl=True),
+    "C::unsigned.long.long":    Type("C::unsigned.long.long",   'uint',     ir.IntType(64),  c_decl=True),
+    "C::wchar_t":               Type("C::wchar_t",              'int',      ir.IntType(16),  c_decl=True),
+    "C::uintptr_t":             Type("C::uintptr_t",            'uint',     ir.IntType(64),  c_decl=True),
+    "C::__time64_t":            Type("C::__time64_t",           'uint',     ir.IntType(64),  c_decl=True),
+    "C::errno_t":               Type("C::errno_t",              'int',      ir.IntType(32),  c_decl=True),
+    "C::size_t":                Type("C::size_t",               'uint',     ir.IntType(64),  c_decl=True),
+    "C::_Bool":                 Type("C::_Bool",                'bool',     ir.IntType(8),   c_decl=True),
 }
 
 
@@ -323,12 +356,13 @@ class Value(Symbol):
 
     def __str__(self):
         s = f"{Visibility.VALUE[self.visibility]} {self.objtype} {print_qualifiers(self.qualifiers)} value {self.name}: {str(self.type)}"
+        return s
 
     def to_dict(self):
         d = super().to_dict()
         d['name'] = self.name
-        d['type'] = 'value'
-        d['value_type'] = str(self.type)
+        d['symbol_type'] = 'value'
+        d['value_type'] = self.type.to_dict()
         d['obj_type'] = self.objtype
         d['qualifiers'] = self.qualifiers
         return d
@@ -361,14 +395,27 @@ class FuncType(Type):
             traits=self.traits
         )
 
+    def __str__(self):
+        s = ""
+        if self.is_pointer():
+            s += '*'
+        arg_str = ""
+        for atype in self.atypes:
+            arg_str += f"{str(atype)}, "
+        arg_str = arg_str.rstrip(", ")
+        s += f"fn({arg_str}): {str(self.rtype)}"
+        return s
+
 
 class StructType(Type):
     """
     A structure type in Saturn.
     """
-    def __init__(self, name, irtype, fields=None, qualifiers=None, traits=None, operators=None):
+    def __init__(self, name, irtype, fields=None, qualifiers=None, traits=None, operators=None, methods=None):
         if operators is None:
             operators = {}
+        if methods is None:
+            methods = {}
         if traits is None:
             traits = {}
         if qualifiers is None:
@@ -385,6 +432,7 @@ class StructType(Type):
         self.ctor = None
         self.dtor = None
         self.operator = operators.copy()
+        self.methods = methods.copy()
 
     def get_ir_type(self):
         if self.irtype is None:
@@ -393,11 +441,11 @@ class StructType(Type):
 
     def add_field(self, name, ftype, irvalue):
         if irvalue is not None:
-            value = Value(name.value, ftype, irvalue.eval())
+            value = Value(name, ftype, irvalue.eval())
         else:
-            value = Value(name.value, ftype, None)
+            value = Value(name, ftype, None)
         self.fields.append(value)
-        self[name.value] = value
+        self[name] = value
 
     def get_field_index(self, name):
         for i in range(len(self.fields)):
@@ -442,14 +490,34 @@ class StructType(Type):
         if not self.has_operator(op):
             self.operator[op] = fn
 
+    def has_method(self, name):
+        return name in self.methods.keys()
+
+    def add_method(self, name, fn):
+        if not self.has_method(name):
+            self.methods[name] = fn
+            self[name] = fn
+            fn.parent = self
+
+    def get_array_of(self, size):
+        return StructType(self.name,
+                          ir.ArrayType(self.irtype, size),
+                          self.fields,
+                          qualifiers=self.qualifiers + [('array', size)],
+                          traits=self.traits,
+                          operators=self.operator,
+                          methods=self.methods
+                          )
+
     def get_pointer_to(self):
         return StructType(self.name,
-            self.irtype.as_pointer(),
-            self.fields,
-            qualifiers=self.qualifiers + [('ptr',)],
-            traits=self.traits,
-            operators=self.operator
-        )
+                          self.irtype.as_pointer(),
+                          self.fields,
+                          qualifiers=self.qualifiers + [('ptr',)],
+                          traits=self.traits,
+                          operators=self.operator,
+                          methods=self.methods
+                          )
 
     def get_reference_to(self):
         return ReferenceType(self.name,
@@ -487,7 +555,10 @@ class StructType(Type):
             operators=self.operator
         )
 
-    def to_dict(self):
+    def to_dict(self, full_def=True):
+        if not full_def:
+            d = super().to_dict()
+            return d
         d = super().to_dict()
         d['fields'] = {field.name: field.to_dict() for field in self.fields}
         d['operators'] = {key: func.to_dict() for key, func in self.operator.items()}
@@ -545,6 +616,20 @@ class ReferenceType(Type):
     def add_operator(self, op, fn):
         self.type.add_operator(op, fn)
 
+    def to_dict(self, full_def=True):
+        d = super().to_dict()
+        d['symbol_type'] = 'type'
+        d['type'] = {}
+        dt = d['type']
+        dt['type'] = 'named'
+        dt['name'] = self.name
+        d['tclass'] = self.tclass
+        d['traits'] = self.traits
+        d['name'] = self.name
+        d['qualifiers'] = self.qualifiers
+        # print(d)
+        return d
+
 
 def get_base_type(ty: Type):
     if ty.is_value():
@@ -597,6 +682,10 @@ def mangle_name(name: str, atypes: list):
     return mname
 
 
+def demangle_name(name: str):
+    pass
+
+
 def print_types(types_list: list):
     if len(types_list) == 0:
         return 'void'
@@ -630,17 +719,99 @@ class FuncOverload:
 
     def to_dict(self):
         d = {'name': self.name,
-             'type': 'overload',
-             'atypes': [str(ty) for ty in self.atypes]}
+             'symbol_type': 'overload',
+             'traits': self.traits,
+             'atypes': [ty.to_dict(False) for ty in self.atypes]}
         return d
+
+
+def get_type_match_value(expected: Type, actual: Type):
+    if expected is actual:
+        return 10
+    if expected.is_similar(actual):
+        return 5
+    if expected.is_pointer() and actual is types['null_t']:
+        return 5
+    if expected.is_byte_pointer() and actual.is_pointer():
+        return 5
+    if isinstance(expected, FuncType) and isinstance(actual, FuncType):
+        if len(expected.atypes) < len(actual.atypes):
+            return 0
+        if len(expected.atypes) == len(actual.atypes):
+            retval = 10
+            for i in range(len(expected.atypes)):
+                val = get_type_match_value(expected.atypes[i], actual.atypes[i])
+                if val == 0:
+                    return 0
+                if val == 5:
+                    retval = 5
+            return retval
+    return 0
+
+
+def get_implicit_conversion_for_match(expected: list, actual: list):
+    if len(expected) < len(actual):
+        return None
+    if len(expected) == len(actual):
+        conversions = {}
+        for i in range(len(expected)):
+            exp = expected[i]
+            act = actual[i]
+            val = get_type_match_value(exp, act)
+            if val == 5:
+                conversions[i] = exp
+            i += 1
+        return conversions
+    return None
+
+
+def get_arg_list_match_value(expected: list, actual: list):
+    if len(expected) < len(actual):
+        return 0
+    if len(expected) == len(actual):
+        match = 0
+        for i in range(len(expected)):
+            exp = expected[i]
+            act = actual[i]
+            val = get_type_match_value(exp, act)
+            if val == 0:
+                return 0
+            match += val
+        return match
+    return 0
+
+
+class OverloadMatch:
+    def __init__(self, overload, actual_args, score, implicit_conversions=None):
+        self.overload = overload
+        self.actual_args = actual_args
+        self.score = score
+        self.requires_implicit_conversions = implicit_conversions is not None
+        if implicit_conversions is None:
+            self.implicit_conversions = {}
+        else:
+            self.implicit_conversions = implicit_conversions
+
+    def __str__(self):
+        s = f"Match: (score = {str(self.score)}) ({print_types(self.overload.atypes)}) ?= ({print_types(self.actual_args)})"
+        return s
+
+
+def get_overload_match(expected: FuncOverload, actual: list):
+    match = OverloadMatch(expected, actual,
+                          get_arg_list_match_value(expected.atypes, actual),
+                          get_implicit_conversion_for_match(expected.atypes, actual))
+    return match
 
 
 class Func(Symbol):
     """
     A function value in Saturn.
     """
-    def __init__(self, name, rtype, overloads=None, traits=None, visibility=Visibility.DEFAULT, link_type=LinkageType.DEFAULT):
-        super().__init__(name, visibility=visibility, link_type=link_type)
+    def __init__(self, name, rtype, overloads=None, traits=None,
+                 visibility=Visibility.DEFAULT, link_type=LinkageType.DEFAULT,
+                 c_decl=False):
+        super().__init__(name, visibility=visibility, link_type=link_type, c_decl=c_decl)
         if traits is None:
             traits = {}
         if overloads is None:
@@ -654,9 +825,17 @@ class Func(Symbol):
         self.overloads[key] = FuncOverload(key, fn, self.rtype, atypes, self.traits)
 
     def search_overload(self, atypes):
-        for overload in self.overloads.values():
-            if atypes == overload.atypes:
-                return overload
+        """
+        Searches all available overloads and chooses the best match that requires no
+        explicit conversions.\n
+        :param atypes:
+        :return:
+        """
+        available_overloads = [get_overload_match(overload, atypes) for overload in self.overloads.values()]
+        available_overloads.sort(key=lambda i: i.score, reverse=True)
+        for overload_match in available_overloads:
+            if overload_match.score != 0:
+                return overload_match
         return None
 
     def get_overload(self, atypes):
@@ -668,6 +847,9 @@ class Func(Symbol):
     def get_default_overload(self):
         return list(self.overloads.values())[0]
 
+    def has_default_overload(self):
+        return len(self.overloads) == 1
+
     def __str__(self):
         s = f"{Visibility.VALUE[self.visibility]} fn {self.name}: {str(self.rtype)}"
         for overload in self.overloads.values():
@@ -676,8 +858,9 @@ class Func(Symbol):
 
     def to_dict(self):
         d = super().to_dict()
-        d['type'] = 'function'
-        d['rtype'] = str(self.rtype)
+        d['symbol_type'] = 'function'
+        d['traits'] = self.traits
+        d['rtype'] = self.rtype.to_dict()
         d['overloads'] = {name: overload.to_dict() for name, overload in self.overloads.items()}
         return d
 
@@ -758,7 +941,7 @@ class TupleType(Type):
             traits=self.traits
         )
 
-    def to_dict(self):
+    def to_dict(self, full_def=True):
         d = super().to_dict()
         d['elements'] = {k: v.to_dict() for k, v in self.elements}
         return d
@@ -777,7 +960,7 @@ class OptionalType(Type):
     An optional type in Saturn.
     """
     def __init__(self, name, irtype, base, qualifiers=None, traits=None):
-        super().__init__(name, irtype, 'optional', qualifiers, traits)
+        super().__init__(name, 'optional', irtype, qualifiers, traits)
         if qualifiers is None:
             qualifiers = []
         if traits is None:
@@ -798,38 +981,104 @@ class OptionalType(Type):
 
 def make_optional_type(base: Type):
     s = OptionalType("",
-                     ir.LiteralStructType([ir.IntType(1), base.irtype]),
-                     [])
+                     ir.LiteralStructType([ir.IntType(1), base.get_ir_type()]),
+                     base)
+    return s
 
 
-def symbol_from_dict(module, d, parent=None):
-    ty = d['type']
+def parse_type_from_dict(package, module, d, parent=None):
+    if d['type'] == 'pointer':
+        return parse_type_from_dict(package, module, d['pointee'], d).get_pointer_to()
+    if package.lookup_symbol(d['name']) is not None:
+        name = d['name']
+        ty = package.lookup_symbol(name)
+        return ty
+    elif d['name'] in types:
+        return types[d['name']]
+    return Type(d['name'],
+                d['tclass'],
+                irtype=None,
+                qualifiers=d['qualifiers'],
+                traits=d['traits'])
+
+
+def symbol_from_dict(package, module, d, parent=None):
+    ty = d['symbol_type']
     if ty == 'type':
         if d['tclass'] != 'struct':
-            return Type(d['name'],
-                        d['tclass'],
-                        irtype=None,
-                        qualifiers=d['qualifiers'],
-                        traits=d['traits'])
+            return parse_type_from_dict(package, module, d['type'], d)
         else:
-            return StructType(d['name'],
-                              d['irtype'],
-                              d['fields'],
-                              qualifiers=d['qualifiers'],
-                              traits=d['traits'],
-                              operators=d['operators'])
+            name = d['name']
+            if package.lookup_symbol(name) is not None:
+                ty = package.lookup_symbol(name)
+                if isinstance(d['type'], dict):
+                    dty = d['type']
+                    if dty['type'] == 'pointer':
+                        ty = ty.get_pointer_to()
+                return ty
+            elif name in types:
+                return types[name]
+            operators = {} if 'operators' not in d else d['operators']
+            struct = StructType(name,
+                                module.context.get_identified_type(name),
+                                [],
+                                qualifiers=d['qualifiers'],
+                                traits=d['traits'])
+            irtypes = []
+            for name, field in d['fields'].items():
+                ty = symbol_from_dict(package, module, field['value_type'], field)
+                struct.add_field(name, ty, None)
+                irtypes.append(ty.get_ir_type())
+            for op, val in operators.items():
+                opfn = symbol_from_dict(package, module, val)
+                struct.add_operator(op, opfn)
+            name = d['name']
+            if module.context.get_identified_type(name).is_opaque and len(d['fields']) > 0:
+                idstruct = module.context.get_identified_type(name)
+                idstruct.set_body(*irtypes)
+                struct.irtype = idstruct
+            return struct
     elif ty == 'value':
-        return Value(d['name'], d['value_type'],
-                     d['irtype'], d['qualifiers'], d['obj_type'],
+        valty = symbol_from_dict(package, module, d['value_type'], d)
+        val = Value(d['name'], valty,
+                     None, d['qualifiers'], d['obj_type'],
                      Visibility.INDEX[d['visible']])
+        return val
     elif ty == 'function':
-        func = Func(d['name'], d['rtype'],
+        name = d['name']
+        rtype = symbol_from_dict(package, module, d['rtype'], d)
+        func = Func(name, rtype,
                     traits=d['traits'],
                     visibility=Visibility.INDEX[d['visible']],
                     link_type=LinkageType.INDEX[d['link_type']])
         for key, overload in d['overloads'].items():
-            pass
+            atypes = [symbol_from_dict(package, module, v, overload) for v in overload['atypes']]
+            irtypes = [] if len(atypes) == 1 and atypes[0].is_void() else [atype.get_ir_type() for atype in atypes]
+            fnty = ir.FunctionType(rtype.get_ir_type(), irtypes)
+            if not d['c_decl']:
+                fname = mangle_name(name, atypes)
+            else:
+                fname = name
+            try:
+                fn = module.get_global(fname)
+            except KeyError:
+                fn = ir.Function(module, fnty, fname)
+            func.add_overload(atypes, fn)
+        return func
     else:
         return Symbol(d['name'], None,
                       visibility=Visibility.INDEX[d['visible']],
                       link_type=LinkageType.INDEX[d['link_type']])
+
+
+def get_common_type(ty1: Type, ty2: Type):
+    if ty1 is ty2:
+        return ty1
+    if ty1.is_integer() and ty2.is_integer():
+        if ty1.get_integer_bits() > ty2.get_integer_bits():
+            return ty1
+        else:
+            return ty2
+    if ty1.is_float() and ty2.is_float():
+        pass
+    return None

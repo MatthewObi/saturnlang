@@ -30,7 +30,6 @@ class CodeGen:
             self.module.triple = "x86_64-pc-windows-msvc"
         elif self.compile_target == 'linux-x64':
             self.module.triple = "x86_64-pc-linux-gcc"
-        print(self.module.triple)
         self.module.di_file = self.module.add_debug_info("DIFile", {
             "filename": "main.sat",
             "directory": "saturn",
@@ -90,6 +89,8 @@ class CodeGen:
             int32(1), 'PIC Level', int32(2)
         ])
         self.module.memset = self.module.declare_intrinsic('llvm.memset', [int8ptr, int32])
+        self.module.memcpy = self.module.declare_intrinsic('llvm.memcpy', [int8ptr, int8ptr, int32])
+        self.module.memmove = self.module.declare_intrinsic('llvm.memmove', [int8ptr, int8ptr, int32])
         self.builder = ir.IRBuilder()
         self.builder.c_decl = False
 
@@ -164,7 +165,7 @@ class CodeGen:
             mpm = self.binding.ModulePassManager()
             pmb.populate(mpm)
             if mpm.run(mod):
-                print('opt ', self.module.name)
+                pass  # print('opt ', self.module.name)
 
             # Opt functions
             fpm = self.binding.FunctionPassManager(mod)
@@ -172,9 +173,9 @@ class CodeGen:
             fpm.initialize()
             for f in mod.functions:
                 if not fpm.run(f):
-                    pass #print('noopt ', f.name)
+                    pass  # print('noopt ', f.name)
                 else:
-                    pass #print('opt ', f.name)
+                    pass  # print('opt ', f.name)
             fpm.finalize()
 
         # Now add the module and make sure it is ready for execution

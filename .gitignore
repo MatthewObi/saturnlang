@@ -139,3 +139,5 @@ dmypy.json
 concepttest/
 test/
 symbols.json
+profile
+

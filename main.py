@@ -1,10 +1,12 @@
+import pstats
 import time
 
-from lexer import Lexer
-from sparser import Parser
+from lexer import lexer
+from sparser import parser, ParserState
 from codegen import CodeGen
-from package import Package, Module
+from package import Package
 from cachedmodule import CachedModule
+# import cProfile
 
 import sys
 import os
@@ -23,12 +25,23 @@ cachedmods = {}
 compile_target = 'windows-x64'
 
 
-if __name__ == "__main__":
+def main():
+    global opt_level
+    global compile_target
+    global use_emscripten
+
+    global lexer
+    global parser
+
     n1 = time.perf_counter()
     if len(sys.argv) > 1:
         if sys.argv[1] == '--clean':
             for f in glob.glob("*.o"):
                 os.remove(f)
+            for f in glob.glob("symbols.json"):
+                os.remove(f)
+            # for f in glob.glob("packages/lang/symbols.json"):
+            #     os.remove(f)
 
         if '-O1' in sys.argv:
             opt_level = 1
@@ -36,6 +49,14 @@ if __name__ == "__main__":
             opt_level = 2
         if '--target=wasm' in sys.argv:
             compile_target = 'wasm'
+        elif '--target=linux' in sys.argv:
+            compile_target = 'linux-x64'
+        elif '--target=linux32' in sys.argv:
+            compile_target = 'linux-x86'
+        elif '--target=windows' in sys.argv:
+            compile_target = 'windows-x64'
+        elif '--target=win32' in sys.argv:
+            compile_target = 'windows-x86'
 
         if '--use-emscripten' in sys.argv:
             use_emscripten = True
@@ -55,6 +76,25 @@ if __name__ == "__main__":
             files.append(f)
         eval_files.append(f)
 
+    for f in glob.glob("*.c"):
+        if compile_target == 'wasm':
+            if use_emscripten:
+                print(f"emcc -c {f}")
+                os.system(f"emcc -c {f}")
+            else:
+                target_triple = "wasm32-unknown-wasi"
+                os.system(f'clang -c -target {target_triple} -I./wasm/sysroot/include {f}')
+        else:
+            if compile_target == 'windows-x64':
+                target_triple = 'x86_64-pc-windows-msvc'
+            elif compile_target == 'linux-x64':
+                target_triple = 'x86_64-pc-linux-gcc'
+            else:
+                target_triple = 'x86_64-pc-windows-msvc'
+            print(f"clang -S -target {target_triple} -emit-llvm {f}")
+            os.system(f"clang -S -target {target_triple} -emit-llvm {f}")
+            llfiles.append(f[:-2])
+
     for file in files:
         package.add_module(file.rstrip('.sat'))
         mod = package.get_module(file.rstrip('.sat'))
@@ -72,18 +112,25 @@ if __name__ == "__main__":
             cachedmods[ff] = cff
 
         ev_mod = cachedmods[ff]
+        package.cachedmods = cachedmods
 
-        evlexer = Lexer().get_lexer()
-        evtokens = evlexer.lex(ev_mod.text_input)
+        evtokens = lexer.lex(ev_mod.text_input)
 
         ffmod = package.get_module(ff.rstrip('.sat'))
         builder = ffmod.codegen.builder
         module = ffmod.codegen.module
 
-        ev_pg = Parser(module, builder, package, False)
-        ev_pg.parse()
-        ev_parser = ev_pg.get_parser()
-        ast = ev_parser.parse(evtokens)
+        builder.filestack = [ev_mod.text_input]
+        builder.filestack_idx = 0
+        builder.cachedmods = cachedmods
+
+        module.filestack = [ff]
+        module.filestack_idx = 0
+
+        # ev_pg = Parser(module, builder, package, False)
+        # ev_pg.parse()
+        # ev_parser = ev_pg.get_parser()
+        ast = parser.parse(evtokens, state=ParserState(builder, module, package))
         ast.generate_symbols()
         ev_mod.add_parsed_ast(ast)
 
@@ -120,7 +167,6 @@ if __name__ == "__main__":
 
         if cmod.ast is None:
 
-            lexer = Lexer().get_lexer()
             tokens = lexer.lex(cmod.text_input)
 
             module = codegen.module
@@ -133,11 +179,7 @@ if __name__ == "__main__":
             module.filestack = [ff]
             module.filestack_idx = 0
 
-            pg = Parser(module, builder, package, False)
-            pg.parse()
-
-            parser = pg.get_parser()
-            parser.parse(tokens).eval()
+            parser.parse(tokens, state=ParserState(module, builder, package, False)).eval()
         else:
             builder = codegen.builder
             module = codegen.module
@@ -170,7 +212,6 @@ if __name__ == "__main__":
         print('llc -filetype=obj -O2 -o %s %s' % (llf + '.o', ll))
         os.system('llc -filetype=obj -O2 -o %s %s' % (llf + '.o', ll))
 
-
     modifiedobjs = []
     exe_t = os.path.getmtime('main.exe')
     for f in glob.glob("*.o"):
@@ -184,7 +225,7 @@ if __name__ == "__main__":
 
     linkcmd = ''
     if compile_target == 'wasm':
-        linkcmd = 'emcc -o ./wasm/index.html ' if use_emscripten \
+        linkcmd = 'emcc -o ./wasm/emscripten/index.html ' if use_emscripten \
             else 'wasm-ld -o ./wasm/static/main.wasm -L./wasm/sysroot/lib/wasm32-wasi -lc -lrt "./wasm/sysroot/lib/wasm32-wasi/crt1.o" '
     elif compile_target == 'windows-x64':
         linkcmd = 'lld-link -subsystem:console -out:main.exe -defaultlib:libcmt -libpath:"C:/Program Files (x86)/Microsoft Visual Studio/2019/Community/VC/Tools/MSVC/14.26.28801/lib/x64" -libpath:"C:/Program Files (x86)/Windows Kits/10/Lib/10.0.18362.0/ucrt/x64" -libpath:"C:/Program Files (x86)/Windows Kits/10/Lib/10.0.18362.0/um/x64" -nologo '
@@ -196,3 +237,7 @@ if __name__ == "__main__":
     n2 = time.perf_counter()
     print(f"Compiled program in {n2-n1} seconds.")
 
+
+if __name__ == "__main__":
+    main()
+    # cProfile.run('main()', "profile")

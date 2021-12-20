@@ -1,22 +1,19 @@
-package string;
+package lang;
+/*
+ * The lang package for Saturn.
+ * Contains definitions for basic structs and functions for the Saturn programming language.
+ *
+ * Copyright Matthew Obi 2021
+ *
+ * Last modified 2021 December 20
+ */
 
-c_declare
-{
-    fn strlen(str: cstring): int;
-    fn strcmp(lhs: cstring, rhs: cstring): int;
-    fn strncmp(lhs: cstring, rhs: cstring, count: uint): int;
-    fn strcoll(lhs: cstring, rhs: cstring): int;
-    fn strchr(str: cstring, ch: int): cstring;
-    fn strrchr(str: cstring, ch: int): cstring;
-    fn strstr(str: cstring, substr: cstring): cstring;
-    fn strcpy(dest: cstring, src: cstring): cstring;
-    fn strcat(dest: cstring, src: cstring): cstring;
-}
+c_include "string.h";
 
-type string : struct {
-    ptr : cstring;
-    len : uint;
-    alloc : bool;
+type string: struct {
+    ptr: cstring;
+    len: uint;
+    alloc: bool;
 }
 
 fn(*string) new(): void {
@@ -27,7 +24,7 @@ fn(*string) new(): void {
 
 fn(*string) delete(): void {
     if this.alloc == true {
-        x := cast<*byte>(this.ptr);
+        this.ptr = null;
     }
 }
 

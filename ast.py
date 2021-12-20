@@ -34,7 +34,7 @@ class Scope:
     def call_destructors(self):
         if not self.destructed:
             for var in self.vars.values():
-                if var.type.has_dtor():
+                if var.type.has_dtor() and var.type.is_value():
                     fn = var.type.get_dtor()
                     ovrld = fn.get_overload([var.type.get_pointer_to()])
                     if ovrld:
@@ -163,9 +163,10 @@ class Number(Expr):
     """
     A number constant. Base class for integer and float constants.
     """
-    def __init__(self, builder, module, package, spos, value):
+    def __init__(self, builder, module, package, spos, value, base=10):
         super().__init__(builder, module, package, spos)
         self.value = value
+        self.base = base
         self.type = self.get_type()
         self.is_constexpr = True
 
@@ -178,11 +179,11 @@ class Integer(Number):
         return types['int']
 
     def eval(self):
-        i = ir.Constant(self.type.irtype, int(self.value))
+        i = ir.Constant(self.type.irtype, int(self.value, self.base))
         return i
 
     def consteval(self):
-        return int(self.value)
+        return int(self.value, self.base)
 
 
 class UInteger(Number):
@@ -194,11 +195,11 @@ class UInteger(Number):
 
     def eval(self):
         val = self.value.strip('u')
-        i = ir.Constant(self.type.irtype, int(val))
+        i = ir.Constant(self.type.irtype, int(val, self.base))
         return i
 
     def consteval(self):
-        return int(self.value.strip('u'))
+        return int(self.value.strip('u'), self.base)
 
 
 class Integer64(Number):
@@ -210,11 +211,11 @@ class Integer64(Number):
 
     def eval(self):
         val = self.value.strip('l')
-        i = ir.Constant(self.type.irtype, int(val))
+        i = ir.Constant(self.type.irtype, int(val, self.base))
         return i
 
     def consteval(self):
-        return int(self.value.strip('l'))
+        return int(self.value.strip('l'), self.base)
 
 
 class UInteger64(Number):
@@ -226,11 +227,61 @@ class UInteger64(Number):
 
     def eval(self):
         val = self.value.strip('ul')
-        i = ir.Constant(self.type.irtype, int(val))
+        i = ir.Constant(self.type.irtype, int(val, self.base))
         return i
     
     def consteval(self):
-        return int(self.value.strip('ul'))
+        return int(self.value.strip('ul'), self.base)
+
+
+class Integer16(Number):
+    """
+    A 16-bit integer constant. (int16)
+    """
+
+    def get_type(self):
+        return types['int16']
+
+    def eval(self):
+        val = self.value.strip('s')
+        i = ir.Constant(self.type.irtype, int(val, self.base))
+        return i
+
+    def consteval(self):
+        return int(self.value.strip('s'), self.base)
+
+
+class UInteger16(Number):
+    """
+    A 16-bit unsigned integer constant. (uint16)
+    """
+
+    def get_type(self):
+        return types['uint16']
+
+    def eval(self):
+        val = self.value.strip('us')
+        i = ir.Constant(self.type.irtype, int(val, self.base))
+        return i
+
+    def consteval(self):
+        return int(self.value.strip('us'), self.base)
+
+
+class SByte(Number):
+    """
+    An 8-bit signed integer constant. (int8)
+    """
+
+    def get_type(self):
+        return types['int8']
+
+    def eval(self):
+        i = ir.Constant(self.type.irtype, int(self.value.strip('sb'), self.base))
+        return i
+
+    def consteval(self):
+        return int(self.value.strip('sb'), self.base)
 
 
 class Byte(Number):
@@ -241,11 +292,11 @@ class Byte(Number):
         return types['byte']
     
     def eval(self):
-        i = ir.Constant(self.type.irtype, int(self.value))
+        i = ir.Constant(self.type.irtype, int(self.value.strip('b'), self.base))
         return i
 
     def consteval(self):
-        return int(self.value.strip('ul'))
+        return int(self.value.strip('b'), self.base)
 
 
 class Float(Number):
@@ -639,6 +690,41 @@ class LValue(Expr):
             print(f"Reference: {actualptr}\nType:{ptr.type.type}")
             return Value(ptr.name, ptr.type.type, actualptr)
         return ptr
+
+    def get_reference(self):
+        name = self.get_name()
+        ptr = check_name_in_scope(name)
+        if ptr is None:
+            ptr = self.package.lookup_symbol(name)
+            if ptr is None:
+                lineno = self.getsourcepos().lineno
+                colno = self.getsourcepos().colno
+                throw_saturn_error(self.builder, self.module, lineno, colno,
+                                   f"Could not find lvalue '{name}' in current scope.")
+            if isinstance(ptr, Func):
+                # if name not in self.module.sglobals:
+                #     if name not in self.module.sfuncs:
+                #         lineno = self.getsourcepos().lineno
+                #         colno = self.getsourcepos().colno
+                #         throw_saturn_error(self.builder, self.module, lineno, colno,
+                #             "Could not find lvalue '%s' in current scope." % name
+                #         )
+                # ptr = self.module.sfuncs[name]
+                key = list(ptr.overloads.keys())[0]
+                fn = ptr.overloads[key].fn
+                begin = '_Z%d' % len(name)
+                key = begin + name + key[3:]
+                fnty = self.module.sfunctys[key]
+                return Value('', fnty.get_pointer_to(), fn)
+            # else:
+            #    ptr = self.module.sglobals[name]
+        i64 = ir.IntType(64)
+        deref = self.builder.load(ptr.irvalue)
+        v0 = self.builder.ptrtoint(deref, i64)
+        v1 = self.builder.and_(v0, i64(-2))
+        actualptr = self.builder.inttoptr(v1, self.get_ir_type())
+        print(f"Reference: {actualptr}\nType:{ptr.type.type}")
+        return Value(ptr.name, ptr.type, actualptr)
     
     def eval(self):
         name = self.get_name()
@@ -683,8 +769,13 @@ class LValueField(Expr):
         self.is_deref = False
 
     def get_type(self):
-        #print(type(self.lvalue.get_type()))
         stype = self.lvalue.get_type()
+        if not stype.is_struct():
+            lineno = self.getsourcepos().lineno
+            colno = self.getsourcepos().colno
+            throw_saturn_error(self.builder, self.module, lineno, colno,
+                               f"Attempting to get field '{self.fname}' on lvalue '{self.lvalue.get_name()}', "
+                               f"which is type '{str(stype)}', not a struct type.")
         return stype.get_field_type(stype.get_field_index(self.fname))
 
     def get_ir_type(self):
@@ -743,6 +834,7 @@ class LValueField(Expr):
                                f"Cannot find field {self.fname} in struct {stype.name}."
                                )
         if not ptr.type.is_pointer():
+            # print(ptr.type.fields, ptr.type.get_ir_type().is_opaque, ptr.irvalue)
             gep = self.builder.gep(ptr.irvalue, [
                 ir.Constant(ir.IntType(32), 0),
                 ir.Constant(ir.IntType(32), findex)
@@ -757,6 +849,70 @@ class LValueField(Expr):
             return self.builder.load(gep)
 
 
+def cast_to(builder, module, package, expr, ctype):
+    castt = ctype
+    exprt = expr.get_type()
+    if expr.is_constexpr:
+        cast = ir.Constant(castt.irtype, expr.consteval())
+    else:
+        val = expr.eval()
+        if exprt.is_reference():
+            exprt = exprt.type
+        if exprt.is_pointer():
+            if castt.is_pointer():
+                cast = builder.bitcast(val, castt.irtype)
+            elif castt.is_integer():
+                cast = builder.ptrtoint(val, castt.irtype)
+            elif castt.is_bool():
+                # lhs = self.builder.ptrtoint(val, ir.IntType(64))
+                # rhs = self.builder.ptrtoint(ir.Constant(exprt.irtype, exprt.irtype.null), ir.IntType(64))
+                cast = builder.icmp_unsigned('!=', val, ir.Constant(exprt.irtype, exprt.irtype.null))
+        elif exprt.is_array():
+            if castt.is_pointer():
+                cast = builder.bitcast(val, castt.irtype)
+        elif exprt.is_integer():
+            if castt.is_pointer():
+                cast = builder.inttoptr(val, castt.irtype)
+            elif castt.is_integer():
+                if castt.get_integer_bits() < exprt.get_integer_bits():
+                    cast = builder.trunc(val, castt.irtype)
+                elif castt.get_integer_bits() > exprt.get_integer_bits():
+                    if castt.is_unsigned():
+                        cast = builder.zext(val, castt.irtype)
+                    else:
+                        cast = builder.sext(val, castt.irtype)
+                else:
+                    cast = val
+            elif castt.is_float():
+                if exprt.is_unsigned():
+                    cast = builder.uitofp(val, castt.irtype)
+                else:
+                    cast = builder.sitofp(val, castt.irtype)
+            elif castt.is_bool():
+                if exprt.is_unsigned():
+                    cast = builder.icmp_unsigned('!=', val, ir.Constant(exprt.irtype, 0))
+                elif exprt.is_integer():
+                    cast = builder.icmp_signed('!=', val, ir.Constant(exprt.irtype, 0))
+                elif exprt.is_float():
+                    cast = builder.fcmp_ordered('!=', val, ir.Constant(exprt.irtype, 0.0))
+                elif exprt.is_pointer():
+                    null = exprt.irtype.null
+                    cast = builder.icmp_signed('!=', val, null)
+            else:
+                lineno = expr.getsourcepos().lineno
+                colno = expr.getsourcepos().colno
+                throw_saturn_error(builder, module, lineno, colno,
+                                   f"Cannot cast from integer type to '{str(exprt)}'."
+                                   )
+        else:
+            lineno = expr.getsourcepos().lineno
+            colno = expr.getsourcepos().colno
+            throw_saturn_error(builder, module, lineno, colno,
+                               f"Cannot cast expression of type '{str(exprt)}' to '{str(castt)}'."
+                               )
+    return cast
+
+
 class CastExpr(Expr):
     """
     A cast operation.\n
@@ -768,69 +924,14 @@ class CastExpr(Expr):
         self.expr = expr
         self.is_constexpr = expr.is_constexpr
 
+    def get_pointer(self):
+        return self.expr.get_pointer()
+
     def get_type(self):
         return self.ctype.get_type()
 
     def eval(self):
-        cast = None
-        val = self.expr.eval()
-        exprt = self.expr.get_type()
-        if exprt.is_reference():
-            exprt = exprt.type
-        castt = self.get_type()
-        if exprt.is_pointer():
-            if castt.is_pointer():
-                cast = self.builder.bitcast(val, castt.irtype)
-            elif castt.is_integer():
-                cast = self.builder.ptrtoint(val, castt.irtype)
-            elif castt.is_bool():
-                #lhs = self.builder.ptrtoint(val, ir.IntType(64))
-                #rhs = self.builder.ptrtoint(ir.Constant(exprt.irtype, exprt.irtype.null), ir.IntType(64))
-                cast = self.builder.icmp_unsigned('!=', val, ir.Constant(exprt.irtype, exprt.irtype.null))
-        elif exprt.is_array():
-            if castt.is_pointer():
-                cast = self.builder.bitcast(val, castt.irtype)
-        elif exprt.is_integer():
-            if castt.is_pointer():
-                cast = self.builder.inttoptr(val, castt.irtype)
-            elif castt.is_integer():
-                if castt.get_integer_bits() < exprt.get_integer_bits():
-                    cast = self.builder.trunc(val, castt.irtype)
-                elif castt.get_integer_bits() > exprt.get_integer_bits():
-                    if castt.is_unsigned():
-                        cast = self.builder.zext(val, castt.irtype)
-                    else:
-                        cast = self.builder.sext(val, castt.irtype)
-                else:
-                    cast = val
-            elif castt.is_float():
-                if exprt.is_unsigned():
-                    cast = self.builder.uitofp(val, castt.irtype)
-                else:
-                    cast = self.builder.sitofp(val, castt.irtype)
-            elif castt.is_bool():
-                if exprt.is_unsigned():
-                    cast = self.builder.icmp_unsigned('!=', val, ir.Constant(exprt.irtype, 0))
-                elif exprt.is_integer():
-                    cast = self.builder.icmp_signed('!=', val, ir.Constant(exprt.irtype, 0))
-                elif exprt.is_float():
-                    cast = self.builder.fcmp_ordered('!=', val, ir.Constant(exprt.irtype, 0.0))
-                elif exprt.is_pointer():
-                    null = exprt.irtype.null
-                    cast = self.builder.icmp_signed('!=', val, null)
-            else:
-                lineno = self.expr.getsourcepos().lineno
-                colno = self.expr.getsourcepos().colno
-                throw_saturn_error(self.builder, self.module, lineno, colno, 
-                    "Cannot cast from integer type to '%s'." % str(self.get_type())
-                )
-        else:
-            lineno = self.expr.getsourcepos().lineno
-            colno = self.expr.getsourcepos().colno
-            throw_saturn_error(self.builder, self.module, lineno, colno, 
-                "Cannot cast expression of type '%s' to '%s'." % (str(exprt), str(castt))
-            )
-        return cast
+        return cast_to(self.builder, self.module, self.package, self.expr, self.ctype.get_type())
 
 
 class MakeExpr(Expr):
@@ -980,7 +1081,6 @@ class ElementOf(PostfixOp):
                     self.expr.eval()
                 ], True)
                 return Value(ptr.name, ptr.type.get_element_of(), gep, ptr.qualifiers)
-            
 
     def eval(self):
         ptr = self.get_pointer()
@@ -1202,10 +1302,8 @@ class Sum(BinaryOp):
             lineno = self.spos.lineno
             colno = self.spos.colno
             throw_saturn_error(self.builder, self.module, lineno, colno, 
-                "Attempting to perform addition with two operands of incompatible types (%s and %s)." % (
-                str(self.left.get_type()),
-                str(self.right.get_type())
-            ))
+                               f"Attempting to perform addition with two operands of incompatible types "
+                               f"({str(self.left.get_type())} and {str(self.right.get_type())}).")
         return i
 
     def consteval(self):
@@ -1253,11 +1351,9 @@ class Mul(BinaryOp):
         else:
             lineno = self.spos.lineno
             colno = self.spos.colno
-            throw_saturn_error(self.builder, self.module, lineno, colno, 
-                "Attempting to perform multiplication with two operands of incompatible types (%s and %s)." % (
-                str(self.left.get_type()),
-                str(self.right.get_type())
-            ))
+            throw_saturn_error(self.builder, self.module, lineno, colno,
+                               f"Attempting to perform multiplication with two operands of incompatible types "
+                               f"({str(self.left.get_type())} and {str(self.right.get_type())}).")
         return i
 
     def consteval(self):
@@ -1281,10 +1377,10 @@ class Div(BinaryOp):
         else:
             lineno = self.spos.lineno
             colno = self.spos.colno
-            throw_saturn_error(self.builder, self.module, lineno, colno, "Attempting to perform division with two operands of incompatible types (%s and %s). Please cast one of the operands." % (
-                str(self.left.get_type()),
-                str(self.right.get_type())
-            ))
+            throw_saturn_error(self.builder, self.module, lineno, colno,
+                               f"Attempting to perform division with two operands of incompatible types "
+                               f"({str(self.left.get_type())} and {str(self.right.get_type())}). "
+                               f"Please cast one of the operands.")
         return i
 
     def consteval(self):
@@ -1756,6 +1852,8 @@ class Assignment(ASTNode):
         ptr = sptr.irvalue
         if stype.is_reference():
             stype = stype.type
+            ptr = self.builder.load(ptr)
+            print(stype, ptr)
         if sptr.is_const() or sptr.is_immut():
             lineno = self.expr.getsourcepos().lineno
             colno = self.expr.getsourcepos().colno
@@ -2011,7 +2109,7 @@ class Program:
     def generate_symbols(self):
         for stmt in self.stmts:
             if hasattr(stmt, 'generate_symbol'):
-                stmt.generate_symbol(self.package)
+                stmt.generate_symbol()
 
     def eval(self):
         for stmt in self.stmts:
@@ -2022,14 +2120,17 @@ class PackageDecl(ASTNode):
     def __init__(self, builder, module, package, spos, lvalue):
         super().__init__(builder, module, package, spos)
         self.lvalue = lvalue
+        self.builder.package = self.lvalue.get_name()
 
     def eval(self):
-        self.builder.package = self.lvalue.get_name()
+        pass
 
 
 class ImportDecl(ASTNode):
     """
-    A statement that reads and imports another package.
+    A statement that reads and imports another package.\n
+    import lvalue;\n
+    import lvalue::{symbols_to_import};
     """
     def __init__(self, builder, module, package, spos, lvalue, symbols_to_import=None, import_all=False):
         super().__init__(builder, module, package, spos)
@@ -2038,17 +2139,18 @@ class ImportDecl(ASTNode):
         if symbols_to_import is None:
             symbols_to_import = []
         self.symbols_to_import = symbols_to_import
+        base_path = self.package.working_directory + '/packages/' + self.lvalue.get_name()
+        self.new_package = Package(self.lvalue.get_name(), working_directory=base_path)
 
-    def eval(self):
-        from sparser import Parser
-        from lexer import Lexer
+    def generate_symbol(self):
+        from sparser import parser, ParserState
+        from lexer import lexer
         from cachedmodule import CachedModule
         import os.path
-
-        base_path = './packages/' + self.lvalue.get_name()
+        base_path = self.new_package.working_directory
         symbols_path = base_path + '/symbols.json'
-        if os.path.isfile(symbols_path):
-            package = Package(self.lvalue.get_name())
+        package = self.new_package
+        if os.path.isfile(symbols_path) and os.path.getmtime(symbols_path) > os.path.getmtime(base_path + '/main.sat'):
             package.load_symbols_from_file(self.module, symbols_path)
 
             if not self.import_all:
@@ -2070,7 +2172,52 @@ class ImportDecl(ASTNode):
 
             cmod = self.package.cachedmods[path]
 
-            lexer = Lexer().get_lexer()
+            tokens = lexer.lex(cmod.text_input)
+
+            self.builder.filestack.append(cmod.text_input)
+            self.builder.filestack_idx += 1
+
+            self.module.filestack.append(path)
+            self.module.filestack_idx += 1
+
+            # if not self.import_all:
+            package = self.new_package
+            # else:
+            #    pg = Parser(self.module, self.builder, package)
+            #    pg.parse()
+
+            self.builder.filestack.pop(-1)
+            self.builder.filestack_idx -= 1
+
+            self.module.filestack.pop(-1)
+            self.module.filestack_idx -= 1
+
+            ast = parser.parse(tokens, state=ParserState(self.builder, self.module, package))
+            ast.generate_symbols()
+            package.save_symbols_to_file(symbols_path)
+            cmod.add_parsed_ast(ast)
+
+            if not self.import_all:
+                self.package.import_package(package)
+                if len(self.symbols_to_import) > 0:
+                    self.package.import_symbols_from_package(package, self.symbols_to_import)
+
+        # print(self.new_package)
+
+    def eval(self):
+        from cachedmodule import CachedModule
+        from lexer import lexer
+        from sparser import parser, ParserState
+        base_path = self.new_package.working_directory
+        path = base_path + '/main.sat'
+        if path not in self.package.cachedmods:
+            text_input = ""
+            with open(path) as f:
+                text_input = f.read()
+
+            cmod = CachedModule(path, text_input)
+            self.package.cachedmods[path] = cmod
+
             tokens = lexer.lex(cmod.text_input)
 
             self.builder.filestack.append(cmod.text_input)
@@ -2081,12 +2228,7 @@ class ImportDecl(ASTNode):
 
             package = self.package
             if not self.import_all:
-                package = Package(self.lvalue.get_name())
-                pg = Parser(self.module, self.builder, package)
-                pg.parse()
-            else:
-                pg = Parser(self.module, self.builder, package)
-                pg.parse()
+                package = self.new_package
 
             self.builder.filestack.pop(-1)
             self.builder.filestack_idx -= 1
@@ -2094,13 +2236,11 @@ class ImportDecl(ASTNode):
             self.module.filestack.pop(-1)
             self.module.filestack_idx -= 1
 
-            parser = pg.get_parser()
-            parser.parse(tokens).eval()
-
-            if not self.import_all:
-                self.package.import_package(package)
-                if len(self.symbols_to_import) > 0:
-                    self.package.import_symbols_from_package(package, self.symbols_to_import)
+            ast = parser.parse(tokens, state=ParserState(self.builder, self.module, package))
+            ast.eval()
+        else:
+            cmod = self.package.cachedmods[path]
+            cmod.ast.eval()
 
 
 class ImportDeclExtern(ASTNode):
@@ -2110,43 +2250,6 @@ class ImportDeclExtern(ASTNode):
     def __init__(self, builder, module, package, spos, lvalue):
         super().__init__(builder, module, package, spos)
         self.lvalue = lvalue
-        return
-
-        from sparser import Parser
-        from lexer import Lexer
-        from cachedmodule import CachedModule
-
-        path = './packages/' + self.lvalue.get_name() + '/main.sat'
-        if path not in self.builder.cachedmods.keys():
-            text_input = ""
-            with open(path) as f:
-                text_input = f.read()
-            
-            cmod = CachedModule(path, text_input)
-            self.builder.cachedmods[path] = cmod
-            
-        cmod = self.builder.cachedmods[path]
-
-        lexer = Lexer().get_lexer()
-        tokens = lexer.lex(cmod.text_input)
-
-        self.builder.filestack.append(cmod.text_input)
-        self.builder.filestack_idx += 1
-
-        self.module.filestack.append(path)
-        self.module.filestack_idx += 1
-
-        pg = Parser(self.module, self.builder, self.package, True)
-        pg.parse()
-
-        self.builder.filestack.pop(-1)
-        self.builder.filestack_idx -= 1
-
-        self.module.filestack.pop(-1)
-        self.module.filestack_idx -= 1
-
-        parser = pg.get_parser()
-        parser.parse(tokens).eval()
 
     def eval(self):
         pass
@@ -2160,15 +2263,14 @@ class CIncludeDecl(ASTNode):
         super().__init__(builder, module, package, spos)
         self.string = string
         self.decl_mode = decl_mode
-        print("Including C file...")
+
+    def generate_symbol(self):
         import cparser
-        path = str(self.string.value).strip('"')
+        path = self.package.working_directory + '/' + str(self.string.value).strip('"')
+        print(f"Including C file \"{path}\"...")
         cparser.parse_c_file(self.builder, self.module, self.package, path)
 
     def eval(self):
-        """
-        TODO: Add C parsing functionality.
-        """
         pass
         
 
@@ -2333,17 +2435,18 @@ class FuncDecl(ASTNode):
         self.var_arg = var_arg
         self.visibility = visibility
 
-    def generate_symbol(self, package):
-        if package.lookup_symbol(self.name.value) is None:
+    def generate_symbol(self):
+        package = self.package
+        if self.package.lookup_symbol(self.name.value) is None:
             rtype = self.rtype.get_type()
-            if rtype.is_struct() and rtype.is_value():
-                self.decl_args.add(FuncArg(
-                    self.builder,
-                    self.module,
-                    self.package,
-                    self.rtype.spos,
-                    Token('IDENT', 'ret', self.spos),
-                    rtype.get_pointer_to(), ['sret']))
+            # if rtype.is_struct() and rtype.is_value():
+            #     self.decl_args.add(FuncArg(
+            #         self.builder,
+            #         self.module,
+            #         self.package,
+            #         self.rtype.spos,
+            #         Token('IDENT', 'ret', self.spos),
+            #         rtype.get_pointer_to(), ['sret']))
             decltypes = self.decl_args.get_arg_decl_type_list()
             sargtypes = [decltype.get_type() for decltype in decltypes]
             argtypes = [sargtype.get_ir_type() for sargtype in sargtypes]
@@ -2387,18 +2490,18 @@ class FuncDecl(ASTNode):
         push_new_scope(self.builder)
         rtype = self.rtype.get_type()
 
-        if rtype.is_struct() and rtype.is_value():
-            self.decl_args.add(FuncArg(
-                self.builder,
-                self.module,
-                self.package,
-                self.rtype.spos,
-                Token('IDENT', 'ret', self.spos),
-                PointerTypeExpr(self.builder,
-                                self.module,
-                                self.package,
-                                self.rtype.spos,
-                                self.rtype), ['sret']))
+        # if rtype.is_struct() and rtype.is_value():
+        #     self.decl_args.add(FuncArg(
+        #         self.builder,
+        #         self.module,
+        #         self.package,
+        #         self.rtype.spos,
+        #         Token('IDENT', 'ret', self.spos),
+        #         PointerTypeExpr(self.builder,
+        #                         self.module,
+        #                         self.package,
+        #                         self.rtype.spos,
+        #                         self.rtype), ['sret']))
         rtype = self.rtype
 
         decltypes = self.decl_args.get_arg_decl_type_list()
@@ -2555,7 +2658,8 @@ class MethodDecl(ASTNode):
     A declaration and definition of a method.\n
     fn(*struct) name(decl_args): rtype { block }
     """
-    def __init__(self, builder, module, package, spos, name, rtype, block, decl_args, struct):
+    def __init__(self, builder, module, package, spos, name, rtype, block, decl_args, struct,
+                 visibility=Visibility.DEFAULT):
         super().__init__(builder, module, package, spos)
         self.name = name
         self.rtype = rtype
@@ -2568,6 +2672,60 @@ class MethodDecl(ASTNode):
         )
         thisarg.atype = thisarg.atype.get_pointer_to()
         self.decl_args.prepend(thisarg)
+        self.visibility = visibility
+
+    def generate_symbol(self):
+        package = self.package
+        if self.package.lookup_symbol(self.struct.get_name() + '.' + self.name.value) is None:
+            rtype = self.rtype.get_type()
+            # if rtype.is_struct() and rtype.is_value():
+            #     self.decl_args.add(FuncArg(
+            #         self.builder,
+            #         self.module,
+            #         self.package,
+            #         self.rtype.spos,
+            #         Token('IDENT', 'ret', self.spos),
+            #         rtype.get_pointer_to(), ['sret']))
+            decltypes = self.decl_args.get_arg_decl_type_list()
+            sargtypes = [decltype.get_type() for decltype in decltypes]
+            argtypes = [sargtype.get_ir_type() for sargtype in sargtypes]
+            fnty = ir.FunctionType(rtype.get_ir_type(), argtypes)
+            #print(f"fn {self.name.value} ({[str(stype) for stype in sargtypes]}): {str(rtype)};")
+            # print("%s (%s)" % (self.name.value, fnty))
+            sfnty = FuncType("", fnty, rtype, sargtypes)
+            name = self.struct.get_name() + '.' + self.name.value
+            fname = name
+            if not self.builder.c_decl and not (self.name.value == 'main' or self.name.value == '_entry'):
+                fname = mangle_name(fname, sfnty.atypes)
+            try:
+                self.module.get_global(fname)
+                text_input = self.builder.filestack[self.builder.filestack_idx]
+                lines = text_input.splitlines()
+                lineno = self.name.getsourcepos().lineno
+                colno = self.name.getsourcepos().colno
+                if lineno > 1:
+                    line1 = lines[lineno - 2]
+                    line2 = lines[lineno - 1]
+                    print("%s\n%s\n%s^" % (line1, line2, "~" * (colno - 1)))
+                else:
+                    line1 = lines[lineno - 1]
+                    print("%s\n%s^" % (line1, "~" * (colno - 1)))
+                raise RuntimeError("%s (%d:%d): Redefining global value, %s, as function." % (
+                    self.module.filestack[self.module.filestack_idx],
+                    lineno,
+                    colno,
+                    self.name.value
+                ))
+            except(KeyError):
+                pass
+            # print(fname)
+            fn = ir.Function(self.module, fnty, fname)
+            if self.name.value not in self.module.sfuncs:
+                fn_symbol = package.add_symbol(name, Func(name, sfnty.rtype, visibility=self.visibility))
+                fn_symbol.add_overload(sfnty.atypes, fn)
+            else:
+                fn_symbol = package[name]
+                fn_symbol.add_overload(sfnty.atypes, fn)
 
     def eval(self):
         push_new_scope(self.builder)
@@ -2584,45 +2742,77 @@ class MethodDecl(ASTNode):
         fname = name
         if not self.builder.c_decl:
             fname = mangle_name(name, sfnty.atypes)
-        try:
-            self.module.get_global(fname)
-            text_input = self.builder.filestack[self.builder.filestack_idx]
-            lines = text_input.splitlines()
-            lineno = self.name.getsourcepos().lineno
-            colno = self.name.getsourcepos().colno
-            if lineno > 1:
-                line1 = lines[lineno - 2]
-                line2 = lines[lineno - 1]
-                print("%s\n%s\n%s^" % (line1, line2, "~" * (colno - 1)))
-            else:
-                line1 = lines[lineno - 1]
-                print("%s\n%s^" % (line1, "~" * (colno - 1)))
-            raise RuntimeError("%s (%d:%d): Redefining global value, %s, as function." % (
-                self.module.filestack[self.module.filestack_idx],
-                lineno,
-                colno,
-                self.name.value
-            ))
-        except(KeyError):
-            pass
-        fn = ir.Function(self.module, fnty, fname)
-        #self.module.sfunctys[name] = sfnty
-        if name not in self.module.sfuncs:
-            self.module.sfuncs[name] = Func(name, sfnty.rtype)
-            self.module.sfuncs[name].add_overload(sfnty.atypes, fn)
+        symbol = self.package.lookup_symbol(name)
+        # print(fname)
+        if symbol is not None and symbol.get_overload(sfnty.atypes) is not None:
+            fn = symbol.get_overload(sfnty.atypes)
+            if not fn.is_declaration:
+                text_input = self.builder.filestack[self.builder.filestack_idx]
+                lines = text_input.splitlines()
+                lineno = self.name.getsourcepos().lineno
+                colno = self.name.getsourcepos().colno
+                if lineno > 1:
+                    line1 = lines[lineno - 2]
+                    line2 = lines[lineno - 1]
+                    print("%s\n%s\n%s^" % (line1, line2, "~" * (colno - 1)))
+                else:
+                    line1 = lines[lineno - 1]
+                    print("%s\n%s^" % (line1, "~" * (colno - 1)))
+                raise RuntimeError("%s (%d:%d): Redefining global value, %s, as function." % (
+                    self.module.filestack[self.module.filestack_idx],
+                    lineno,
+                    colno,
+                    self.name.value
+                ))
+        # try:
+        #     self.module.get_global(fname)
+        #     text_input = self.builder.filestack[self.builder.filestack_idx]
+        #     lines = text_input.splitlines()
+        #     lineno = self.name.getsourcepos().lineno
+        #     colno = self.name.getsourcepos().colno
+        #     if lineno > 1:
+        #         line1 = lines[lineno - 2]
+        #         line2 = lines[lineno - 1]
+        #         print("%s\n%s\n%s^" % (line1, line2, "~" * (colno - 1)))
+        #     else:
+        #         line1 = lines[lineno - 1]
+        #         print("%s\n%s^" % (line1, "~" * (colno - 1)))
+        #     raise RuntimeError("%s (%d:%d): Redefining global value, %s, as function." % (
+        #         self.module.filestack[self.module.filestack_idx],
+        #         lineno,
+        #         colno,
+        #         self.name.value
+        #     ))
+        # except(KeyError):
+        #     pass
         else:
-            self.module.sfuncs[name].add_overload(sfnty.atypes, fn)
+            fn = ir.Function(self.module, fnty, fname)
+            if self.name.value not in self.module.sfuncs:
+                self.module.sfuncs[self.name.value] = Func(self.name.value, sfnty.rtype, visibility=self.visibility)
+                self.package.add_symbol(self.name.value, self.module.sfuncs[self.name.value])
+                self.module.sfuncs[self.name.value].add_overload(sfnty.atypes, fn)
+            else:
+                self.module.sfuncs[self.name.value].add_overload(sfnty.atypes, fn)
         #print("New method:", fname)
+        struct_type = self.package.lookup_symbol(self.struct.get_name())
+        if struct_type is None:
+            lineno = self.name.lineno
+            colno = self.name.colno
+            throw_saturn_error(self.builder, self.module, lineno, colno,
+                               f"Can't find type {self.struct.get_name()} for method {fname}"
+                               )
         if self.name.value == 'new':
-            types[self.struct.get_name()].add_ctor(self.module.sfuncs[name])
+            struct_type.add_ctor(symbol)
         elif self.name.value == 'delete':
-            types[self.struct.get_name()].add_dtor(self.module.sfuncs[name])
+            struct_type.add_dtor(symbol)
         elif self.name.value == 'operator.assign':
-            types[self.struct.get_name()].add_operator('=', self.module.sfuncs[name])
+            struct_type.add_operator('=', symbol)
         elif self.name.value == 'operator.eq':
-            types[self.struct.get_name()].add_operator('==', self.module.sfuncs[name])
+            struct_type.add_operator('==', symbol)
         elif self.name.value == 'operator.spaceship':
-            types[self.struct.get_name()].add_operator('<=>', self.module.sfuncs[name])
+            struct_type.add_operator('<=>', symbol)
+        else:
+            struct_type.add_method(self.name.value, symbol)
         block = fn.append_basic_block("entry")
         self.builder.dbgsub = self.module.add_debug_info("DISubprogram", {
             "name": name, 
@@ -2749,7 +2939,9 @@ class VarDecl(ASTNode):
             [ptr.irvalue, dbglv, dbgexpr]
         )
         self.builder.debug_metadata = None
-        if vartype.is_struct():
+        if vartype.is_optional():
+            self.builder.store(ir.Constant(vartype.irtype, None), ptr.irvalue)
+        if isinstance(vartype, StructType):
             c = ir.Constant(vartype.irtype, None)
             self.builder.store(c, ptr.irvalue)
             # bcast = self.builder.bitcast(ptr.irvalue, ir.IntType(8).as_pointer())
@@ -2765,10 +2957,15 @@ class VarDecl(ASTNode):
                 method = vartype.operator['=']
                 pptr = ptr.irvalue
                 value = self.initval.eval()
-                ovrld = method.get_overload([vartype.get_pointer_to(), self.initval.get_type()])
+                ovrld = method.search_overload([vartype.get_pointer_to(), self.initval.get_type()])
+                # print(ovrld, str(list(method.overloads.values())[0]))
                 if not ovrld:
-                    pass
-                self.builder.call(ovrld, [pptr, value])
+                    lineno = self.initval.getsourcepos().lineno
+                    colno = self.initval.getsourcepos().colno
+                    throw_saturn_error(self.builder, self.module, lineno, colno,
+                                       f"Can't find operator= on types {print_types([vartype.get_pointer_to(), self.initval.get_type()])}"
+                                       )
+                self.builder.call(ovrld.overload.fn, [pptr, value])
                 return
             if vartype.has_ctor():
                 self.builder.call(vartype.get_ctor(), [ptr.irvalue])
@@ -2854,6 +3051,7 @@ class TypeExpr(ASTNode):
             lname = self.lvalue.get_name()
             if lname not in types.keys():
                 type_symbol = self.package.lookup_symbol(lname)
+                # print(str(self.package))
                 if type_symbol is None:
                     # print(*types.keys())
                     raise RuntimeError("%s (%d:%d): Undefined type, %s, used in typeexpr." % (
@@ -2964,7 +3162,7 @@ class TupleTypeExpr(TypeExpr):
 class OptionalTypeExpr(TypeExpr):
     """
     Expression representing a Saturn optional type.\n
-    optional(typeexpr)
+    ?typeexpr
     """
     def __init__(self, builder, module, package, spos, typeexpr):
         self.builder = builder
@@ -2972,9 +3170,14 @@ class OptionalTypeExpr(TypeExpr):
         self.package = package
         self.spos = spos
         self.base = typeexpr.get_type()
-        self.type = make_optional_type(self.base_type)
+        self.type = None
         self.base_type = self.type
         self.quals = []
+
+    def get_type(self):
+        if self.type is None:
+            self.type = make_optional_type(self.base)
+        return self.type
 
     def eval(self):
         pass
@@ -2991,16 +3194,16 @@ class FuncTypeExpr(TypeExpr):
         self.package = package
         self.spos = spos
         self.args = argtypeexprs
-        for ty in self.args:
-            lname = ty.lvalue.name
-            if lname not in types.keys():
-                #print(*types.keys())
-                raise RuntimeError("%s (%d:%d): Undefined type, %s, used in typeexpr." % (
-                    self.module.filestack[self.module.filestack_idx],
-                    self.spos.lineno,
-                    self.spos.colno,
-                    lname
-                ))
+        # for ty in self.args:
+        #     lname = ty.lvalue.name
+        #     if lname not in types.keys():
+        #         #print(*types.keys())
+        #         raise RuntimeError("%s (%d:%d): Undefined type, %s, used in typeexpr." % (
+        #             self.module.filestack[self.module.filestack_idx],
+        #             self.spos.lineno,
+        #             self.spos.colno,
+        #             lname
+        #         ))
         self.rtype = rettypeexpr
         fnty = ir.FunctionType(self.rtype.get_ir_type(), [ty.get_ir_type() for ty in self.args])
         self.type = FuncType("", fnty, self.rtype.get_type(), [ty.get_type() for ty in self.args])
@@ -3057,7 +3260,6 @@ class StructField(ASTNode):
         return self.type
 
 
-
 class StructDeclBody(ASTNode):
     def __init__(self, builder, module, package, spos):
         super().__init__(builder, module, package, spos)
@@ -3092,16 +3294,19 @@ class StructDecl(ASTNode):
         self.package.add_symbol(name, types[name])
         if self.body is not None:
             for fld in self.body.get_fields():
-                types[name].add_field(fld.name, fld.ftype.get_type(), fld.initvalue)
+                types[name].add_field(fld.name.value, fld.ftype.get_type(), fld.initvalue)
 
-    def eval(self):
+    def generate_symbol(self):
         name = self.lvalue.get_name()
         if self.module.context.get_identified_type(name).is_opaque and self.body is not None:
             idstruct = self.module.context.get_identified_type(name)
             idstruct.set_body(*self.body.get_ir_types())
             types[name].irtype = idstruct
             for fld in self.body.get_fields():
-                types[name].add_field(fld.name, fld.get_type(), fld.initvalue)
+                types[name].add_field(fld.name.value, fld.get_type(), fld.initvalue)
+
+    def eval(self):
+        name = self.lvalue.get_name()
         initfs = types[name].get_fields_with_init()
         if len(initfs) > 0:
             push_new_scope(self.builder)
@@ -3155,6 +3360,11 @@ class FuncCall(Expr):
         if ptr is None:
             if name not in self.module.sglobals:
                 symbol = self.package.lookup_symbol(name)
+                if symbol is None:
+                    lineno = self.getsourcepos().lineno
+                    colno = self.getsourcepos().colno
+                    throw_saturn_error(self.builder, self.module, lineno, colno,
+                                       f"Cannot find lvalue {self.lvalue.get_name()}.")
                 return symbol.rtype
                 #  return self.module.sfuncs[name].rtype
             return self.module.sglobals[name].rtype
@@ -3186,11 +3396,23 @@ class FuncCall(Expr):
                         aargs.append(arg.get_type())
                 ovrld = sfn.get_overload(aargs)
                 if not ovrld:
-                    lineno = self.getsourcepos().lineno
-                    colno = self.getsourcepos().colno
-                    throw_saturn_error(self.builder, self.module, lineno, colno, 
-                        "Cannot find overload for function %s with argument types (%s)." % (self.lvalue.get_name(), print_types(aargs))
-                    )
+                    match = sfn.search_overload(aargs)
+                    if not match:
+                        lineno = self.getsourcepos().lineno
+                        colno = self.getsourcepos().colno
+                        throw_saturn_error(self.builder, self.module, lineno, colno,
+                                           f"Cannot find overload for function {self.lvalue.get_name()} with argument types ({print_types(aargs)})."
+                        )
+                    args = []
+                    # if match.requires_implicit_conversions:
+                    #    for conv in match.implicit_conversions:
+                    #        args[conv[0]] = cast_to(self.builder, self.module, self.package, self.args[conv[0]], conv[1])
+                    for arg in enumerate(self.args):
+                        if arg[0] in match.implicit_conversions:
+                            args.append(cast_to(self.builder, self.module, self.package, arg[1], match.implicit_conversions[arg[0]]))
+                        else:
+                            args.append(arg[1].eval())
+                    return self.builder.call(match.overload.fn, args, self.lvalue.get_name())
                 # print("Overload:", ovrld.module.name, name, self.module.name, (ovrld.module.name == self.module.name))
                 try:
                     self.module.get_global(ovrld.name)
@@ -3234,13 +3456,20 @@ class MethodCall(Expr):
         #return self.module.get_global(self.callee.get_type().name + '.' + self.lvalue.get_name()).ftype.return_type
 
     def eval(self):
-        name = self.callee.get_type().name + '.' + self.lvalue.get_name()
-        sfn = self.module.sfuncs[name]
+        name = self.callee.get_type().get_full_name() + '.' + self.lvalue.get_name()
+        sfn = self.package.lookup_symbol(name)
+        if not sfn:
+            lineno = self.getsourcepos().lineno
+            colno = self.getsourcepos().colno
+            throw_saturn_error(self.builder, self.module, lineno, colno,
+                               f"Cannot find method {name} in package."
+                               )
+        # sfn = self.module.sfuncs[name]
         #print(name, self.module.sfuncs[name], sfn.overloads)
         sargs = [arg for arg in self.args]
         sargs.insert(0, AddressOf(self.builder, self.module, self.package, self.spos, self.callee))
         aargs = [arg.get_type() for arg in sargs]
-        ovrld = sfn.get_overload(aargs)
+        ovrld = sfn.search_overload(aargs)
         if not ovrld:
             lineno = self.getsourcepos().lineno
             colno = self.getsourcepos().colno
@@ -3248,7 +3477,7 @@ class MethodCall(Expr):
                 "Cannot find overload for function %s with argument types (%s)." % (self.lvalue.get_name(), print_types(aargs))
             )
         args = [arg.eval() for arg in sargs]
-        return self.builder.call(ovrld, args, name)
+        return self.builder.call(ovrld.overload.fn, args, name)
 
 
 class Statement(ASTNode):
@@ -3556,7 +3785,7 @@ class SwitchCase(ASTNode):
 class SwitchDefaultCase(SwitchCase):
     """
     Switch statement case
-    case expr: stmts
+    default: stmts
     """
     def __init__(self, builder, module, package, spos, stmts=None):
         if stmts is None:

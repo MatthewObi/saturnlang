@@ -9,5 +9,8 @@ class CachedModule:
     def add_parsed_ast(self, parsed_ast):
         self.ast = parsed_ast
 
+    def get_parsed_ast(self):
+        return self.ast
+
     def get_text(self):
         return self.text_input

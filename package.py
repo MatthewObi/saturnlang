@@ -84,13 +84,14 @@ class Symbol:
     visibility: The visibility of the symbol (default is default)\n
     link_type: The linkage type of the symbol (default is external)
     """
-    def __init__(self, name, parent=None, visibility=Visibility.DEFAULT, link_type=LinkageType.DEFAULT):
+    def __init__(self, name, parent=None, visibility=Visibility.DEFAULT, link_type=LinkageType.DEFAULT, c_decl=False):
         self.name = name
         self.visibility = visibility
         self.link_type = link_type
         self.parent = parent
         self.irvalue = None
         self.symbols = {}
+        self.c_decl = c_decl
 
     def __getitem__(self, item):
         return self.symbols[item]
@@ -142,14 +143,16 @@ class Symbol:
 
     def to_dict(self):
         d = {'visible': Visibility.VALUE[self.visibility],
+             'c_decl': self.c_decl,
              'link_type': 'default' if LinkageType.VALUE[self.link_type] == '' else LinkageType.VALUE[self.link_type],
              'name': self.name,
-             'type': 'symbol'}
+             'symbol_type': 'symbol'}
         return d
 
     def from_dict(self, d):
         self.visibility = Visibility.INDEX[d['visible']]
         self.link_type = Visibility.INDEX[d['link_type']]
+        self.c_decl = d['c_decl']
         self.name = d['name']
 
     def __str__(self):
@@ -168,11 +171,18 @@ class Module(Symbol):
 
 
 class Package(Symbol):
-    def __init__(self, name):
+    def __init__(self, name, working_directory='.'):
         super().__init__(name)
         self.modules = {}
         self.current_module = None
+        self.c_package = None
         self.imported_packages = {}
+        self.working_directory = working_directory
+
+    def get_or_create_c_package(self):
+        if self.c_package is None:
+            self.c_package = Package("C", working_directory=self.working_directory)
+        return self.c_package
 
     def load_symbols_from_file(self, module, file):
         with open(file) as f:
@@ -183,10 +193,14 @@ class Package(Symbol):
     def save_symbols_to_file(self, file):
         with open(file, 'w') as f:
             json.dump(self.to_dict(), f)
-            #json.dump({k: str(v) for (k, v) in self.symbols.items()}, f)
 
     def add_module(self, name):
         self.modules[name] = Module(self, name)
+
+    def add_or_get_module(self, name):
+        if name not in self.modules:
+            self.modules[name] = Module(self, name)
+        return self.modules[name]
 
     def get_module(self, name):
         return self.modules[name]
@@ -208,26 +222,33 @@ class Package(Symbol):
     def add_symbol_odr(self, lvalue, value):
         if lvalue not in self.symbols:
             self.add_symbol(lvalue, value)
-        raise RuntimeError(f"Can't add symbol '{lvalue}' to package '{self.name}'. Symbol already declared.")
+        else:
+            raise RuntimeError(f"Can't add symbol '{lvalue}' to package '{self.name}'. Symbol already declared.")
 
     def import_package(self, package):
+        if package is self:
+            return
         self.imported_packages[package.name] = package
         self[package.name] = package
 
     def import_symbols_from_package(self, package, symbols):
+        if package is self:
+            return
         self.imported_packages[package.name] = package
         for symbol in symbols:
             name = symbol.get_name()
-            # print(*[str(sym) for sym in package.symbols.values()])
             sym = package.lookup_symbol(name)
             if sym is None:
                 raise RuntimeError(f"Cannot import symbol '{name}' from package '{package.name}'")
             self.add_symbol(symbol.name, sym)
 
     def import_all_symbols_from_package(self, package):
+        if package is self:
+            return
         self.imported_packages[package.name] = package
-        for symbol in package.symbols:
+        for symbol in package.symbols.values():
             self.add_symbol_weak(symbol.name, symbol)
+        self[package.name] = package
 
     def __getitem__(self, item):
         if item not in self.symbols:
@@ -247,10 +268,13 @@ class Package(Symbol):
         super().from_dict(d)
         from typesys import symbol_from_dict
         for k, v in d['children'].items():
-            self.add_symbol(k, symbol_from_dict(self.current_module, d['children']))
+            self.add_symbol(k, symbol_from_dict(self, self.current_module, v))
 
     def __str__(self):
         s = f"package {self.name}\n"
         for symbol in self.symbols.values():
-            s += '\t' + f"{str(symbol)}\n"
+            nxt = str(symbol)
+            if nxt is None:
+                nxt = "?????"
+            s += '\t' + f"{nxt}\n"
         return s

@@ -1,7 +1,7 @@
 from rply import LexerGenerator
 
 
-class Lexer():
+class Lexer:
     def __init__(self):
         self.lexer = LexerGenerator()
 
@@ -59,7 +59,6 @@ class Lexer():
         self.lexer.add('TTUPLE',       r'\btuple\b')
         self.lexer.add('TVECTOR',      r'\bvector\b')
         self.lexer.add('TMAP',         r'\bmap\b')
-        self.lexer.add('TOPTIONAL',    r'\boptional\b')
 
         self.lexer.add('TTRUE',        r'\btrue\b')
         self.lexer.add('TFALSE',       r'\bfalse\b')
@@ -120,6 +119,8 @@ class Lexer():
         self.lexer.add('XOR',     r'\^')
         self.lexer.add('BINNOT',  r'\~')
         self.lexer.add('BOOLNOT', r'!')
+
+        self.lexer.add('QMARK',   r'\?')
         
         self.lexer.add('ELIPSES', r'\.\.\.')
         self.lexer.add('DOTDOT',  r'\.\.')
@@ -128,19 +129,27 @@ class Lexer():
         self.lexer.add('IDENT',   r'[_A-Za-z]\w*')
         
         # Number
-        self.lexer.add('FLOAT',    r'[0-9]+\.[0-9]*f')
-        self.lexer.add('DOUBLE',   r'[0-9]+\.[0-9]+')
-        self.lexer.add('HALF',     r'[0-9]+\.[0-9]*h')
-        self.lexer.add('LONGINT',  r'\d+l')
-        self.lexer.add('ULONGINT', r'\d+ul')
-        self.lexer.add('BYTE',     r'\d+b')
-        self.lexer.add('UINT',     r'\d+u')
-        self.lexer.add('INT',      r'\d+')
-        self.lexer.add('HEXINT',   r'0x([0-9A-Fa-f]+)')
-        self.lexer.add('HEXLINT',  r'0x([0-9A-Fa-f]+)l')
-        self.lexer.add('BININT',   r'0b([0-1]+)')
-        self.lexer.add('BINLINT',  r'0b([0-1]+)l')
-        self.lexer.add('BINBYTE',  r'0b([0-1]+)b')
+        self.lexer.add('HEXULINT',  r'\b0x[0-9A-Fa-f]+ul\b')
+        self.lexer.add('HEXLINT',   r'\b0x[0-9A-Fa-f]+l\b')
+        self.lexer.add('HEXUSINT',  r'\b0x[0-9A-Fa-f]+us\b')
+        self.lexer.add('HEXSBINT',  r'\b0x[0-9A-Fa-f]+sb\b')
+        self.lexer.add('HEXSINT',   r'\b0x[0-9A-Fa-f]+s\b')
+        self.lexer.add('HEXBINT',   r'\b0x[0-9A-Fa-f]+b\b')
+        self.lexer.add('HEXUINT',   r'\b0x[0-9A-Fa-f]+u\b')
+        self.lexer.add('HEXINT',    r'\b0x[0-9A-Fa-f]+\b')
+        self.lexer.add('BININT',    r'0b[0-1]+')
+        self.lexer.add('BINLINT',   r'0b[0-1]+l')
+        self.lexer.add('BINBYTE',   r'0b[0-1]+b')
+        self.lexer.add('FLOAT',     r'[0-9]+\.[0-9]*f')
+        self.lexer.add('DOUBLE',    r'[0-9]+\.[0-9]+')
+        self.lexer.add('HALF',      r'[0-9]+\.[0-9]*h')
+        self.lexer.add('LONGINT',   r'\d+l')
+        self.lexer.add('ULONGINT',  r'\d+ul')
+        self.lexer.add('BYTE',      r'\d+b')
+        self.lexer.add('USHORTINT', r'\d+us')
+        self.lexer.add('SHORTINT',  r'\d+s')
+        self.lexer.add('UINT',      r'\d+u')
+        self.lexer.add('INT',       r'\d+')
 
         self.lexer.add('DOT', r'\.')
         self.lexer.add('ADD', r'\+')
@@ -157,3 +166,6 @@ class Lexer():
     def get_lexer(self):
         self._add_tokens()
         return self.lexer.build()
+
+
+lexer = Lexer().get_lexer()
