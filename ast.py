@@ -307,7 +307,7 @@ class Float(Number):
         return types['float32']
 
     def eval(self):
-        i = ir.Constant(self.type.irtype, float(self.value))
+        i = ir.Constant(self.type.irtype, float(self.value.strip('f')))
         return i
 
     def consteval(self):
@@ -327,6 +327,21 @@ class Double(Number):
 
     def consteval(self):
         return float(self.value)
+
+
+class Quad(Number):
+    """
+    A quad-precision float constant. (float128)
+    """
+    def get_type(self):
+        return types['float128']
+
+    def eval(self):
+        i = ir.Constant(self.type.irtype, self.value.strip('q'))
+        return i
+
+    def consteval(self):
+        return float(self.value.strip('q'))
 
 
 class HalfFloat(Number):
@@ -362,7 +377,7 @@ class StringLiteral(Expr):
 
     def eval(self):
         fmt = self.raw_value
-        fmt = fmt.replace('\\n', '\n')
+        fmt = fmt.replace('\\n', '\n').replace('\\t', '\t')
         c_fmt = ir.Constant(ir.ArrayType(ir.IntType(8), len(fmt)),
                             bytearray(fmt.encode("utf8")))
         global_fmt = ir.GlobalVariable(self.module, c_fmt.type, name=self.module.get_unique_name("str"))
@@ -1906,7 +1921,18 @@ class AddAssignment(Assignment):
             )
         if not ptr.is_atomic():
             value = self.builder.load(ptr.irvalue)
-            res = self.builder.add(value, self.expr.eval())
+            ty = self.expr.get_type()
+            if ty.is_float():
+                res = self.builder.fadd(value, self.expr.eval())
+            elif ty.is_integer():
+                res = self.builder.add(value, self.expr.eval())
+            else:
+                res = None
+                lineno = self.expr.getsourcepos().lineno
+                colno = self.expr.getsourcepos().colno
+                throw_saturn_error(self.builder, self.module, lineno, colno,
+                                   f"Attempting to perform addition with two operands of incompatible types "
+                                   f"({str(self.lvalue.get_pointer().type)} and {str(ty)}).")
             self.builder.store(res, ptr.irvalue)
         else:
             self.builder.atomic_rmw('add', ptr.irvalue, self.expr.eval(), 'seq_cst')
@@ -1927,10 +1953,98 @@ class SubAssignment(Assignment):
             )
         if not ptr.is_atomic():
             value = self.builder.load(ptr.irvalue)
-            res = self.builder.sub(value, self.expr.eval())
+            ty = self.expr.get_type()
+            if ty.is_float():
+                res = self.builder.fsub(value, self.expr.eval())
+            elif ty.is_integer():
+                res = self.builder.sub(value, self.expr.eval())
             self.builder.store(res, ptr.irvalue)
         else:
             self.builder.atomic_rmw('sub', ptr.irvalue, self.expr.eval(), 'seq_cst')
+
+
+class PrefixIncrementOp(PrefixOp):
+    """
+    Prefix increment to a defined variable.\n
+    ++right; (right = right + 1, right;)
+    """
+    def eval(self):
+        if not (isinstance(self.right, LValue) or
+                isinstance(self.right, ElementOf) or
+                isinstance(self.right, TupleElementOf) or
+                isinstance(self.right, LValueField)):
+            lineno = self.right.getsourcepos().lineno
+            colno = self.right.getsourcepos().colno
+            throw_saturn_error(self.builder, self.module, lineno, colno,
+                               "Cannot increment expression which is not an lvalue."
+                               )
+        ptr = self.right.get_pointer()
+        if ptr.is_const() or ptr.is_immut():
+            lineno = self.right.getsourcepos().lineno
+            colno = self.right.getsourcepos().colno
+            throw_saturn_error(self.builder, self.module, lineno, colno,
+                               f"Cannot reassign to const variable, {ptr.name}."
+                               )
+        if not ptr.is_atomic():
+            value = self.builder.load(ptr.irvalue)
+            ty = self.right.get_type()
+            if ty.is_integer():
+                res = self.builder.add(value, ir.Constant(ty.get_ir_type(), 1))
+            else:
+                res = None
+                lineno = self.right.getsourcepos().lineno
+                colno = self.right.getsourcepos().colno
+                throw_saturn_error(self.builder, self.module, lineno, colno,
+                                   f"Attempting to perform addition on operand of incompatible type "
+                                   f"({str(ty)}).")
+            self.builder.store(res, ptr.irvalue)
+            return self.builder.load(ptr.irvalue)
+        else:
+            ty = self.right.get_type()
+            self.builder.atomic_rmw('add', ptr.irvalue, ir.Constant(ty.get_ir_type(), 1), 'seq_cst')
+            return self.builder.load_atomic(ptr.irvalue)
+
+
+class PrefixDecrementOp(PrefixOp):
+    """
+    Prefix decrement to a defined variable.\n
+    --right; (right = right - 1, right;)
+    """
+    def eval(self):
+        if not (isinstance(self.right, LValue) or
+                isinstance(self.right, ElementOf) or
+                isinstance(self.right, TupleElementOf) or
+                isinstance(self.right, LValueField)):
+            lineno = self.right.getsourcepos().lineno
+            colno = self.right.getsourcepos().colno
+            throw_saturn_error(self.builder, self.module, lineno, colno,
+                               "Cannot decrement expression which is not an lvalue."
+                               )
+        ptr = self.right.get_pointer()
+        if ptr.is_const() or ptr.is_immut():
+            lineno = self.right.getsourcepos().lineno
+            colno = self.right.getsourcepos().colno
+            throw_saturn_error(self.builder, self.module, lineno, colno,
+                               f"Cannot reassign to const variable, {ptr.name}."
+                               )
+        if not ptr.is_atomic():
+            value = self.builder.load(ptr.irvalue)
+            ty = self.right.get_type()
+            if ty.is_integer():
+                res = self.builder.sub(value, ir.Constant(ty.get_ir_type(), 1))
+            else:
+                res = None
+                lineno = self.right.getsourcepos().lineno
+                colno = self.right.getsourcepos().colno
+                throw_saturn_error(self.builder, self.module, lineno, colno,
+                                   f"Attempting to perform subtraction on operand of incompatible type "
+                                   f"({str(ty)}).")
+            self.builder.store(res, ptr.irvalue)
+            return self.builder.load(ptr.irvalue)
+        else:
+            ty = self.right.get_type()
+            self.builder.atomic_rmw('add', ptr.irvalue, ir.Constant(ty.get_ir_type(), 1), 'seq_cst')
+            return self.builder.load_atomic(ptr.irvalue)
 
 
 class MulAssignment(Assignment):
@@ -2289,6 +2403,47 @@ class CDeclareDecl(ASTNode):
         self.builder.c_decl = False
 
 
+class Attribute(ASTNode):
+    """
+    A name that describes a configuration property of a symbol.
+    lvalue\n
+    lvalue(args...)
+    """
+    def __init__(self, builder, module, package, spos, lvalue, args=None):
+        super().__init__(builder, module, package, spos)
+        if args is None:
+            self.args = []
+        else:
+            self.args = args
+        self.lvalue = lvalue
+
+
+class AttributeList(ASTNode):
+    """
+    A list of attributes to be assigned to the succeeding symbol.
+    [[attr1, attr2, ...]]\n
+    [[attr1(arg1, arg2, ...), ...]]\n
+    """
+    def __init__(self, builder, module, package, spos):
+        super().__init__(builder, module, package, spos)
+        self.attr_list = {}
+
+    def add_attr(self, attr):
+        self.attr_list[attr.lvalue.get_name()] = attr
+
+    def has_attr(self, attr_name):
+        return attr_name in self.attr_list
+
+    def get_attr(self, attr_name):
+        return self.attr_list[attr_name]
+
+
+class SymbolPreamble:
+    def __init__(self, visibility_decl=None, attribute_list=None):
+        self.visibility_decl = visibility_decl
+        self.attribute_list = attribute_list
+
+
 class CodeBlock(ASTNode):
     """
     A block of multiple statements with an enclosing scope.
@@ -2423,10 +2578,13 @@ class FuncArgList(ASTNode):
 class FuncDecl(ASTNode):
     """
     A declaration and definition of a function.\n
-    fn name(decl_args): rtype { block }
+    fn name(decl_args): rtype { block }\n
+    visibility fn name(decl_args): rtype { block }\n
+    [[attribute_list]] fn name(decl_args): rtype { block }
     """
     def __init__(self, builder, module, package, spos, name, rtype, block, decl_args, var_arg=False,
-                 visibility=Visibility.DEFAULT):
+                 visibility=Visibility.DEFAULT,
+                 attribute_list=None):
         super().__init__(builder, module, package, spos)
         self.name = name
         self.rtype = rtype
@@ -2434,6 +2592,22 @@ class FuncDecl(ASTNode):
         self.decl_args = decl_args
         self.var_arg = var_arg
         self.visibility = visibility
+        self.attribute_list = attribute_list
+
+    def add_preamble(self, preamble: SymbolPreamble):
+        if preamble.visibility_decl is not None:
+            tt = preamble.visibility_decl.gettokentype()
+            if tt == 'TPRIV':
+                visibility = Visibility.PRIVATE
+            elif tt == 'TPUB':
+                visibility = Visibility.PUBLIC
+            else:
+                visibility = Visibility.DEFAULT
+        else:
+            visibility = Visibility.DEFAULT
+        self.visibility = visibility
+        if preamble.attribute_list is not None:
+            self.attribute_list = preamble.attribute_list
 
     def generate_symbol(self):
         package = self.package
@@ -2489,6 +2663,8 @@ class FuncDecl(ASTNode):
     def eval(self):
         push_new_scope(self.builder)
         rtype = self.rtype.get_type()
+        if self.attribute_list is not None and self.attribute_list.has_attr('print'):
+            print(self.attribute_list.get_attr('print').args[0].value.strip("\""))
 
         # if rtype.is_struct() and rtype.is_value():
         #     self.decl_args.add(FuncArg(
@@ -2582,6 +2758,23 @@ class FuncDeclExtern(ASTNode):
         self.rtype = rtype
         self.decl_args = decl_args
         self.var_arg = var_arg
+        self.visibility = Visibility.PUBLIC
+        self.attribute_list = None
+
+    def add_preamble(self, preamble: SymbolPreamble):
+        if preamble.visibility_decl is not None:
+            tt = preamble.visibility_decl.gettokentype()
+            if tt == 'TPRIV':
+                visibility = Visibility.PRIVATE
+            elif tt == 'TPUB':
+                visibility = Visibility.PUBLIC
+            else:
+                visibility = Visibility.DEFAULT
+        else:
+            visibility = Visibility.DEFAULT
+        self.visibility = visibility
+        if preamble.attribute_list is not None:
+            self.attribute_list = preamble.attribute_list
 
     def getsourcepos(self):
         return self.spos
@@ -2619,35 +2812,81 @@ class GlobalVarDecl(ASTNode):
     name : vtype;\n
     name : vtype = initval;
     """
-    def __init__(self, builder, module, package, spos, name, vtype, initval=None, spec='none',
+    def __init__(self, builder, module, package, spos, name, vtype, initval=None, spec=None,
                  visibility=Visibility.DEFAULT):
         super().__init__(builder, module, package, spos)
+        if spec is None:
+            spec = []
         self.name = name
         self.vtype = vtype
         self.initval = initval
-        self.spec = spec
+        self.spec = spec.copy()
         self.visibility = visibility
+        self.symbol = None
+        self.attribute_list = None
+
+    def add_preamble(self, preamble: SymbolPreamble):
+        if preamble.visibility_decl is not None:
+            tt = preamble.visibility_decl.gettokentype()
+            if tt == 'TPRIV':
+                visibility = Visibility.PRIVATE
+            elif tt == 'TPUB':
+                visibility = Visibility.PUBLIC
+            else:
+                visibility = Visibility.DEFAULT
+        else:
+            visibility = Visibility.DEFAULT
+        self.visibility = visibility
+        if preamble.attribute_list is not None:
+            self.attribute_list = preamble.attribute_list
 
     def getsourcepos(self):
         return self.spos
 
     def generate_symbol(self):
-        self.vtype.eval()
-        vartype = self.vtype.get_type()
-        return Value(self.name.value, vartype, None, objtype='global', visibility=self.visibility)
+        if self.symbol is None:
+            self.vtype.eval()
+            vartype = self.vtype.get_type()
+
+            quals = [s[0] for s in self.spec.copy()]
+
+            val = Value(self.name.value, vartype, None, objtype='global', visibility=self.visibility, qualifiers=quals)
 
     def eval(self):
         self.vtype.eval()
         vartype = self.vtype.type
+
+        quals = [s[0] for s in self.spec.copy()]
+
         #vartype = get_type_by_name(self.builder, self.module, str(self.vtype))
+        for i in range(len(self.spec)):
+            if self.spec[i][0] == 'const':
+                if self.initval is None:
+                    lineno = self.spec[i][1].lineno
+                    colno = self.spec[i][1].colno
+                    throw_saturn_error(self.builder, self.module, lineno, colno,
+                                       "Can't create const global variable with no initial value."
+                                       )
+            elif self.spec[i][0] == 'immut':
+                if self.initval is None:
+                    lineno = self.spec[i][1].lineno
+                    colno = self.spec[i][1].colno
+                    throw_saturn_error(self.builder, self.module, lineno, colno,
+                                       "Can't create immut global variable with no initial value."
+                                       )
         gvar = ir.GlobalVariable(self.module, vartype.irtype, self.name.value)
         gvar.align = 4
         gvar.linkage = LinkageType.VALUE[self.visibility]
 
         if self.initval:
-            gvar.initializer = self.initval.eval()
+            if self.initval.is_constexpr:
+                gvar.initializer = ir.Constant(vartype.irtype, self.initval.consteval())
+            else:
+                gvar.initializer = self.initval.eval()
         
-        ptr = Value(self.name.value, vartype, gvar, visibility=self.visibility)
+        ptr = Value(self.name.value, vartype, gvar, visibility=self.visibility, qualifiers=quals)
+        if ptr.is_const():
+            gvar.global_constant = True
         self.package.add_symbol(self.name.value, ptr)
         # add_new_global(self.name.value, ptr)
         return ptr
@@ -2673,6 +2912,22 @@ class MethodDecl(ASTNode):
         thisarg.atype = thisarg.atype.get_pointer_to()
         self.decl_args.prepend(thisarg)
         self.visibility = visibility
+        self.attribute_list = None
+
+    def add_preamble(self, preamble: SymbolPreamble):
+        if preamble.visibility_decl is not None:
+            tt = preamble.visibility_decl.gettokentype()
+            if tt == 'TPRIV':
+                visibility = Visibility.PRIVATE
+            elif tt == 'TPUB':
+                visibility = Visibility.PUBLIC
+            else:
+                visibility = Visibility.DEFAULT
+        else:
+            visibility = Visibility.DEFAULT
+        self.visibility = visibility
+        if preamble.attribute_list is not None:
+            self.attribute_list = preamble.attribute_list
 
     def generate_symbol(self):
         package = self.package
@@ -2853,6 +3108,23 @@ class MethodDeclExtern(ASTNode):
         )
         thisarg.atype = thisarg.atype.get_pointer_to()
         self.decl_args.prepend(thisarg)
+        self.visibility = Visibility.PUBLIC
+        self.attribute_list = None
+
+    def add_preamble(self, preamble: SymbolPreamble):
+        if preamble.visibility_decl is not None:
+            tt = preamble.visibility_decl.gettokentype()
+            if tt == 'TPRIV':
+                visibility = Visibility.PRIVATE
+            elif tt == 'TPUB':
+                visibility = Visibility.PUBLIC
+            else:
+                visibility = Visibility.DEFAULT
+        else:
+            visibility = Visibility.DEFAULT
+        self.visibility = visibility
+        if preamble.attribute_list is not None:
+            self.attribute_list = preamble.attribute_list
 
     def eval(self):
         push_new_scope(self.builder)
@@ -2905,16 +3177,16 @@ class VarDecl(ASTNode):
                 if self.initval is None:
                     lineno = self.spec[i][1].lineno
                     colno = self.spec[i][1].colno
-                    throw_saturn_error(self.builder, self.module, lineno, colno, 
-                        "Can't create const variable with no initial value."
-                    )
+                    throw_saturn_error(self.builder, self.module, lineno, colno,
+                                       "Can't create const variable with no initial value."
+                                       )
             elif self.spec[i][0] == 'immut':
                 if self.initval is None:
                     lineno = self.spec[i][1].lineno
                     colno = self.spec[i][1].colno
-                    throw_saturn_error(self.builder, self.module, lineno, colno, 
-                        "Can't create immut variable with no initial value."
-                    )
+                    throw_saturn_error(self.builder, self.module, lineno, colno,
+                                       "Can't create immut variable with no initial value."
+                                       )
 
         quals = self.spec.copy()
 
@@ -3283,18 +3555,39 @@ class StructDecl(ASTNode):
     A struct declaration expression.\n
     type lvalue : struct { body }
     """
-    def __init__(self, builder, module, package, spos, lvalue, body, decl_mode):
+    def __init__(self, builder, module, package, spos, lvalue, body, decl_mode,
+                 visibility=Visibility.PUBLIC,
+                 attribute_list=None):
         super().__init__(builder, module, package, spos)
         self.lvalue = lvalue
         self.body = body
         self.ctor = None
         self.decl_mode = decl_mode
+        self.visibility = visibility
+        self.attribute_list = attribute_list
         name = self.lvalue.get_name()
         types[name] = StructType(name, self.module.context.get_identified_type(name), [])
         self.package.add_symbol(name, types[name])
+        self.symbol = types[name]
         if self.body is not None:
             for fld in self.body.get_fields():
                 types[name].add_field(fld.name.value, fld.ftype.get_type(), fld.initvalue)
+
+    def add_preamble(self, preamble: SymbolPreamble):
+        if preamble.visibility_decl is not None:
+            tt = preamble.visibility_decl.gettokentype()
+            if tt == 'TPRIV':
+                visibility = Visibility.PRIVATE
+            elif tt == 'TPUB':
+                visibility = Visibility.PUBLIC
+            else:
+                visibility = Visibility.DEFAULT
+        else:
+            visibility = Visibility.DEFAULT
+        self.visibility = visibility
+        self.symbol.visibility = self.visibility
+        if preamble.attribute_list is not None:
+            self.attribute_list = preamble.attribute_list
 
     def generate_symbol(self):
         name = self.lvalue.get_name()

@@ -1,5 +1,6 @@
 from llvmlite import ir
 from package import Symbol, Visibility, LinkageType
+from irutil import FP128Type
 
 
 class Type(Symbol):
@@ -271,13 +272,14 @@ types = {
     "float32":  Type("float32", 'float',    ir.FloatType()),
     "float64":  Type("float64", 'float',    ir.DoubleType()),
     "float16":  Type("float16", 'float',    ir.HalfType()),
+    "float128": Type("float128",'float',    FP128Type()),
     "bool":     Type("bool",    'bool',     ir.IntType(1)),
     "cstring":  Type("cstring", 'string',   ir.IntType(8).as_pointer(), traits=['TOpaquePtr']),
     "null_t":   Type("null_t",  'null',     ir.IntType(8).as_pointer(), traits=['TNoDereference', 'TOpaquePtr']),
     # C types
     "C::float":                 Type("C::float",                'float',    ir.FloatType(),  c_decl=True),
     "C::double":                Type("C::double",               'float',    ir.DoubleType(), c_decl=True),
-    "C::long.double":           Type("C::long.double",          'float',    ir.DoubleType(), c_decl=True),
+    "C::long.double":           Type("C::long.double",          'float',    FP128Type(),     c_decl=True),
     "C::int":                   Type("C::int",                  'int',      ir.IntType(32),  c_decl=True),
     "C::short":                 Type("C::short",                'int',      ir.IntType(16),  c_decl=True),
     "C::long":                  Type("C::long",                 'int',      ir.IntType(32),  c_decl=True),
@@ -291,13 +293,28 @@ types = {
     "C::unsigned.short":        Type("C::unsigned.short",       'uint',     ir.IntType(16),  c_decl=True),
     "C::unsigned.long":         Type("C::unsigned.long",        'uint',     ir.IntType(32),  c_decl=True),
     "C::unsigned.long.long":    Type("C::unsigned.long.long",   'uint',     ir.IntType(64),  c_decl=True),
-    "C::wchar_t":               Type("C::wchar_t",              'int',      ir.IntType(16),  c_decl=True),
+    "C::signed.int":            Type("C::signed.int",           'int',      ir.IntType(32),  c_decl=True),
+    "C::short.int":             Type("C::short.int",            'int',      ir.IntType(16),  c_decl=True),
+    "C::long.int":              Type("C::long.int",             'int',      ir.IntType(32),  c_decl=True),
+    "C::long.long.int":         Type("C::long.long.int",        'int',      ir.IntType(64),  c_decl=True),
+    "C::signed.short.int":      Type("C::signed.short.int",     'int',      ir.IntType(16),  c_decl=True),
+    "C::signed.long.int":       Type("C::signed.long.int",      'int',      ir.IntType(32),  c_decl=True),
+    "C::signed.long.long.int":  Type("C::signed.long.long.int", 'int',      ir.IntType(64),  c_decl=True),
+    "C::unsigned.short.int":    Type("C::unsigned.short.int",   'uint',     ir.IntType(16),  c_decl=True),
+    "C::unsigned.long.int":     Type("C::unsigned.long.int",    'uint',     ir.IntType(32),  c_decl=True),
+    "C::unsigned.long.long.int":Type("C::unsigned.long.long.int",'uint',    ir.IntType(64),  c_decl=True),
+    "C::wchar_t":               Type("C::wchar_t",              'int',      ir.IntType(64),  c_decl=True),
     "C::uintptr_t":             Type("C::uintptr_t",            'uint',     ir.IntType(64),  c_decl=True),
     "C::__time64_t":            Type("C::__time64_t",           'uint',     ir.IntType(64),  c_decl=True),
     "C::errno_t":               Type("C::errno_t",              'int',      ir.IntType(32),  c_decl=True),
     "C::size_t":                Type("C::size_t",               'uint',     ir.IntType(64),  c_decl=True),
     "C::_Bool":                 Type("C::_Bool",                'bool',     ir.IntType(8),   c_decl=True),
 }
+
+# Aliases
+types['float'] = types['float32']
+types['double'] = types['float64']
+types['uint8'] = types['byte']
 
 
 def print_qualifiers(ql: list):

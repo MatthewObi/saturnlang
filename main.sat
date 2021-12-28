@@ -1,18 +1,26 @@
 package main;
 import lang::{string};
-import cmath;
+import math;
 
-fn main(argc: int, argv: *cstring): int
+[[print("Hi!")]]
+pub fn main(argc: int, argv: *cstring): int
 {
     str: string = "Hello, world!";
     printf("%s (len = %d, alloc = %s)\n", str.cstr(), str.len, if str.alloc then "true" else "false");
 
-    printf("|%d| = %d\n", -33, cmath::abs(-33));
+    printf("pi = %lf\n", math::PI);
     printf("%d! = %d\n", 4, factorial(4));
     strSwitchTest := "switch_test(%d) = %d";
     printf(strSwitchTest, 11, switch_test(11));
     printf(strSwitchTest, 45, switch_test(45));
     printf(strSwitchTest, 38, switch_test(38));
+
+    q := 0.123q;
+    q += 0.25q;
+
+    i := 5;
+    ++i;
+    j := ++i;
 
     return 0;
 }

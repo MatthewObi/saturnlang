@@ -17,7 +17,10 @@ def parse_c_file(builder, module, package, path):
                                '-D__cdecl=',
                                '-D__fastcall=',
                                '-D__inline=inline',
+                               '-D__restrict=',
                                '-D__declspec(x)=',
+                               '-D__attribute__(x)=',
+                               '-D__asm__(x)=',
                                '-D__int64=long',
                                '-E', r'-Iutils/fake_libc_include']
                      )

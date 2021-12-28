@@ -66,6 +66,8 @@ class Lexer:
         self.lexer.add('LPAREN',    r'\(')
         self.lexer.add('RPAREN',    r'\)')
         # Bracket
+        self.lexer.add('LDBRACKET', r'\[\[')
+        self.lexer.add('RDBRACKET', r'\]\]')
         self.lexer.add('LBRACKET',  r'\[')
         self.lexer.add('RBRACKET',  r'\]')
 
@@ -90,7 +92,8 @@ class Lexer:
         self.lexer.add('MUL',       r'\*')
         self.lexer.add('DIV',       r'\/')
         
-        self.lexer.add('LANGLE',    r'!<')
+        self.lexer.add('LANGLE',    r'<\[')
+        self.lexer.add('RANGLE',    r'\]>')
 
         self.lexer.add('LSHFTEQ',   r'<<=')
         self.lexer.add('RSHFTEQ',   r'>>=')
@@ -141,8 +144,9 @@ class Lexer:
         self.lexer.add('BINLINT',   r'0b[0-1]+l')
         self.lexer.add('BINBYTE',   r'0b[0-1]+b')
         self.lexer.add('FLOAT',     r'[0-9]+\.[0-9]*f')
-        self.lexer.add('DOUBLE',    r'[0-9]+\.[0-9]+')
         self.lexer.add('HALF',      r'[0-9]+\.[0-9]*h')
+        self.lexer.add('QUAD',      r'[0-9]+\.[0-9]*q')
+        self.lexer.add('DOUBLE',    r'[0-9]+\.[0-9]+')
         self.lexer.add('LONGINT',   r'\d+l')
         self.lexer.add('ULONGINT',  r'\d+ul')
         self.lexer.add('BYTE',      r'\d+b')
@@ -150,6 +154,9 @@ class Lexer:
         self.lexer.add('SHORTINT',  r'\d+s')
         self.lexer.add('UINT',      r'\d+u')
         self.lexer.add('INT',       r'\d+')
+
+        self.lexer.add('INC', r'\+\+')
+        self.lexer.add('DEC', r'\-\-')
 
         self.lexer.add('DOT', r'\.')
         self.lexer.add('ADD', r'\+')

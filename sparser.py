@@ -2,12 +2,12 @@ from rply import ParserGenerator, Token
 from ast import (
     Program, CodeBlock, Statement, ReturnStatement, BreakStatement, ContinueStatement, FallthroughStatement,
     DeferStatement,
-    PackageDecl, ImportDecl, ImportDeclExtern, CIncludeDecl, CDeclareDecl, TypeDecl, StructField, StructDeclBody,
-    StructDecl,
+    PackageDecl, ImportDecl, ImportDeclExtern, CIncludeDecl, CDeclareDecl, Attribute, AttributeList, SymbolPreamble,
+    TypeDecl, StructField, StructDeclBody, StructDecl,
     Sum, Sub, Mul, Div, Mod, ShiftLeft, ShiftRight, And, Or, Xor, BinaryNot, BoolAnd, BoolOr, BoolNot, Negate, Print,
     AddressOf, DerefOf, ElementOf, TupleElementOf,
     Integer, UInteger, Integer64, UInteger64, Integer16, UInteger16, SByte,
-    Float, Double, HalfFloat, Byte, StringLiteral, MultilineStringLiteral,
+    Float, Double, HalfFloat, Quad, Byte, StringLiteral, MultilineStringLiteral,
     StructLiteralElement, StructLiteralBody, StructLiteral, Null,
     ArrayLiteralElement, ArrayLiteralBody, ArrayLiteral, TypeExpr, TupleTypeExpr, OptionalTypeExpr, FuncTypeExpr,
     TupleLiteralElement, TupleLiteralBody, TupleLiteral,
@@ -15,6 +15,7 @@ from ast import (
     MethodDecl, MethodDeclExtern,
     LValue, LValueField, FuncCall, MethodCall, CastExpr, SelectExpr, MakeExpr, MakeSharedExpr,
     Assignment, AddAssignment, SubAssignment, MulAssignment, ModAssignment, AndAssignment, OrAssignment, XorAssignment,
+    PrefixIncrementOp, PrefixDecrementOp,
     Boolean, Spaceship, BooleanEq, BooleanNeq, BooleanGte, BooleanGt, BooleanLte, BooleanLt,
     IfStatement, WhileStatement, DoWhileStatement, SwitchCase, SwitchDefaultCase, SwitchBody, SwitchStatement,
     ForStatement, IterExpr, PointerTypeExpr, ArrayTypeExpr
@@ -36,11 +37,12 @@ class Parser:
             # A list of all token names accepted by the parser.
             ['TPACKAGE', 'TIMPORT', 'TCINCLUDE', 'TCDECLARE',
              'INT', 'UINT', 'LONGINT', 'ULONGINT', 'BYTE', 'SHORTINT', 'USHORTINT',
-             'HALF', 'FLOAT', 'DOUBLE', 'STRING', 'MLSTRING',
+             'HALF', 'FLOAT', 'DOUBLE', 'QUAD', 'STRING', 'MLSTRING',
              'HEXINT', 'HEXUINT', 'HEXLINT', 'HEXULINT', 'HEXSINT', 'HEXUSINT', 'HEXBINT', 'HEXSBINT',
-             'IDENT', 'TPRINT', 'DOT', 'TRETURN', 'LPAREN', 'RPAREN', 'LBRACKET', 'RBRACKET',
+             'IDENT', 'TPRINT', 'DOT', 'TRETURN',
+             'LPAREN', 'RPAREN', 'LBRACKET', 'RBRACKET', 'LDBRACKET', 'RDBRACKET',
              'SEMICOLON', 'ADD', 'SUB', 'MUL', 'DIV', 'MOD', 'LSHFT', 'RSHFT',
-             'AND', 'OR', 'XOR', 'BOOLAND', 'BOOLOR', 'BINNOT', 'QMARK',
+             'AND', 'OR', 'XOR', 'BOOLAND', 'BOOLOR', 'BINNOT', 'QMARK', 'INC', 'DEC',
              'TFN', 'TPUB', 'TPRIV', 'COLON', 'LBRACE', 'RBRACE', 'COMMA', 'CC',
              'EQ', 'CEQ', 'ADDEQ', 'SUBEQ', 'MULEQ', 'MODEQ', 'ANDEQ', 'OREQ', 'XOREQ',
              'TIF', 'TELSE', 'TWHILE', 'TTHEN', 'TDO', 'TBREAK', 'TCONTINUE', 'TFALLTHROUGH', 'TDEFER',
@@ -56,6 +58,7 @@ class Parser:
                 ('left', ['BOOLEQ', 'BOOLNEQ', 'BOOLGT', 'BOOLLT', 'BOOLGTE', 'BOOLLTE', 'SPACESHIP']),
                 ('left', ['ADD', 'SUB']),
                 ('left', ['MUL', 'DIV', 'MOD']),
+                ('left', ['INC', 'DEC']),
                 ('right', ['BOOLNOT', 'BINNOT'])
             ]
         )
@@ -91,35 +94,66 @@ class Parser:
         def visibility_decl(state, p):
             return p[0]
 
-        @self.pg.production('func_decl : TFN IDENT LPAREN decl_args RPAREN COLON typeexpr LBRACE block RBRACE')
-        @self.pg.production('func_decl : visibility_decl TFN IDENT LPAREN decl_args RPAREN COLON typeexpr LBRACE block RBRACE')
-        def func_decl(state, p):
-            if p[0].gettokentype() == 'TFN':
-                name = p[1]
-                declargs = p[3]
-                rtype = p[6]
-                block = p[8]
-                spos = p[0].getsourcepos()
-                if not state.decl_mode:
-                    return FuncDecl(state.builder, state.module, state.package, spos, name, rtype, block, declargs)
-                return FuncDeclExtern(state.builder, state.module, state.package, spos, name, rtype, declargs)
+        @self.pg.production('attribute_decl : LDBRACKET attribute_param_list RDBRACKET')
+        def attribute_decl(state, p):
+            return p[1]
+
+        @self.pg.production('attribute_param_list : attribute_param_list COMMA attribute_param')
+        @self.pg.production('attribute_param_list : attribute_param_list COMMA')
+        @self.pg.production('attribute_param_list : attribute_param')
+        def attribute_param_list(state, p):
+            spos = p[0].getsourcepos()
+            if len(p) == 1:
+                attr_list = AttributeList(state.builder, state.module, state.package, spos)
+                attr_list.add_attr(p[0])
+                return attr_list
+            elif len(p) == 2:
+                return p[0]
             else:
-                if self.decl_mode and p[0].gettokentype() == 'TPRIV':
-                    return None
-                if p[0].gettokentype() == 'TPRIV':
-                    visibility = 0
-                elif p[0].gettokentype() == 'TPUB':
-                    visibility = 2
-                else:
-                    visibility = 1
-                name = p[2]
-                declargs = p[4]
-                rtype = p[7]
-                block = p[9]
-                spos = p[0].getsourcepos()
-                if not self.decl_mode:
-                    return FuncDecl(state.builder, state.module, state.package, spos, name, rtype, block, declargs, visibility=visibility)
-                return FuncDeclExtern(state.builder, state.module, state.package, spos, name, rtype, declargs)
+                attr_list = p[0]
+                attr_list.add_attr(p[2])
+                return attr_list
+
+        @self.pg.production('attribute_param : lvalue LPAREN args RPAREN')
+        @self.pg.production('attribute_param : lvalue LPAREN RPAREN')
+        @self.pg.production('attribute_param : lvalue')
+        def attribute_param(state, p):
+            name = p[0]
+            if len(p) > 3:
+                args = p[2]
+            else:
+                args = None
+            spos = p[0].getsourcepos()
+            return Attribute(state.builder, state.module, state.package, spos, name, args)
+
+        @self.pg.production('gstmt_preamble : visibility_decl')
+        def gstmt_preamble_visibility(state, p):
+            return SymbolPreamble(visibility_decl=p[0])
+
+        @self.pg.production('gstmt_preamble : attribute_decl visibility_decl')
+        @self.pg.production('gstmt_preamble : attribute_decl')
+        def gstmt_preamble_attr(state, p):
+            if len(p) == 1:
+                return SymbolPreamble(attribute_list=p[0])
+            else:
+                return SymbolPreamble(attribute_list=p[0], visibility_decl=p[1])
+
+        @self.pg.production('func_decl : TFN IDENT LPAREN decl_args RPAREN COLON typeexpr LBRACE block RBRACE')
+        def func_decl(state, p):
+            name = p[1]
+            declargs = p[3]
+            rtype = p[6]
+            block = p[8]
+            spos = p[0].getsourcepos()
+            if not state.decl_mode:
+                return FuncDecl(state.builder, state.module, state.package, spos, name, rtype, block, declargs)
+            # return FuncDeclExtern(state.builder, state.module, state.package, spos, name, rtype, declargs)
+            # return FuncDeclExtern(state.builder, state.module, state.package, spos, name, rtype, declargs)
+
+        @self.pg.production('func_decl : gstmt_preamble func_decl')
+        def func_decl_preamble(state, p):
+            p[1].add_preamble(p[0])
+            return p[1]
 
         @self.pg.production('func_decl : TFN IDENT LPAREN decl_args RPAREN LBRACE block RBRACE')
         def func_decl_retvoid(state, p):
@@ -127,14 +161,13 @@ class Parser:
             declargs = p[3]
             spostexpr = p[5].getsourcepos()
             rtype = TypeExpr(state.builder, state.module, state.package,
-                spostexpr, 
-                LValue(state.builder, state.module, state.package, spostexpr, "void")
-            )
+                             spostexpr,
+                             LValue(state.builder, state.module, state.package, spostexpr, "void")
+                             )
             block = p[6]
             spos = p[0].getsourcepos()
-            if not self.decl_mode:
-                return FuncDecl(state.builder, state.module, state.package, spos, name, rtype, block, declargs)
-            return FuncDeclExtern(state.builder, state.module, state.package, spos, name, rtype, declargs)
+            return FuncDecl(state.builder, state.module, state.package, spos, name, rtype, block, declargs)
+            # return FuncDeclExtern(state.builder, state.module, state.package, spos, name, rtype, declargs)
 
         @self.pg.production('func_decl : TFN IDENT LPAREN decl_args RPAREN LBRACE RBRACE')
         def func_decl_retvoid_empty(state, p):
@@ -207,6 +240,26 @@ class Parser:
             spos = p[0].getsourcepos()
             return GlobalVarDecl(state.builder, state.module, state.package, spos, name, vtype, initval)
 
+        @self.pg.production('gvar_decl : storage_spec_list IDENT COLON typeexpr SEMICOLON')
+        def gvar_decl_spec(state, p):
+            name = p[1]
+            vtype = p[3]
+            spos = p[1].getsourcepos()
+            return GlobalVarDecl(state.builder, state.module, state.package, spos, name, vtype, spec=p[0])
+
+        @self.pg.production('gvar_decl : storage_spec_list IDENT COLON typeexpr EQ expr SEMICOLON')
+        def gvar_decl_spec_init(state, p):
+            name = p[1]
+            vtype = p[3]
+            initval = p[5]
+            spos = p[1].getsourcepos()
+            return GlobalVarDecl(state.builder, state.module, state.package, spos, name, vtype, initval, spec=p[0])
+
+        @self.pg.production('gvar_decl : gstmt_preamble gvar_decl')
+        def gvar_decl_preamble(state, p):
+            p[1].add_preamble(p[0])
+            return p[1]
+
         @self.pg.production('method_decl : TFN LPAREN MUL lvalue RPAREN IDENT LPAREN decl_args RPAREN COLON typeexpr LBRACE block RBRACE')
         def method_decl(state, p):
             struct = p[3]
@@ -232,7 +285,7 @@ class Parser:
             return MethodDeclExtern(state.builder, state.module, state.package, spos, name, rtype, declargs, struct)
 
         @self.pg.production('method_decl : TFN LPAREN MUL lvalue RPAREN TOPERATOR SPACESHIP LPAREN decl_args RPAREN COLON typeexpr LBRACE block RBRACE')
-        def method_decl_assign(state, p):
+        def method_decl_spaceship(state, p):
             struct = p[3]
             name = Token('IDENT', 'operator.spaceship')
             declargs = p[8]
@@ -306,6 +359,11 @@ class Parser:
             spos = p[0].getsourcepos()
             return StructDecl(state.builder, state.module, state.package, spos, p[1], None, state.decl_mode)
 
+        @self.pg.production('struct_decl : gstmt_preamble struct_decl')
+        def struct_decl_preamble(state, p):
+            p[1].add_preamble(p[0])
+            return p[1]
+
         @self.pg.production('struct_decl_body : struct_decl_body struct_decl_field')
         @self.pg.production('struct_decl_body : struct_decl_field')
         @self.pg.production('struct_decl_body : ')
@@ -368,7 +426,6 @@ class Parser:
                 return ReturnStatement(state.builder, state.module, state.package, spos, p[1])
             else:
                 return p[0]
-
         
         @self.pg.production('stmt : TRETURN SEMICOLON')
         def stmt_retvoid(state, p):
@@ -703,6 +760,8 @@ class Parser:
         @self.pg.production('expr : BOOLNOT expr')
         @self.pg.production('expr : BINNOT expr')
         @self.pg.production('expr : SUB expr')
+        @self.pg.production('expr : INC lvalue_expr')
+        @self.pg.production('expr : DEC lvalue_expr')
         def expr_unary(state, p):
             right = p[1]
             operator = p[0]
@@ -715,6 +774,10 @@ class Parser:
                 return BinaryNot(state.builder, state.module, state.package, spos, right)
             elif operator.gettokentype() == 'SUB':
                 return Negate(state.builder, state.module, state.package, spos, right)
+            elif operator.gettokentype() == 'INC':
+                return PrefixIncrementOp(state.builder, state.module, state.package, spos, right)
+            elif operator.gettokentype() == 'DEC':
+                return PrefixDecrementOp(state.builder, state.module, state.package, spos, right)
 
         @self.pg.production('expr : expr ADD expr')
         @self.pg.production('expr : expr SUB expr')
@@ -1028,6 +1091,7 @@ class Parser:
         @self.pg.production('number : HALF')
         @self.pg.production('number : FLOAT')
         @self.pg.production('number : DOUBLE')
+        @self.pg.production('number : QUAD')
         def number(state, p):
             spos = p[0].getsourcepos()
             if p[0].gettokentype() == 'INT':
@@ -1050,6 +1114,8 @@ class Parser:
                 return Float(state.builder, state.module, state.package, spos, p[0].value)
             elif p[0].gettokentype() == 'DOUBLE':
                 return Double(state.builder, state.module, state.package, spos, p[0].value)
+            elif p[0].gettokentype() == 'QUAD':
+                return Quad(state.builder, state.module, state.package, spos, p[0].value)
 
         @self.pg.production('expr : HEXINT')
         @self.pg.production('expr : HEXUINT')
