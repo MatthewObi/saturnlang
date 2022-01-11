@@ -1,3 +1,5 @@
+import re
+
 from rply import LexerGenerator
 
 
@@ -44,6 +46,7 @@ class Lexer:
         self.lexer.add('TPRIV',        r'\bpriv\b')
         self.lexer.add('TNULL',        r'\bnull\b')
         self.lexer.add('TMAKE',        r'\bmake\b')
+        self.lexer.add('TDESTROY',     r'\bdestroy\b')
         self.lexer.add('TSHARED',      r'\bshared\b')
         self.lexer.add('TOWNED',       r'\bowned\b')
         self.lexer.add('TCAST',        r'\bcast\b')
@@ -53,6 +56,7 @@ class Lexer:
         self.lexer.add('TREADONLY',    r'\breadonly\b')
         self.lexer.add('TNOCAPTURE',   r'\bnocapture\b')
         self.lexer.add('TATOMIC',      r'\batomic\b')
+        self.lexer.add('TUNSAFE',      r'\bunsafe\b')
         self.lexer.add('TIN',          r'\bin\b')
         self.lexer.add('TCINCLUDE',    r'\bc_include\b')
         self.lexer.add('TCDECLARE',    r'\bc_declare\b')
@@ -149,6 +153,7 @@ class Lexer:
         self.lexer.add('DOUBLE',    r'[0-9]+\.[0-9]+')
         self.lexer.add('LONGINT',   r'\d+l')
         self.lexer.add('ULONGINT',  r'\d+ul')
+        self.lexer.add('SBYTE',     r'\d+sb')
         self.lexer.add('BYTE',      r'\d+b')
         self.lexer.add('USHORTINT', r'\d+us')
         self.lexer.add('SHORTINT',  r'\d+s')
@@ -165,7 +170,7 @@ class Lexer:
 
         # String literal
         self.lexer.add('CSTRING', r'c\"(([^\"\\]|\\.)*)\"')
-        self.lexer.add('STRING',  r'\"(([^\"\\]|\\.)*)\"')
+        self.lexer.add('STRING',  r'(?u)\"(([^\"\\]|\\.)*)\"', flags=re.UNICODE)
 
         # Ignore spaces
         self.lexer.ignore(r'\s+')

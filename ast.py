@@ -1,13 +1,17 @@
 from llvmlite import ir
 from rply import Token
 from typesys import TupleType, Type, make_tuple_type, types, FuncType, StructType, Value, mangle_name, print_types, \
-    Func, make_optional_type
+    Func, make_optional_type, make_slice_type, array_to_slice
 from serror import throw_saturn_error
 from package import Visibility, LinkageType, Package
 
 SCOPE = []
 DECL_SCOPE = []
 GLOBALS = {}
+
+
+def clean_string_literal(str_lit: str) -> str:
+    return str_lit.strip('\"').replace('\\n', '\n').replace('\\t', '\t')
 
 
 class Scope:
@@ -365,8 +369,8 @@ class StringLiteral(Expr):
     """
     def __init__(self, builder, module, package, spos, value):
         super().__init__(builder, module, package, spos)
-        self.value = value
-        self.raw_value = str(value).strip("\"") + '\0'
+        self.value = value  # bytearray(value, 'cp1252').decode('utf8')
+        self.raw_value = clean_string_literal(self.value) + '\0'
         self.type = self.get_type()
 
     def get_type(self):
@@ -377,9 +381,9 @@ class StringLiteral(Expr):
 
     def eval(self):
         fmt = self.raw_value
-        fmt = fmt.replace('\\n', '\n').replace('\\t', '\t')
-        c_fmt = ir.Constant(ir.ArrayType(ir.IntType(8), len(fmt)),
-                            bytearray(fmt.encode("utf8")))
+        c_encoded = bytearray(fmt, 'utf8')
+        c_fmt = ir.Constant(ir.ArrayType(ir.IntType(8), len(c_encoded)),
+                            c_encoded)
         global_fmt = ir.GlobalVariable(self.module, c_fmt.type, name=self.module.get_unique_name("str"))
         global_fmt.linkage = 'internal'
         global_fmt.global_constant = True
@@ -688,8 +692,14 @@ class LValue(Expr):
                 #             "Could not find lvalue '%s' in current scope." % name
                 #         )
                 # ptr = self.module.sfuncs[name]
-                key = list(ptr.overloads.keys())[0]
-                fn = ptr.overloads[key].fn
+                if not ptr.has_default_overload():
+                    lineno = self.getsourcepos().lineno
+                    colno = self.getsourcepos().colno
+                    throw_saturn_error(self.builder, self.module, lineno, colno,
+                                       f"Could not get pointer to function '{name}'. "
+                                       f"Function has multiple overloads. Expression is ambiguous.")
+                ovrld = ptr.get_default_overload()
+                fn, key = ovrld.fn, ovrld.key()
                 begin = '_Z%d' % len(name)
                 key = begin + name + key[3:]
                 fnty = self.module.sfunctys[key]
@@ -702,7 +712,7 @@ class LValue(Expr):
             v0 = self.builder.ptrtoint(deref, i64)
             v1 = self.builder.and_(v0, i64(-2))
             actualptr = self.builder.inttoptr(v1, self.get_ir_type())
-            print(f"Reference: {actualptr}\nType:{ptr.type.type}")
+            # (f"Reference: {actualptr}\nType:{ptr.type.type}")
             return Value(ptr.name, ptr.type.type, actualptr)
         return ptr
 
@@ -725,8 +735,14 @@ class LValue(Expr):
                 #             "Could not find lvalue '%s' in current scope." % name
                 #         )
                 # ptr = self.module.sfuncs[name]
-                key = list(ptr.overloads.keys())[0]
-                fn = ptr.overloads[key].fn
+                if not ptr.has_default_overload():
+                    lineno = self.getsourcepos().lineno
+                    colno = self.getsourcepos().colno
+                    throw_saturn_error(self.builder, self.module, lineno, colno,
+                                       f"Could not get pointer to function '{name}'. "
+                                       f"Function has multiple overloads. Expression is ambiguous.")
+                ovrld = ptr.get_default_overload()
+                fn, key = ovrld.fn, ovrld.key()
                 begin = '_Z%d' % len(name)
                 key = begin + name + key[3:]
                 fnty = self.module.sfunctys[key]
@@ -738,7 +754,6 @@ class LValue(Expr):
         v0 = self.builder.ptrtoint(deref, i64)
         v1 = self.builder.and_(v0, i64(-2))
         actualptr = self.builder.inttoptr(v1, self.get_ir_type())
-        print(f"Reference: {actualptr}\nType:{ptr.type.type}")
         return Value(ptr.name, ptr.type, actualptr)
     
     def eval(self):
@@ -766,11 +781,13 @@ class LValue(Expr):
         if ptr.is_atomic():
             return self.builder.load_atomic(ptr.irvalue, 'seq_cst', 4)
         if self.get_type().is_reference():
+            # print(self.get_type(), self.get_ir_type())
             i64 = ir.IntType(64)
             deref = self.builder.load(ptr.irvalue)
             v0 = self.builder.ptrtoint(deref, i64)
             v1 = self.builder.and_(v0, i64(-2))
-            actualptr = self.builder.inttoptr(v1, self.get_ir_type())
+            irtype = self.get_ir_type()
+            actualptr = self.builder.inttoptr(v1, irtype)
             return self.builder.load(actualptr)
         return self.builder.load(ptr.irvalue)
 
@@ -864,13 +881,24 @@ class LValueField(Expr):
             return self.builder.load(gep)
 
 
-def cast_to(builder, module, package, expr, ctype):
+def cast_to(builder: ir.IRBuilder, module, package, expr, ctype):
     castt = ctype
     exprt = expr.get_type()
     if expr.is_constexpr:
         cast = ir.Constant(castt.irtype, expr.consteval())
     else:
         val = expr.eval()
+        if castt.is_reference() and exprt.is_value():
+            if not hasattr(expr, 'get_pointer'):
+                _name = module.get_unique_name("_unnamed_reference_target")
+                with builder.goto_entry_block():
+                    ptr = builder.alloca(exprt.get_ir_type())
+                    add_new_local(_name, ptr)
+                builder.store(expr.eval(), ptr)
+                val = ptr
+            else:
+                val = expr.get_pointer().irvalue
+            cast = val
         if exprt.is_reference():
             exprt = exprt.type
         if exprt.is_pointer():
@@ -966,22 +994,38 @@ class MakeExpr(Expr):
         self.type = None
         self.args = args
         self.init = init
+        self.melement_count = 1
+        self.stack_value = None
 
     def get_type(self):
         if self.type is None:
             self.mtype = self.typeexpr.get_type()
-            self.type = self.mtype.get_pointer_to()
+            if self.mtype.is_array():
+                self.melement_count = self.mtype.get_array_count()
+                self.mtype = self.mtype.get_element_of().get_pointer_to()
+            self.type = self.mtype.get_reference_to()
+            # print(self.mtype, self.type)
         return self.type
 
     def get_ir_type(self):
         return self.get_type().get_ir_type()
 
     def eval(self):
+        int32 = ir.IntType(32)
         self.get_type()
         malloc_fn = self.module.aligned_malloc
-        sizeof = calc_sizeof_struct(self.builder, self.module, self.mtype)
-        aligned_sizeof = self.builder.add(self.builder.and_(sizeof, ir.Constant(ir.IntType(32), 1)), sizeof)
-        mallocptr = self.builder.call(malloc_fn, [ir.Constant(ir.IntType(32), 2), aligned_sizeof])
+        if self.melement_count == 1:
+            sizeof = calc_sizeof_struct(self.builder, self.module, self.mtype)
+        else:
+            sizeof = self.builder.mul(ir.Constant(ir.IntType(32), self.melement_count),
+                                      calc_sizeof_struct(self.builder, self.module, self.mtype))
+        # asize = (size + 3) & ~3
+        aligned_sizeof = self.builder.and_(
+            self.builder.add(sizeof, int32(3)),
+            int32(~3))
+        malloc_args = [aligned_sizeof, ir.Constant(ir.IntType(32), 2)] if malloc_fn.name.startswith('_') \
+            else [ir.Constant(ir.IntType(32), 2), aligned_sizeof]
+        mallocptr = self.builder.call(malloc_fn, malloc_args)
         self.builder.call(self.module.memset, [
             mallocptr,
             ir.Constant(ir.IntType(8), 0),
@@ -989,7 +1033,73 @@ class MakeExpr(Expr):
             ir.Constant(ir.IntType(1), 0),
         ])
         bitcast = self.builder.bitcast(mallocptr, self.type.irtype)
-        push_defer(DestroyExpr(self.builder, self.module, self.package, self.spos, bitcast, self.type))
+
+        _name = self.module.get_unique_name('_unnamed_make_expr')
+        ptr = Value(_name, self.type, bitcast, objtype='heap')
+        add_new_local(_name, ptr)
+        lvalue = LValue(self.builder, self.module, self.package, self.spos, _name)
+        push_defer(DestroyExpr(self.builder, self.module, self.package, self.spos, lvalue, self.type))
+        return bitcast
+
+
+class MakeUnsafeExpr(Expr):
+    """
+    A make expression for creating new variables on the heap.\n
+    make unsafe typeexpr;\n
+    make unsafe typeexpr(args);\n
+    make unsafe typeexpr{init};\n
+    """
+    def __init__(self, builder, module, package, spos, typeexpr, args=None, init=None):
+        super().__init__(builder, module, package, spos)
+        self.typeexpr = typeexpr
+        self.mtype = None
+        self.type = None
+        self.args = args
+        self.init = init
+        self.melement_count = 1
+        self.stack_value = None
+
+    def get_type(self):
+        if self.type is None:
+            self.mtype = self.typeexpr.get_type()
+            if self.mtype.is_array():
+                self.melement_count = self.mtype.get_array_count()
+                self.mtype = self.mtype.get_element_of()
+            self.type = self.mtype.get_pointer_to()
+            # print(self.mtype, self.type)
+        return self.type
+
+    def get_ir_type(self):
+        return self.get_type().get_ir_type()
+
+    def eval(self):
+        int32 = ir.IntType(32)
+        self.get_type()
+        malloc_fn = self.module.aligned_malloc
+        if self.melement_count == 1:
+            sizeof = calc_sizeof_struct(self.builder, self.module, self.mtype)
+        else:
+            sizeof = self.builder.mul(int32(self.melement_count),
+                                      calc_sizeof_struct(self.builder, self.module, self.mtype))
+        # asize = (size + 3) & ~3
+        aligned_sizeof = self.builder.and_(
+            self.builder.add(sizeof, int32(3)),
+            int32(~3))
+        malloc_args = [aligned_sizeof, int32(4)] if malloc_fn.name.startswith('_') \
+            else [int32(4), aligned_sizeof]
+        mallocptr = self.builder.call(malloc_fn, malloc_args)
+        self.builder.call(self.module.memset, [
+            mallocptr,
+            ir.Constant(ir.IntType(8), 0),
+            aligned_sizeof,
+            ir.Constant(ir.IntType(1), 0),
+        ])
+        bitcast = self.builder.bitcast(mallocptr, self.type.irtype)
+
+        _name = self.module.get_unique_name('_unnamed_unsafe_make_expr')
+        ptr = Value(_name, self.type, bitcast, objtype='heap')
+        add_new_local(_name, ptr)
+        lvalue = LValue(self.builder, self.module, self.package, self.spos, _name)
         return bitcast
 
 
@@ -998,19 +1108,23 @@ class DestroyExpr(Expr):
     An expression for freeing memory from the heap.
     destroy lvalue;
     """
-    def __init__(self, builder, module, package, spos, ptr, stype):
+    def __init__(self, builder, module, package, spos, lvalue, stype=None):
         super().__init__(builder, module, package, spos)
-        self.type = stype
-        self.ptr = ptr
+        self.lvalue = lvalue
+        self.type = None
 
     def get_type(self):
-        return self.type
+        return self.type if self.type is not None else self.lvalue.get_type()
 
     def get_ir_type(self):
         return self.type.irtype
 
     def eval(self):
-        bitcast = self.builder.bitcast(self.ptr, ir.IntType(8).as_pointer())
+        if self.lvalue.get_type().is_reference():
+            ptr = self.lvalue.get_pointer().irvalue
+        else:
+            ptr = self.lvalue.eval()
+        bitcast = self.builder.bitcast(ptr, ir.IntType(8).as_pointer())
         self.builder.call(self.module.free, [bitcast])
 
 
@@ -1039,11 +1153,17 @@ class MakeSharedExpr(Expr):
         return self.get_type().get_ir_type()
 
     def eval(self):
+        int32 = ir.IntType(32)
         self.get_type()
         malloc_fn = self.module.aligned_malloc
         sizeof = calc_sizeof_struct(self.builder, self.module, self.mtype)
-        aligned_sizeof = self.builder.add(self.builder.and_(sizeof, ir.Constant(ir.IntType(32), 1)), sizeof)
-        mallocptr = self.builder.call(malloc_fn, [ir.Constant(ir.IntType(32), 2), aligned_sizeof])
+        # asize = (size + 3) & ~3
+        aligned_sizeof = self.builder.and_(
+            self.builder.add(sizeof, int32(3)),
+            int32(~3))
+        malloc_args = [aligned_sizeof, int32(4)] if malloc_fn.name.startswith('_') \
+            else [int32(4), aligned_sizeof]
+        mallocptr = self.builder.call(malloc_fn, malloc_args)
         self.builder.call(self.module.memset, [
             mallocptr,
             ir.Constant(ir.IntType(8), 0),
@@ -1083,6 +1203,7 @@ class ElementOf(PostfixOp):
 
     def get_pointer(self):
         ptr = self.left.get_pointer()
+        print(ptr, self.expr.get_type())
         if self.expr.get_type().is_integer():
             leftty = self.left.get_type()
             if leftty.is_pointer():
@@ -1096,6 +1217,11 @@ class ElementOf(PostfixOp):
                     self.expr.eval()
                 ], True)
                 return Value(ptr.name, ptr.type.get_element_of(), gep, ptr.qualifiers)
+        lineno = self.expr.getsourcepos().lineno
+        colno = self.expr.getsourcepos().colno
+        throw_saturn_error(self.builder, self.module, lineno, colno,
+                           f"Expression type for index is '{str(self.expr.get_type())}', but expected integer type."
+                           )
 
     def eval(self):
         ptr = self.get_pointer()
@@ -1309,10 +1435,31 @@ class Sum(BinaryOp):
     """
     def eval(self):
         ty = self.get_type()
+        lty = self.left.get_type()
+        rty = self.right.get_type()
         if ty.is_integer():
             i = self.builder.add(self.left.eval(), self.right.eval())
         elif ty.is_float():
             i = self.builder.fadd(self.left.eval(), self.right.eval())
+        elif lty.is_struct() and lty.has_operator('+'):
+            fn = lty.get_operator('+')
+            if not fn:
+                lineno = self.spos.lineno
+                colno = self.spos.colno
+                throw_saturn_error(self.builder, self.module, lineno, colno,
+                                   f"Cannot perform addition with struct ({lty.name}). Has no operator+.")
+            atypes = [lty.get_pointer_to(), rty.get_pointer_to()]
+            ovrld = fn.search_overload(atypes)
+            if not ovrld:
+                atypes = [lty.get_pointer_to(), rty.get_reference_to()]
+                ovrld = fn.search_overload(atypes)
+                if not ovrld:
+                    lineno = self.spos.lineno
+                    colno = self.spos.colno
+                    throw_saturn_error(self.builder, self.module, lineno, colno,
+                                       f"Could not find overload for struct ({str(lty)}) operator+ with argument types: "
+                                       f"({str(lty)} and {str(rty)}).")
+            i = self.builder.call(ovrld.overload.fn, [self.left.get_pointer().irvalue, self.right.get_pointer().irvalue])
         else:
             lineno = self.spos.lineno
             colno = self.spos.colno
@@ -1868,7 +2015,6 @@ class Assignment(ASTNode):
         if stype.is_reference():
             stype = stype.type
             ptr = self.builder.load(ptr)
-            print(stype, ptr)
         if sptr.is_const() or sptr.is_immut():
             lineno = self.expr.getsourcepos().lineno
             colno = self.expr.getsourcepos().colno
@@ -2253,8 +2399,11 @@ class ImportDecl(ASTNode):
         if symbols_to_import is None:
             symbols_to_import = []
         self.symbols_to_import = symbols_to_import
-        base_path = self.package.working_directory + '/packages/' + self.lvalue.get_name()
-        self.new_package = Package(self.lvalue.get_name(), working_directory=base_path)
+        package_paths = self.lvalue.get_name().split('::')
+        base_path = self.package.working_directory
+        for path in package_paths:
+            base_path += '/packages/' + path
+        self.new_package = Package(package_paths[-1], working_directory=base_path)
 
     def generate_symbol(self):
         from sparser import parser, ParserState
@@ -2278,7 +2427,7 @@ class ImportDecl(ASTNode):
             path = base_path + '/main.sat'
             if path not in self.package.cachedmods.keys():
                 text_input = ""
-                with open(path) as f:
+                with open(path, encoding='utf8') as f:
                     text_input = f.read()
 
                 cmod = CachedModule(path, text_input)
@@ -2300,21 +2449,24 @@ class ImportDecl(ASTNode):
             #    pg = Parser(self.module, self.builder, package)
             #    pg.parse()
 
+            ast = parser.parse(tokens, state=ParserState(self.builder, self.module, package))
+            ast.generate_symbols()
+            # package.save_symbols_to_file(symbols_path)
+            cmod.add_parsed_ast(ast)
+
             self.builder.filestack.pop(-1)
             self.builder.filestack_idx -= 1
 
             self.module.filestack.pop(-1)
             self.module.filestack_idx -= 1
 
-            ast = parser.parse(tokens, state=ParserState(self.builder, self.module, package))
-            ast.generate_symbols()
-            package.save_symbols_to_file(symbols_path)
-            cmod.add_parsed_ast(ast)
-
             if not self.import_all:
                 self.package.import_package(package)
                 if len(self.symbols_to_import) > 0:
                     self.package.import_symbols_from_package(package, self.symbols_to_import)
+            else:
+                self.package.import_package(package)
+                self.package.import_all_symbols_from_package(package)
 
         # print(self.new_package)
 
@@ -2326,7 +2478,7 @@ class ImportDecl(ASTNode):
         path = base_path + '/main.sat'
         if path not in self.package.cachedmods:
             text_input = ""
-            with open(path) as f:
+            with open(path, encoding='utf8') as f:
                 text_input = f.read()
 
             cmod = CachedModule(path, text_input)
@@ -2628,7 +2780,10 @@ class FuncDecl(ASTNode):
             #print(f"fn {self.name.value} ({[str(stype) for stype in sargtypes]}): {str(rtype)};")
             # print("%s (%s)" % (self.name.value, fnty))
             sfnty = FuncType("", fnty, rtype, sargtypes)
-            fname = self.name.value
+            if self.attribute_list and self.attribute_list.has_attr('link_name'):
+                fname = self.attribute_list.get_attr('link_name').args[0]
+            else:
+                fname = self.name.value
             if not self.builder.c_decl and not (self.name.value == 'main' or self.name.value == '_entry'):
                 fname = mangle_name(self.name.value, sfnty.atypes)
             try:
@@ -2663,8 +2818,9 @@ class FuncDecl(ASTNode):
     def eval(self):
         push_new_scope(self.builder)
         rtype = self.rtype.get_type()
-        if self.attribute_list is not None and self.attribute_list.has_attr('print'):
-            print(self.attribute_list.get_attr('print').args[0].value.strip("\""))
+        if self.attribute_list is not None and self.attribute_list.has_attr('message'):
+            msg = self.attribute_list.get_attr('message').args[0].value.strip("\"")
+            print("message:", msg)
 
         # if rtype.is_struct() and rtype.is_value():
         #     self.decl_args.add(FuncArg(
@@ -2794,6 +2950,8 @@ class FuncDeclExtern(ASTNode):
         fname = self.name.value
         if not self.builder.c_decl:
             fname = mangle_name(self.name.value, sfnty.atypes)
+        if self.attribute_list and self.attribute_list.has_attr('link_name'):
+            fname = self.attribute_list.get_attr('link_name').args[0].value.strip('\"')
         fn = ir.Function(self.module, fnty, fname)
         fn.args = tuple(self.decl_args.get_decl_arg_list(fn))
         #self.module.sfunctys[self.name.value] = sfnty
@@ -2905,9 +3063,10 @@ class MethodDecl(ASTNode):
         self.block = block
         self.decl_args = decl_args
         self.struct = struct
-        thisarg = FuncArg(
-            self.builder, self.module, self.package, self.struct.getsourcepos(), Token('IDENT', 'this'),
-                TypeExpr(self.builder, self.module, self.package, self.struct.getsourcepos(), self.struct)
+        thisarg = FuncArg(self.builder, self.module, self.package, self.struct.getsourcepos(),
+                          Token('IDENT', 'this'),
+                          TypeExpr(self.builder, self.module, self.package, self.struct.getsourcepos(),
+                                   self.struct)
         )
         thisarg.atype = thisarg.atype.get_pointer_to()
         self.decl_args.prepend(thisarg)
@@ -2931,7 +3090,8 @@ class MethodDecl(ASTNode):
 
     def generate_symbol(self):
         package = self.package
-        if self.package.lookup_symbol(self.struct.get_name() + '.' + self.name.value) is None:
+        symbol_path = f"{self.struct.get_name()}::{self.name.value}"
+        if self.package.lookup_symbol(symbol_path) is None:
             rtype = self.rtype.get_type()
             # if rtype.is_struct() and rtype.is_value():
             #     self.decl_args.add(FuncArg(
@@ -2948,8 +3108,8 @@ class MethodDecl(ASTNode):
             #print(f"fn {self.name.value} ({[str(stype) for stype in sargtypes]}): {str(rtype)};")
             # print("%s (%s)" % (self.name.value, fnty))
             sfnty = FuncType("", fnty, rtype, sargtypes)
-            name = self.struct.get_name() + '.' + self.name.value
-            fname = name
+            name = self.name.value
+            fname = self.struct.get_name() + '.' + name
             if not self.builder.c_decl and not (self.name.value == 'main' or self.name.value == '_entry'):
                 fname = mangle_name(fname, sfnty.atypes)
             try:
@@ -2975,11 +3135,14 @@ class MethodDecl(ASTNode):
                 pass
             # print(fname)
             fn = ir.Function(self.module, fnty, fname)
-            if self.name.value not in self.module.sfuncs:
-                fn_symbol = package.add_symbol(name, Func(name, sfnty.rtype, visibility=self.visibility))
+            struct_symbol = package.lookup_symbol(self.struct.get_name())
+            if package.lookup_symbol(symbol_path) is None:
+                fn_symbol = Func(name, sfnty.rtype, visibility=self.visibility)
+                fn_symbol.parent = struct_symbol
+                struct_symbol[name] = fn_symbol
                 fn_symbol.add_overload(sfnty.atypes, fn)
             else:
-                fn_symbol = package[name]
+                fn_symbol = struct_symbol[name]
                 fn_symbol.add_overload(sfnty.atypes, fn)
 
     def eval(self):
@@ -2993,12 +3156,11 @@ class MethodDecl(ASTNode):
         fnty = ir.FunctionType(rtype.get_ir_type(), argtypes)
         #print("%s (%s)" % (self.name.value, fnty))
         sfnty = FuncType("", fnty, rtype, sargtypes)
-        name = self.struct.get_name() + '.' + self.name.value
-        fname = name
+        name = self.name.value
+        fname = self.struct.get_name() + '.' + name
         if not self.builder.c_decl:
             fname = mangle_name(name, sfnty.atypes)
-        symbol = self.package.lookup_symbol(name)
-        # print(fname)
+        symbol = self.package.lookup_symbol(f"{self.struct.get_name()}::{name}")
         if symbol is not None and symbol.get_overload(sfnty.atypes) is not None:
             fn = symbol.get_overload(sfnty.atypes)
             if not fn.is_declaration:
@@ -3066,6 +3228,10 @@ class MethodDecl(ASTNode):
             struct_type.add_operator('==', symbol)
         elif self.name.value == 'operator.spaceship':
             struct_type.add_operator('<=>', symbol)
+        elif self.name.value == 'operator.add':
+            struct_type.add_operator('+', symbol)
+        elif self.name.value == 'operator.sub':
+            struct_type.add_operator('-', symbol)
         else:
             struct_type.add_method(self.name.value, symbol)
         block = fn.append_basic_block("entry")
@@ -3075,11 +3241,12 @@ class MethodDecl(ASTNode):
             "line": self.spos.lineno,
             "unit": self.module.di_compile_unit,
             #"column": self.spos.colno,
-            "isDefinition":True
+            "isDefinition": True
         }, True)
         self.builder.position_at_start(block)
         #self.builder.defer = []
         fn.args = tuple(self.decl_args.get_arg_list(fn))
+        # print(fn.name, str(fn.args))
         self.block.eval()
         if not self.builder.block.is_terminated:
             eval_dtor_scope()
@@ -3138,8 +3305,9 @@ class MethodDeclExtern(ASTNode):
         fnty = ir.FunctionType(rtype.irtype, argtypes)
         #print("%s (%s)" % (self.name.value, fnty))
         sfnty = FuncType("", fnty, rtype, sargtypes)
-        name = self.struct.get_name() + '.' + self.name.value
-        fname = name
+        symbol_path = f"{self.struct.get_name()}::{self.name.value}"
+        name = self.name.value
+        fname = self.struct.get_name() + '.' + name
         if not self.builder.c_decl:
             fname = mangle_name(name, sfnty.atypes)
         fn = ir.Function(self.module, fnty, fname)
@@ -3272,10 +3440,13 @@ class VarDeclAssign(ASTNode):
             throw_saturn_error(self.builder, self.module, lineno, colno, 
                 "Can't create variable of void type."
             )
-        with self.builder.goto_entry_block():
-            self.builder.position_at_start(self.builder.block)
-            ptr = Value(self.name.value, vartype, self.builder.alloca(vartype.irtype, name=self.name.value), qualifiers=quals)
-        #ptr = Value(self.name.value, vartype, self.builder.alloca(vartype.irtype, name=self.name.value), qualifiers=quals)
+        if hasattr(self.initval, 'get_stack_value'):
+            ptr = self.initval.get_stack_value(self.name.value)
+        else:
+            with self.builder.goto_entry_block():
+                self.builder.position_at_start(self.builder.block)
+                ptr = Value(self.name.value, vartype, self.builder.alloca(vartype.irtype, name=self.name.value), qualifiers=quals)
+            #ptr = Value(self.name.value, vartype, self.builder.alloca(vartype.irtype, name=self.name.value), qualifiers=quals)
 
         add_new_local(self.name.value, ptr)
         dbglv = self.module.add_debug_info("DILocalVariable", {
@@ -3371,6 +3542,25 @@ class PointerTypeExpr(TypeExpr):
     def get_type(self):
         if self.type is None:
             self.type = self.pointee.get_type().get_pointer_to()
+        return self.type
+
+    def eval(self):
+        pass
+
+
+class ReferenceTypeExpr(TypeExpr):
+    """
+    Expression representing a reference to a Saturn type.
+    """
+    def __init__(self, builder, module, package, spos, base, decl_mode=False):
+        super().__init__(builder, module, package, spos, None)
+        self.base = base
+
+    def get_type(self):
+        if self.type is None:
+            self.type = self.base.get_type().get_reference_to()
+            base = self.base.get_type()
+            # print(str(base), str(base.irtype), str(self.type), str(self.type.irtype))
         return self.type
 
     def eval(self):
@@ -3684,7 +3874,7 @@ class FuncCall(Expr):
                 aargs = []
                 for arg in self.args:
                     if arg.get_type().is_reference():
-                        aargs.append(arg.get_type().type)
+                        aargs.append(arg.get_type())
                     else:
                         aargs.append(arg.get_type())
                 ovrld = sfn.get_overload(aargs)
@@ -3694,8 +3884,8 @@ class FuncCall(Expr):
                         lineno = self.getsourcepos().lineno
                         colno = self.getsourcepos().colno
                         throw_saturn_error(self.builder, self.module, lineno, colno,
-                                           f"Cannot find overload for function {self.lvalue.get_name()} with argument types ({print_types(aargs)})."
-                        )
+                                           f"Cannot find overload for function {self.lvalue.get_name()} "
+                                           f"with argument types ({print_types(aargs)}).")
                     args = []
                     # if match.requires_implicit_conversions:
                     #    for conv in match.implicit_conversions:
@@ -3741,21 +3931,25 @@ class MethodCall(Expr):
         self.args = args
 
     def get_type(self):
-        name = self.callee.get_type().name + '.' + self.lvalue.get_name()
-        return self.module.sfuncs[name].rtype
+        # name = self.callee.get_type().name + '.' + self.lvalue.get_name()
+        name = self.callee.get_type().name + '::' + self.lvalue.get_name()
+        # sfn = self.module.sfuncs[name]
+        sfn = self.package.lookup_symbol(name)
+        return sfn.rtype
 
     def get_ir_type(self):
         return self.get_type().irtype
         #return self.module.get_global(self.callee.get_type().name + '.' + self.lvalue.get_name()).ftype.return_type
 
     def eval(self):
-        name = self.callee.get_type().get_full_name() + '.' + self.lvalue.get_name()
+        name = self.callee.get_type().name + '::' + self.lvalue.get_name()
+        # sfn = self.module.sfuncs[name]
         sfn = self.package.lookup_symbol(name)
         if not sfn:
             lineno = self.getsourcepos().lineno
             colno = self.getsourcepos().colno
             throw_saturn_error(self.builder, self.module, lineno, colno,
-                               f"Cannot find method {name} in package."
+                               f"Cannot find method {name} in package {self.package.name}."
                                )
         # sfn = self.module.sfuncs[name]
         #print(name, self.module.sfuncs[name], sfn.overloads)
@@ -3858,6 +4052,7 @@ class IfStatement(ASTNode):
     if boolexpr { then } else { el }
     """
     def __init__(self, builder, module, package, spos, boolexpr, then, elseif=[], el=None):
+        """TODO: Implement else-if"""
         super().__init__(builder, module, package, spos)
         self.boolexpr = boolexpr
         self.then = then

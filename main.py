@@ -6,6 +6,7 @@ from sparser import parser, ParserState
 from codegen import CodeGen
 from package import Package
 from cachedmodule import CachedModule
+from ctypes import create_string_buffer, c_char_p, pointer, byref
 # import cProfile
 
 import sys
@@ -19,6 +20,7 @@ files = []
 eval_files = []
 llfiles = []
 linkfiles = []
+out_file = 'main.exe'
 
 cachedmods = {}
 
@@ -105,7 +107,7 @@ def main():
         print(f"Parsing {ff}...")
         if ff not in cachedmods.keys():
             ev_text_input = ""
-            with open(ff) as f:
+            with open(ff, encoding='utf8') as f:
                 ev_text_input = f.read()
 
             cff = CachedModule(ff, ev_text_input)
@@ -198,6 +200,10 @@ def main():
                 codegen.create_entry()
 
         ir = codegen.create_ir()
+        if ff == 'main.sat':
+            res = codegen.jit_execute(package.lookup_symbol('addNum').get_default_overload().fn,
+                                      5)
+            print(res)
         dest = ff[:-4]
         codegen.save_ir(dest + '.ll', ir)
         llfiles.append(dest)
@@ -226,9 +232,16 @@ def main():
     linkcmd = ''
     if compile_target == 'wasm':
         linkcmd = 'emcc -o ./wasm/emscripten/index.html ' if use_emscripten \
-            else 'wasm-ld -o ./wasm/static/main.wasm -L./wasm/sysroot/lib/wasm32-wasi -lc -lrt "./wasm/sysroot/lib/wasm32-wasi/crt1.o" '
+            else 'wasm-ld -o ./wasm/static/main.wasm ' \
+                 '-L./wasm/sysroot/lib/wasm32-wasi -lc -lrt ' \
+                 '"./wasm/sysroot/lib/wasm32-wasi/crt1.o" '
     elif compile_target == 'windows-x64':
-        linkcmd = 'lld-link -subsystem:console -out:main.exe -defaultlib:libcmt -libpath:"C:/Program Files (x86)/Microsoft Visual Studio/2019/Community/VC/Tools/MSVC/14.26.28801/lib/x64" -libpath:"C:/Program Files (x86)/Windows Kits/10/Lib/10.0.18362.0/ucrt/x64" -libpath:"C:/Program Files (x86)/Windows Kits/10/Lib/10.0.18362.0/um/x64" -nologo '
+        linkcmd = f'lld-link -subsystem:console -out:{out_file} -defaultlib:libcmt ' \
+                  '-libpath:"C:/Program Files (x86)/Microsoft Visual Studio/2019/Community/VC/Tools/MSVC/14.26.28801/lib/x64" ' \
+                  '-libpath:"C:/Program Files (x86)/Windows Kits/10/Lib/10.0.18362.0/ucrt/x64" ' \
+                  '-libpath:"C:/Program Files (x86)/Windows Kits/10/Lib/10.0.18362.0/um/x64" -nologo '
+    elif compile_target == 'linux-x64':
+        linkcmd = f'clang -Wall -o {out_file} '
 
     for llf in linkfiles:
         linkcmd += f'"{llf}" '

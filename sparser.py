@@ -13,12 +13,13 @@ from ast import (
     TupleLiteralElement, TupleLiteralBody, TupleLiteral,
     FuncDecl, FuncDeclExtern, FuncArgList, FuncArg, GlobalVarDecl, VarDecl, VarDeclAssign,
     MethodDecl, MethodDeclExtern,
-    LValue, LValueField, FuncCall, MethodCall, CastExpr, SelectExpr, MakeExpr, MakeSharedExpr,
+    LValue, LValueField, FuncCall, MethodCall, CastExpr, SelectExpr,
+    MakeExpr, MakeSharedExpr, MakeUnsafeExpr, DestroyExpr,
     Assignment, AddAssignment, SubAssignment, MulAssignment, ModAssignment, AndAssignment, OrAssignment, XorAssignment,
     PrefixIncrementOp, PrefixDecrementOp,
     Boolean, Spaceship, BooleanEq, BooleanNeq, BooleanGte, BooleanGt, BooleanLte, BooleanLt,
     IfStatement, WhileStatement, DoWhileStatement, SwitchCase, SwitchDefaultCase, SwitchBody, SwitchStatement,
-    ForStatement, IterExpr, PointerTypeExpr, ArrayTypeExpr
+    ForStatement, IterExpr, PointerTypeExpr, ReferenceTypeExpr, ArrayTypeExpr
 )
 from serror import throw_saturn_error
 
@@ -36,7 +37,7 @@ class Parser:
         self.pg = ParserGenerator(
             # A list of all token names accepted by the parser.
             ['TPACKAGE', 'TIMPORT', 'TCINCLUDE', 'TCDECLARE',
-             'INT', 'UINT', 'LONGINT', 'ULONGINT', 'BYTE', 'SHORTINT', 'USHORTINT',
+             'INT', 'UINT', 'LONGINT', 'ULONGINT', 'SBYTE', 'BYTE', 'SHORTINT', 'USHORTINT',
              'HALF', 'FLOAT', 'DOUBLE', 'QUAD', 'STRING', 'MLSTRING',
              'HEXINT', 'HEXUINT', 'HEXLINT', 'HEXULINT', 'HEXSINT', 'HEXUSINT', 'HEXBINT', 'HEXSBINT',
              'IDENT', 'TPRINT', 'DOT', 'TRETURN',
@@ -48,11 +49,12 @@ class Parser:
              'TIF', 'TELSE', 'TWHILE', 'TTHEN', 'TDO', 'TBREAK', 'TCONTINUE', 'TFALLTHROUGH', 'TDEFER',
              'TSWITCH', 'TCASE', 'TDEFAULT', 'TFOR', 'TIN', 'DOTDOT', 'ELIPSES',
              'TCONST', 'TIMMUT', 'TMUT', 'TREADONLY', 'TNOCAPTURE', 'TATOMIC', 
-             'TTYPE', 'TSTRUCT', 'TTUPLE', 'TCAST', 'TOPERATOR', 'TMAKE', 'TSHARED', 'TOWNED',
+             'TTYPE', 'TSTRUCT', 'TTUPLE', 'TCAST', 'TOPERATOR', 'TMAKE', 'TDESTROY', 'TSHARED', 'TOWNED', 'TUNSAFE',
              'BOOLEQ', 'BOOLNEQ', 'BOOLGT', 'BOOLLT', 'BOOLGTE', 'BOOLLTE', 'SPACESHIP', 'BOOLNOT',
              'TTRUE', 'TFALSE', 'TNULL'],
 
              precedence=[
+                ('left', ['DOTDOT']),
                 ('left', ['BOOLOR']),
                 ('left', ['BOOLAND']),
                 ('left', ['BOOLEQ', 'BOOLNEQ', 'BOOLGT', 'BOOLLT', 'BOOLGTE', 'BOOLLTE', 'SPACESHIP']),
@@ -152,6 +154,11 @@ class Parser:
 
         @self.pg.production('func_decl : gstmt_preamble func_decl')
         def func_decl_preamble(state, p):
+            p[1].add_preamble(p[0])
+            return p[1]
+
+        @self.pg.production('func_decl_extern : gstmt_preamble func_decl_extern')
+        def func_decl_extern_preamble(state, p):
             p[1].add_preamble(p[0])
             return p[1]
 
@@ -296,6 +303,25 @@ class Parser:
                 return MethodDecl(state.builder, state.module, state.package, spos, name, rtype, block, declargs, struct)
             return MethodDeclExtern(state.builder, state.module, state.package, spos, name, rtype, declargs, struct)
 
+        @self.pg.production(
+            'method_decl : TFN LPAREN MUL lvalue RPAREN TOPERATOR ADD LPAREN decl_args RPAREN COLON typeexpr LBRACE block RBRACE')
+        @self.pg.production(
+            'method_decl : TFN LPAREN MUL lvalue RPAREN TOPERATOR SUB LPAREN decl_args RPAREN COLON typeexpr LBRACE block RBRACE')
+        def method_decl_bin(state, p):
+            struct = p[3]
+            if p[6].gettokentype() == 'ADD':
+                name = Token('IDENT', 'operator.add')
+            elif p[6].gettokentype() == 'SUB':
+                name = Token('IDENT', 'operator.sub')
+            declargs = p[8]
+            rtype = p[11]
+            block = p[13]
+            spos = p[0].getsourcepos()
+            if not state.decl_mode:
+                return MethodDecl(state.builder, state.module, state.package, spos, name, rtype, block, declargs,
+                                  struct)
+            return MethodDeclExtern(state.builder, state.module, state.package, spos, name, rtype, declargs, struct)
+
         @self.pg.production('pack_decl : TPACKAGE lvalue SEMICOLON')
         def pack_decl(state, p):
             spos = p[0].getsourcepos()
@@ -405,8 +431,13 @@ class Parser:
 
         @self.pg.production('block : block stmt')
         @self.pg.production('block : stmt')
+        @self.pg.production('block : ')
         def block(state, p):
-            if(len(p) == 1):
+            if len(p) == 0:
+                spos = None
+                return CodeBlock(state.builder, state.module, state.package, spos,
+                                 Statement(state.builder, state.module, state.package, spos, None))
+            if len(p) == 1:
                 spos = p[0].getsourcepos()
                 return CodeBlock(state.builder, state.module, state.package, spos, p[0])
             else:
@@ -505,7 +536,6 @@ class Parser:
             elif p[0].gettokentype() == 'TATOMIC':
                 return ('atomic', spos)
 
-
         @self.pg.production('stmt : IDENT CEQ expr SEMICOLON')
         def stmt_var_decl_ceq(state, p):
             spos = p[0].getsourcepos()
@@ -568,7 +598,7 @@ class Parser:
                 if p[0].gettokentype() == 'MUL':
                     return PointerTypeExpr(state.builder, state.module, state.package, spos, p[1])
                 elif p[0].gettokentype() == 'AND':
-                    return PointerTypeExpr(state.builder, state.module, state.package, spos, p[1])
+                    return ReferenceTypeExpr(state.builder, state.module, state.package, spos, p[1])
                 else:
                     size = p[1]
                     return ArrayTypeExpr(state.builder, state.module, state.package, spos, p[3], size)
@@ -736,25 +766,25 @@ class Parser:
         def block_stmt(state, p):
             return p[1]
 
-        @self.pg.production('iter_expr : expr DOTDOT expr')
-        @self.pg.production('iter_expr : expr DOTDOT expr COLON expr')
+        @self.pg.production('iter_expr : LBRACKET expr DOTDOT expr RBRACKET')
+        @self.pg.production('iter_expr : LBRACKET expr DOTDOT expr COLON expr RBRACKET')
         def iter_expr_const(state, p):
-            if len(p) == 3:
+            if len(p) == 5:
                 spos = p[0].getsourcepos()
-                return IterExpr(state.builder, state.module, state.package, spos, p[0], p[2])
+                return IterExpr(state.builder, state.module, state.package, spos, p[1], p[3])
             else:
                 spos = p[0].getsourcepos()
-                return IterExpr(state.builder, state.module, state.package, spos, p[0], p[2], p[4])
+                return IterExpr(state.builder, state.module, state.package, spos, p[1], p[3], p[5])
 
-        @self.pg.production('iter_expr : expr ELIPSES expr')
-        @self.pg.production('iter_expr : expr ELIPSES expr COLON expr')
+        @self.pg.production('iter_expr : LBRACKET expr ELIPSES expr RBRACKET')
+        @self.pg.production('iter_expr : LBRACKET expr ELIPSES expr COLON expr RBRACKET')
         def iter_expr_const_inclusive(state, p):
-            if len(p) == 3:
+            if len(p) == 5:
                 spos = p[0].getsourcepos()
-                return IterExpr(state.builder, state.module, state.package, spos, p[0], p[2], inclusive=True)
+                return IterExpr(state.builder, state.module, state.package, spos, p[1], p[3], inclusive=True)
             else:
                 spos = p[0].getsourcepos()
-                return IterExpr(state.builder, state.module, state.package, spos, p[0], p[2], p[4], inclusive=True)
+                return IterExpr(state.builder, state.module, state.package, spos, p[1], p[3], p[5], inclusive=True)
 
         @self.pg.production('expr : AND expr')
         @self.pg.production('expr : BOOLNOT expr')
@@ -1062,7 +1092,6 @@ class Parser:
                 if p[3].gettokentype() == 'LPAREN':
                     return MakeExpr(state.builder, state.module, state.package, spos, p[2], init=p[4])
 
-
         @self.pg.production('make_expr : TMAKE TSHARED typeexpr')
         @self.pg.production('make_expr : TMAKE TSHARED typeexpr LPAREN args RPAREN')
         @self.pg.production('make_expr : TMAKE TSHARED typeexpr LBRACE args RBRACE')
@@ -1076,6 +1105,23 @@ class Parser:
                 elif p[3].gettokentype() == 'LBRACE':
                     return MakeSharedExpr(state.builder, state.module, state.package, spos, p[2], init=p[4])
 
+        @self.pg.production('make_expr : TMAKE TUNSAFE typeexpr')
+        @self.pg.production('make_expr : TMAKE TUNSAFE typeexpr LPAREN args RPAREN')
+        @self.pg.production('make_expr : TMAKE TUNSAFE typeexpr LBRACE args RBRACE')
+        def make_expr_unsafe(state, p):
+            spos = p[0].getsourcepos()
+            if len(p) == 3:
+                return MakeUnsafeExpr(state.builder, state.module, state.package, spos, p[2])
+            else:
+                if p[3].gettokentype() == 'LPAREN':
+                    return MakeUnsafeExpr(state.builder, state.module, state.package, spos, p[2], args=p[4])
+                elif p[3].gettokentype() == 'LBRACE':
+                    return MakeUnsafeExpr(state.builder, state.module, state.package, spos, p[2], init=p[4])
+
+        @self.pg.production('stmt : TDESTROY lvalue_expr SEMICOLON')
+        def destroy_stmt(state, p):
+            spos = p[0].getsourcepos()
+            return DestroyExpr(state.builder, state.module, state.package, spos, p[1])
 
         @self.pg.production('expr : number')
         def expr_number(state, p):
@@ -1085,6 +1131,7 @@ class Parser:
         @self.pg.production('number : UINT')
         @self.pg.production('number : LONGINT')
         @self.pg.production('number : ULONGINT')
+        @self.pg.production('number : SBYTE')
         @self.pg.production('number : BYTE')
         @self.pg.production('number : SHORTINT')
         @self.pg.production('number : USHORTINT')
@@ -1102,6 +1149,8 @@ class Parser:
                 return Integer64(state.builder, state.module, state.package, spos, p[0].value)
             elif p[0].gettokentype() == 'ULONGINT':
                 return UInteger64(state.builder, state.module, state.package, spos, p[0].value)
+            elif p[0].gettokentype() == 'SBYTE':
+                return SByte(state.builder, state.module, state.package, spos, p[0].value)
             elif p[0].gettokentype() == 'BYTE':
                 return Byte(state.builder, state.module, state.package, spos, p[0].value)
             elif p[0].gettokentype() == 'SHORTINT':

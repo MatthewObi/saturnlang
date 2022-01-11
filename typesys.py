@@ -48,6 +48,14 @@ class Type(Symbol):
             raise RuntimeError(f"{self.name} has no defined ir type.")
         return self.irtype
 
+    def get_array_count(self):
+        array_size = -1
+        for q in reversed(self.qualifiers):
+            if q[0] == 'array':
+                array_size = q[1]
+                break
+        return array_size
+
     def make_array(self, size):
         self.qualifiers.append(('array', size))
 
@@ -88,9 +96,8 @@ class Type(Symbol):
 
     def get_reference_to(self):
         return ReferenceType(self.name,
-            self,
-            self.tclass
-        )
+                             self,
+                             self.tclass)
 
     def get_element_of(self):
         if self.is_pointer():
@@ -224,7 +231,7 @@ class Type(Symbol):
 
     def __str__(self):
         s = str()
-        for q in self.qualifiers:
+        for q in reversed(self.qualifiers):
             if q[0] == 'ptr':
                 s += '*'
             elif q[0] == 'array':
@@ -507,6 +514,9 @@ class StructType(Type):
         if not self.has_operator(op):
             self.operator[op] = fn
 
+    def get_operator(self, op):
+        return self.operator[op] if op in self.operator.keys() else None
+
     def has_method(self, name):
         return name in self.methods.keys()
 
@@ -538,9 +548,8 @@ class StructType(Type):
 
     def get_reference_to(self):
         return ReferenceType(self.name,
-            self,
-            self.tclass
-        )
+                             self,
+                             self.tclass)
 
     def get_dereference_of(self):
         ql = self.qualifiers.copy()
@@ -592,8 +601,8 @@ class ReferenceType(Type):
 
     def __init__(self, name, stype, tclass):
         self.type = stype
-        super().__init__(name, self.type.irtype.as_pointer(), tclass, None, None)
-        self.qualifiers = self.type.qualifiers + [('ref',)]
+        super().__init__(name, tclass, self.type.get_ir_type().as_pointer(), None, None)
+        self.qualifiers = self.type.qualifiers.copy() + [('ref',)]
         self.traits = self.type.traits.copy()
         self.bits = -1
 
@@ -632,6 +641,9 @@ class ReferenceType(Type):
 
     def add_operator(self, op, fn):
         self.type.add_operator(op, fn)
+
+    def get_operator(self, op, fn):
+        return self.type.get_operator(op)
 
     def to_dict(self, full_def=True):
         d = super().to_dict()
@@ -729,10 +741,16 @@ class FuncOverload:
         self.rtype = rtype
         self.atypes = atypes
         self.traits = traits
+        self._key = ''
 
     def __str__(self):
         s = f"overload {self.name} fn({print_types(self.atypes)})"
         return s
+
+    def key(self):
+        if self._key == '':
+            self._key = mangle_name('', self.atypes)
+        return self._key
 
     def to_dict(self):
         d = {'name': self.name,
@@ -746,6 +764,8 @@ def get_type_match_value(expected: Type, actual: Type):
     if expected is actual:
         return 10
     if expected.is_similar(actual):
+        return 5
+    if expected.is_reference() and expected.type is actual:
         return 5
     if expected.is_pointer() and actual is types['null_t']:
         return 5
@@ -877,7 +897,7 @@ class Func(Symbol):
         d = super().to_dict()
         d['symbol_type'] = 'function'
         d['traits'] = self.traits
-        d['rtype'] = self.rtype.to_dict()
+        d['rtype'] = self.rtype.to_dict(False)
         d['overloads'] = {name: overload.to_dict() for name, overload in self.overloads.items()}
         return d
 
@@ -1003,6 +1023,77 @@ def make_optional_type(base: Type):
     return s
 
 
+class SliceType(Type):
+    """
+    An immutable array reference in Saturn.
+    """
+    def __init__(self, name, irtype, element, qualifiers=None, traits=None):
+        super().__init__(name, 'slice', irtype, qualifiers, traits)
+        if qualifiers is None:
+            qualifiers = []
+        if traits is None:
+            traits = {}
+        self.element = element
+        self.qualifiers = qualifiers
+        self.traits = traits
+
+    def get_ir_type(self):
+        if self.irtype is None:
+            i64 = ir.IntType(64)
+            self.irtype = ir.LiteralStructType([i64, self.element.get_ir_type().as_pointer()])
+        return self.irtype
+
+    def get_base_type(self):
+        return self.element
+
+    def get_pointer_to(self):
+        return SliceType(self.name,
+                         self.get_ir_type().as_pointer(),
+                         self.element,
+                         qualifiers=self.qualifiers + [('ptr',)],
+                         traits=self.traits)
+
+    def get_dereference_of(self):
+        ql = self.qualifiers.copy()
+        ql.reverse()
+        for i in range(len(ql)):
+            if ql[i][0] == 'ptr':
+                ql.pop(i)
+                break
+        ql.reverse()
+        return SliceType(self.name,
+                         self.get_ir_type().pointee,
+                         self.element,
+                         qualifiers=ql,
+                         traits=self.traits)
+
+    def get_element_of(self):
+        return self.element
+
+    def __str__(self):
+        s = f"[]{str(self.element)}"
+        return s
+
+
+def make_slice_type(ty: Type):
+    s = SliceType("",
+                  None,
+                  ty)
+    return s
+
+
+def array_to_slice(ty: Type):
+    elty = ty.get_element_of()
+    destty = make_slice_type(elty)
+    array_size = 0
+    for q in reversed(ty.qualifiers):
+        if q[0] == 'array':
+            array_size = q[1]
+            break
+    irtype = destty.get_ir_type()
+    return destty, ir.Constant(irtype, [array_size, irtype(irtype.null)])
+
+
 def parse_type_from_dict(package, module, d, parent=None):
     if d['type'] == 'pointer':
         return parse_type_from_dict(package, module, d['pointee'], d).get_pointer_to()
@@ -1021,6 +1112,7 @@ def parse_type_from_dict(package, module, d, parent=None):
 
 def symbol_from_dict(package, module, d, parent=None):
     ty = d['symbol_type']
+    c_decl = False if 'c_decl' not in d else d['c_decl']
     if ty == 'type':
         if d['tclass'] != 'struct':
             return parse_type_from_dict(package, module, d['type'], d)
@@ -1072,7 +1164,7 @@ def symbol_from_dict(package, module, d, parent=None):
             atypes = [symbol_from_dict(package, module, v, overload) for v in overload['atypes']]
             irtypes = [] if len(atypes) == 1 and atypes[0].is_void() else [atype.get_ir_type() for atype in atypes]
             fnty = ir.FunctionType(rtype.get_ir_type(), irtypes)
-            if not d['c_decl']:
+            if not c_decl:
                 fname = mangle_name(name, atypes)
             else:
                 fname = name

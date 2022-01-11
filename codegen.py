@@ -1,6 +1,11 @@
+import ctypes
+
 from llvmlite import ir, binding
+from irutil import TokenType
 
 char = ir.IntType(8)
+int1 = ir.IntType(1)
+int8 = char
 int8ptr = char.as_pointer()
 int32 = ir.IntType(32)
 int64 = ir.IntType(64)
@@ -93,6 +98,7 @@ class CodeGen:
         self.module.memmove = self.module.declare_intrinsic('llvm.memmove', [int8ptr, int8ptr, int32])
         self.builder = ir.IRBuilder()
         self.builder.c_decl = False
+        self.builder.compile_target = self.compile_target
 
     def _create_execution_engine(self):
         """
@@ -107,6 +113,103 @@ class CodeGen:
         backing_mod = binding.parse_assembly("")
         engine = binding.create_mcjit_compiler(backing_mod, target_machine)
         self.engine = engine
+
+    def _declare_coroutine_functions(self):
+        token_t = TokenType()
+
+        co_destroy_ty = ir.FunctionType(void, [int8ptr])
+        co_destroy = ir.Function(self.module, co_destroy_ty, 'llvm.coro.destroy')
+        self.module.co_destroy = co_destroy
+
+        co_size_ty = ir.FunctionType(int64, [])
+        co_size = ir.Function(self.module, co_size_ty, 'llvm.coro.size.i64')
+        self.module.co_size = co_size
+
+        co_begin_ty = ir.FunctionType(int8ptr, [token_t, int8ptr])
+        co_begin = ir.Function(self.module, co_begin_ty, 'llvm.coro.begin')
+        self.module.co_begin = co_begin
+
+        co_end_ty = ir.FunctionType(int1, [int8ptr, int1])
+        co_end = ir.Function(self.module, co_end_ty, 'llvm.coro.end')
+        self.module.co_end = co_end
+
+        co_free_ty = ir.FunctionType(int8ptr, [token_t, int8ptr])
+        co_free = ir.Function(self.module, co_free_ty, 'llvm.coro.free')
+        self.module.co_free = co_free
+
+        co_id_ty = ir.FunctionType(token_t, [int32, int8ptr, int8ptr, int8ptr])
+        co_id = ir.Function(self.module, co_id_ty, 'llvm.coro.id')
+        self.module.co_id = co_id
+
+        co_id_retcon_ty = ir.FunctionType(token_t, [int32, int32, int8ptr, int8ptr, int8ptr, int8ptr])
+        co_id_retcon = ir.Function(self.module, co_id_retcon_ty, 'llvm.coro.id.retcon')
+        self.module.co_id_retcon = co_id_retcon
+
+        co_suspend_ty = ir.FunctionType(int8, [token_t, int1])
+        co_suspend = ir.Function(self.module, co_suspend_ty, 'llvm.coro.suspend')
+        self.module.co_suspend = co_suspend
+
+        # co_id_async_ty = ir.FunctionType(token_t, [int32, int32, int8ptr, int8ptr])
+        # co_id_async = ir.Function(self.module, co_id_async_ty, 'llvm.coro.id.async')
+        # self.module.co_id_async = co_id_async
+
+    def _define_ref_load(self):
+        # define i8* @saturn.ref.load(i8* %ref) {
+        ref_load_ty = ir.FunctionType(int8ptr, [int8ptr])
+        ref_load = ir.Function(self.module, ref_load_ty, 'saturn.ref.load')
+
+        # entry:
+        block = ref_load.append_basic_block("entry")
+        self.builder.position_at_start(block)
+        _args = [
+            ir.Argument(ref_load, int8ptr),
+        ]
+        ref_load.args = tuple(_args)
+
+        #   %0 = ptrtoint i8* %ref to 164
+        _0 = self.builder.ptrtoint(_args[0], int64)
+
+        #   %1 = and i64 %0, -4
+        _1 = self.builder.and_(_0, int64(-4))
+
+        #   %2 = inttoptr i64 %1 to i8*
+        _2 = self.builder.inttoptr(_1, int8ptr)
+
+        #   ret i8* %2
+        self.builder.ret(_2)
+        # }
+
+        self.module.ref_load = ref_load
+
+    def _define_ref_delete(self):
+        int8ptrptr = int8ptr.as_pointer()
+        # define void @saturn.ref.delete(i8** %arg0) {
+        ref_delete_ty = ir.FunctionType(void, [int8ptrptr])
+        ref_delete = ir.Function(self.module, ref_delete_ty, 'saturn.ref.delete')
+
+        # entry:
+        block = ref_delete.append_basic_block("entry")
+        self.builder.position_at_start(block)
+
+        #   %ref = alloca i8**
+        _entry_args = [
+            ir.Argument(ref_delete, int8ptrptr),
+        ]
+        ref_delete.args = tuple(_entry_args)
+        ref = self.builder.alloca(int8ptrptr)
+
+        #   store i8** %arg0, i8*** %ref
+        self.builder.store(_entry_args[0], ref)
+
+        #   %ld = load i8**, i8*** %ref
+        ld = self.builder.load(ref)
+
+        #   store i8* null, i8** %ld
+        self.builder.store(int8ptr(int8ptr.null), ld)
+
+        #   ret void
+        self.builder.ret_void()
+        # }
 
     def _declare_print_function(self):
         # Declare Printf function
@@ -206,6 +309,62 @@ class CodeGen:
         ret_code = self.builder.call(self.module.get_global("main"), 
             [self.builder.load(argc), self.builder.load(argv)])
         self.builder.ret(ret_code)
+
+    def ir_to_c_type(self, irtype: ir.Type):
+        from ctypes import Structure, POINTER, CFUNCTYPE, \
+            c_int8, c_int16, c_int, c_int32, c_int64, c_float, c_double, c_char_p, c_bool, c_char
+        if irtype.is_pointer:
+            if isinstance(irtype.pointee, ir.IntType) and not irtype.pointee.is_pointer and \
+                    irtype.pointee.get_abi_size(self.engine.target_data) == 1:
+                return c_char_p
+            return POINTER(self.ir_to_c_type(irtype.pointee))
+        if isinstance(irtype, ir.IntType):
+            isize = irtype.get_abi_size(self.engine.target_data)
+            if isize == 1:
+                return c_char_p if irtype.is_pointer else c_char
+            if isize == 2:
+                return c_int16
+            if isize == 4:
+                return c_int32
+            if isize == 8:
+                return c_int64
+            return c_int
+        elif isinstance(irtype, ir.FloatType):
+            return c_float
+        elif isinstance(irtype, ir.DoubleType):
+            return c_double
+        elif isinstance(irtype, ir.LiteralStructType):
+            fields = [('f' + str(i), self.ir_to_c_type(element)) for (i, element) in enumerate(irtype.elements)]
+
+            class T(Structure):
+                _fields_ = fields
+
+            return T
+        elif isinstance(irtype, ir.IdentifiedStructType):
+            fields = [('f' + str(i), self.ir_to_c_type(element)) for (i, element) in enumerate(irtype.elements)]
+
+            class T(Structure):
+                _fields_ = fields
+
+            return T
+        elif isinstance(irtype, ir.FunctionType):
+            retty = self.ir_to_c_type(irtype.return_type)
+            argtys = [self.ir_to_c_type(argty) for argty in irtype.args]
+            print(retty, argtys)
+            return CFUNCTYPE(retty, *argtys)
+        return None
+
+    def jit_execute(self, fn: ir.Function, *params):
+        from ctypes import CFUNCTYPE, c_int
+        func_ptr = self.engine.get_function_address(fn.name)
+        # print(f"Function at 0x{func_ptr:X}")
+        retty = self.ir_to_c_type(fn.ftype.return_type)
+        argtys = [self.ir_to_c_type(argty) for argty in fn.ftype.args]
+        # print(retty, *argtys, *params)
+        cparams = [param for param in params]
+        func = CFUNCTYPE(retty, *argtys)(func_ptr)
+        # print(func, *cparams)
+        return func(*cparams)
 
     def save_ir(self, filename, ir):
         with open(filename, 'w') as output_file:

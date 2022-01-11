@@ -88,6 +88,7 @@ class Symbol:
         self.name = name
         self.visibility = visibility
         self.link_type = link_type
+        self.link_name = self.name
         self.parent = parent
         self.irvalue = None
         self.symbols = {}
@@ -143,16 +144,19 @@ class Symbol:
 
     def to_dict(self):
         d = {'visible': Visibility.VALUE[self.visibility],
-             'c_decl': self.c_decl,
              'link_type': 'default' if LinkageType.VALUE[self.link_type] == '' else LinkageType.VALUE[self.link_type],
              'name': self.name,
              'symbol_type': 'symbol'}
+        if self.c_decl:
+            d['c_decl'] = True
+        if self.link_name != self.name:
+            d['link_name'] = self.link_name
         return d
 
     def from_dict(self, d):
         self.visibility = Visibility.INDEX[d['visible']]
         self.link_type = Visibility.INDEX[d['link_type']]
-        self.c_decl = d['c_decl']
+        self.c_decl = d['c_decl'] if 'c_decl' in d else False
         self.name = d['name']
 
     def __str__(self):
@@ -210,6 +214,10 @@ class Package(Symbol):
         self.symbols[lvalue] = value
         return self.symbols[lvalue]
 
+    def add_symbol_extern(self, lvalue, value):
+        self.symbols[lvalue] = value
+        return self.symbols[lvalue]
+
     def get_or_add_symbol(self, lvalue, value):
         if lvalue not in self.symbols:
             self.add_symbol(lvalue, value)
@@ -240,7 +248,7 @@ class Package(Symbol):
             sym = package.lookup_symbol(name)
             if sym is None:
                 raise RuntimeError(f"Cannot import symbol '{name}' from package '{package.name}'")
-            self.add_symbol(symbol.name, sym)
+            self.add_symbol_extern(symbol.name, sym)
 
     def import_all_symbols_from_package(self, package):
         if package is self:

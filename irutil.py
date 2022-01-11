@@ -12,7 +12,7 @@ def _get_exponent(exp: str, frac: str):
             out = 0
             for __ in range(8):
                 out <<= 1
-                if a > b:
+                if a >= b:
                     return -n, str(a-b)
                 a *= 10
                 a += int(frac[n]) if n < len(frac) else 0
@@ -60,7 +60,7 @@ def _parse_significand(exp: str, frac: str, base_exp: int) -> list:
                     # print(f'2^{iexp}=0')
                     iexp = iexp - 1
             else:
-                if a > b:
+                if a >= b:
                     a = a - b
                     out |= 1
                     # print(f'2^-{n}=1')
@@ -129,3 +129,15 @@ class FP128Type(ir.types.Type):
 
 
 FP128Type._create_instance()
+
+
+class TokenType(ir.types.Type):
+
+    def _to_string(self):
+        return "token"
+
+    def __eq__(self, other):
+        return isinstance(other, TokenType)
+
+    def __hash__(self):
+        return hash(TokenType)

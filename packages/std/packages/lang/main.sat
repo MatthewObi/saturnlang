@@ -1,0 +1,86 @@
+package lang;
+/*
+ * The lang package for Saturn.
+ * Contains definitions for basic structs and functions for the Saturn programming language.
+ *
+ * Copyright Matthew Obi 2022
+ *
+ * Last modified 2022 January 11
+ */
+
+/*
+ * String (utf8-encoded string)
+ */
+
+c_include "string.h";
+
+type string: struct {
+    ptr: cstring;
+    len: uint;
+    alloc: bool;
+}
+
+fn(*string) new(): void {
+    this.ptr = "";
+    this.len = 1u;
+    this.alloc = false;
+}
+
+fn(*string) delete(): void {
+    if this.alloc == true then destroy this.ptr;
+}
+
+fn(*string) operator=(str: cstring): void {
+    this.ptr = str;
+    this.len = strlen(str);
+    this.alloc = false;
+}
+
+fn(*string) operator=(str: &string): void {
+    this.ptr = str.ptr;
+    this.len = str.len;
+    this.alloc = str.alloc;
+}
+
+fn(*string) operator<=>(str: cstring): int {
+    return strcmp(this.ptr, str);
+}
+
+fn(*string) operator<=>(str: &string): int {
+    return strcmp(this.ptr, str.ptr);
+}
+
+fn(*string) operator+(str: *string): string {
+    new_ptr := make unsafe [100]byte;
+    strcpy(new_ptr, this.ptr);
+    strcat(new_ptr, str.ptr);
+    return string {
+        ptr: new_ptr,
+        len: strlen(new_ptr),
+        alloc: true
+    };
+}
+
+fn(*string) substr(start: uint, len: uint): string {
+    new_ptr := make unsafe [100]byte;
+    src_ptr := cast<*byte>(this.ptr);
+    for i in [0u..len] {
+        if i >= this.len then break;
+        new_ptr[i] = src_ptr[start + i];
+    }
+    return string {
+        ptr: new_ptr,
+        len: strlen(new_ptr),
+        alloc: true
+    };
+}
+
+fn(*string) length(): uint {
+    return this.len;
+}
+
+fn(*string) cstr(): cstring {
+    return this.ptr;
+}
+
+

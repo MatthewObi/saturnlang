@@ -1,22 +1,46 @@
 package main;
-import lang::{string};
-import math;
+import std::lang::{string};
+import std::math;
 
-[[print("Hi!")]]
+pub fn passByReference(x: &int)
+{
+    x = 15;
+}
+
+pub fn addNum(n: int): int
+{
+    return n + n;
+}
+
+[[message("Hi! How are you doing? 🪐Ω»«°😃")]]
 pub fn main(argc: int, argv: *cstring): int
 {
-    str: string = "Hello, world!";
+    printf("Welcome to the 🪐Saturn Programming Language!🪐\n");
+    str: string = "Hello, 世界! 😃 ";
+    str2 := str + str;
     printf("%s (len = %d, alloc = %s)\n", str.cstr(), str.len, if str.alloc then "true" else "false");
+    printf("%s (len = %d, alloc = %s)\n", str2.cstr(), str2.len, if str2.alloc then "true" else "false");
+    str3 := str.substr(1u, 4u);
+    printf("%s (len = %d, alloc = %s)\n", str3.cstr(), str3.len, if str3.alloc then "true" else "false");
 
     printf("pi = %lf\n", math::PI);
+    printf("sin(pi / 2) = %lf\n", math::sin(math::PI / 2.0));
+    printf("tan(pi / 4) = %lf\n", math::tan(math::PI / 4.0));
+    printf("e^pi = %lf\n", math::exp(math::PI));
     printf("%d! = %d\n", 4, factorial(4));
-    strSwitchTest := "switch_test(%d) = %d";
+    strSwitchTest := "switch_test(%d) = %d\n";
     printf(strSwitchTest, 11, switch_test(11));
     printf(strSwitchTest, 45, switch_test(45));
     printf(strSwitchTest, 38, switch_test(38));
 
+    x := 13;
+    printf("x = %d\n", x);
+    passByReference(x);
+    printf("x = %d\n", x);
+
     q := 0.123q;
     q += 0.25q;
+    q = math::sinq(q);
 
     i := 5;
     ++i;
