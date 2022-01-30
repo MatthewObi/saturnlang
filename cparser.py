@@ -3,7 +3,7 @@ from pycparser import c_parser, c_ast, parse_file
 from typesys import types, FuncType, Func, StructType, Value
 from ast import LValue, StringLiteral
 from llvmlite import ir
-from package import Package
+from package import Package, Visibility
 import sys
 
 sys.path.extend(['.', '..'])
@@ -21,6 +21,7 @@ def parse_c_file(builder, module, package, path):
                                '-D__declspec(x)=',
                                '-D__attribute__(x)=',
                                '-D__asm__(x)=',
+                               '-D__extension__=',
                                '-D__int64=long',
                                '-E', r'-Iutils/fake_libc_include']
                      )
@@ -181,7 +182,7 @@ def create_c_funcdecl_from_def(builder, module, package, node):
 
     # self.module.sfunctys[self.name.value] = sfnty
     if fname not in module.sfuncs:
-        module.sfuncs[fname] = Func(fname, sfnty.rtype, c_decl=True)
+        module.sfuncs[fname] = Func(fname, sfnty.rtype, c_decl=True, visibility=Visibility.PRIVATE)
         package.add_symbol(name, module.sfuncs[fname])
         module.sfuncs[fname].add_overload(sfnty.atypes, fn)
     else:
@@ -215,7 +216,7 @@ def create_c_funcdecl(builder, module: ir.Module, package, name, decl):
     # print(f"fn {fname}({arg_str}): {str(rtype)}")
     # self.module.sfunctys[self.name.value] = sfnty
     if fname not in module.sfuncs:
-        module.sfuncs[fname] = Func(name, sfnty.rtype, c_decl=True)
+        module.sfuncs[fname] = Func(name, sfnty.rtype, c_decl=True, visibility=Visibility.PRIVATE)
         package.add_symbol(name, module.sfuncs[fname])
         module.sfuncs[fname].add_overload(sfnty.atypes, fn)
     else:

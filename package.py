@@ -1,4 +1,6 @@
 import json
+from llvmlite import ir
+from compilerutil import targets
 
 
 class Visibility:
@@ -90,7 +92,7 @@ class Symbol:
         self.link_type = link_type
         self.link_name = self.name
         self.parent = parent
-        self.irvalue = None
+        self.irvalue = {}
         self.symbols = {}
         self.c_decl = c_decl
 
@@ -99,6 +101,12 @@ class Symbol:
 
     def __setitem__(self, key, value):
         self.symbols[key] = value
+
+    def get_ir_value(self, module: ir.Module):
+        key = hash(module)
+        if key not in self.irvalue:
+            return None
+        return self.irvalue[key]
 
     def lookup_symbol(self, key):
         parts = key.split("::")
@@ -111,13 +119,9 @@ class Symbol:
             sym = sym[part]
         return sym
 
-    def get_ir_value(self):
-        if self.irvalue is None:
-            pass
-        return self.irvalue
-
-    def add_ir_value(self, ir_value):
-        self.irvalue = ir_value
+    def add_ir_value(self, module, ir_value):
+        key = hash(module)
+        self.irvalue[key] = ir_value
 
     def get_full_name(self):
         if self.parent is not None:
@@ -158,6 +162,7 @@ class Symbol:
         self.link_type = Visibility.INDEX[d['link_type']]
         self.c_decl = d['c_decl'] if 'c_decl' in d else False
         self.name = d['name']
+        self.link_name = d['link_name'] if 'link_name' in d else self.name
 
     def __str__(self):
         s = f"{Visibility.VALUE[self.visibility]} symbol {self.get_full_name()} " \
@@ -167,21 +172,45 @@ class Symbol:
 
 class Module(Symbol):
     def __init__(self, package, name):
+        from llvmlite import ir
         super().__init__(name)
         self.package = package
         self.symbols = self.package.symbols
         self.codegen = None
         self.ir_module = None
+        self.ast = None
+
+    def initialize_module(self):
+        pass
+
+    def add_ast(self, ast):
+        self.ast = ast
+
+    def get_available_symbols(self):
+        return {k: v for k, v in self.symbols.items() if v.is_viewable_to_same_package()}
 
 
 class Package(Symbol):
-    def __init__(self, name, working_directory='.'):
+    _cache = {}
+
+    def __init__(self, name, working_directory='.', out_file='', target=None):
         super().__init__(name)
         self.modules = {}
         self.current_module = None
         self.c_package = None
         self.imported_packages = {}
         self.working_directory = working_directory
+        self.out_file = out_file
+        if target is None:
+            self.target = targets['native']
+        else:
+            self.target = target
+
+    @classmethod
+    def get_or_create(cls, name, working_directory='.', out_file='', target=targets['native']):
+        if name not in cls._cache:
+            cls._cache[name] = Package(name, working_directory, out_file, target)
+        return cls._cache[name]
 
     def get_or_create_c_package(self):
         if self.c_package is None:
@@ -195,8 +224,8 @@ class Package(Symbol):
             self.from_dict(d)
 
     def save_symbols_to_file(self, file):
-        with open(file, 'w') as f:
-            json.dump(self.to_dict(), f)
+        with open(self.working_directory + '/' + file, 'w') as f:
+            json.dump(self.to_dict(), f, indent=1)
 
     def add_module(self, name):
         self.modules[name] = Module(self, name)
@@ -269,7 +298,7 @@ class Package(Symbol):
     def to_dict(self):
         d = super().to_dict()
         d['type'] = 'package'
-        d['children'] = {k: v.to_dict() for (k, v) in self.symbols.items()}
+        d['children'] = {k: v.to_dict() for (k, v) in self.symbols.items() if v.is_viewable_to_same_package()}
         return d
 
     def from_dict(self, d):

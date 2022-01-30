@@ -38,7 +38,7 @@ fn(*string) operator=(str: cstring): void {
 
 fn(*string) operator=(str: &string): void {
     this.ptr = str.ptr;
-    this.len = str.len;
+    this.len = cast<uint>(str.len);
     this.alloc = str.alloc;
 }
 
@@ -56,7 +56,7 @@ fn(*string) operator+(str: *string): string {
     strcat(new_ptr, str.ptr);
     return string {
         ptr: new_ptr,
-        len: strlen(new_ptr),
+        len: cast<uint>(strlen(new_ptr)),
         alloc: true
     };
 }
@@ -70,7 +70,7 @@ fn(*string) substr(start: uint, len: uint): string {
     }
     return string {
         ptr: new_ptr,
-        len: strlen(new_ptr),
+        len: cast<uint>(strlen(new_ptr)),
         alloc: true
     };
 }

@@ -2,7 +2,8 @@ from rply import ParserGenerator, Token
 from ast import (
     Program, CodeBlock, Statement, ReturnStatement, BreakStatement, ContinueStatement, FallthroughStatement,
     DeferStatement,
-    PackageDecl, ImportDecl, ImportDeclExtern, CIncludeDecl, CDeclareDecl, Attribute, AttributeList, SymbolPreamble,
+    PackageDecl, ImportDecl, ImportDeclExtern, CIncludeDecl, CDeclareDecl, BinaryInclude,
+    Attribute, AttributeList, SymbolPreamble,
     TypeDecl, StructField, StructDeclBody, StructDecl,
     Sum, Sub, Mul, Div, Mod, ShiftLeft, ShiftRight, And, Or, Xor, BinaryNot, BoolAnd, BoolOr, BoolNot, Negate, Print,
     AddressOf, DerefOf, ElementOf, TupleElementOf,
@@ -11,7 +12,7 @@ from ast import (
     StructLiteralElement, StructLiteralBody, StructLiteral, Null,
     ArrayLiteralElement, ArrayLiteralBody, ArrayLiteral, TypeExpr, TupleTypeExpr, OptionalTypeExpr, FuncTypeExpr,
     TupleLiteralElement, TupleLiteralBody, TupleLiteral,
-    FuncDecl, FuncDeclExtern, FuncArgList, FuncArg, GlobalVarDecl, VarDecl, VarDeclAssign,
+    FuncDecl, FuncDeclExtern, FuncArgList, FuncArg, GlobalVarDecl, VarDecl, VarDeclAssign, LambdaExpr,
     MethodDecl, MethodDeclExtern,
     LValue, LValueField, FuncCall, MethodCall, CastExpr, SelectExpr,
     MakeExpr, MakeSharedExpr, MakeUnsafeExpr, DestroyExpr,
@@ -36,7 +37,7 @@ class Parser:
     def __init__(self):
         self.pg = ParserGenerator(
             # A list of all token names accepted by the parser.
-            ['TPACKAGE', 'TIMPORT', 'TCINCLUDE', 'TCDECLARE',
+            ['TPACKAGE', 'TIMPORT', 'TCINCLUDE', 'TCDECLARE', 'TBININCLUDE',
              'INT', 'UINT', 'LONGINT', 'ULONGINT', 'SBYTE', 'BYTE', 'SHORTINT', 'USHORTINT',
              'HALF', 'FLOAT', 'DOUBLE', 'QUAD', 'STRING', 'MLSTRING',
              'HEXINT', 'HEXUINT', 'HEXLINT', 'HEXULINT', 'HEXSINT', 'HEXUSINT', 'HEXBINT', 'HEXSBINT',
@@ -84,6 +85,7 @@ class Parser:
         @self.pg.production('gstmt : method_decl')
         @self.pg.production('gstmt : pack_decl')
         @self.pg.production('gstmt : import_decl')
+        @self.pg.production('gstmt : binary_include_decl')
         @self.pg.production('gstmt : c_include_decl')
         @self.pg.production('gstmt : c_declare_decl')
         @self.pg.production('gstmt : type_decl')
@@ -307,12 +309,38 @@ class Parser:
             'method_decl : TFN LPAREN MUL lvalue RPAREN TOPERATOR ADD LPAREN decl_args RPAREN COLON typeexpr LBRACE block RBRACE')
         @self.pg.production(
             'method_decl : TFN LPAREN MUL lvalue RPAREN TOPERATOR SUB LPAREN decl_args RPAREN COLON typeexpr LBRACE block RBRACE')
+        @self.pg.production(
+            'method_decl : TFN LPAREN MUL lvalue RPAREN TOPERATOR MUL LPAREN decl_args RPAREN COLON typeexpr LBRACE block RBRACE')
+        @self.pg.production(
+            'method_decl : TFN LPAREN MUL lvalue RPAREN TOPERATOR DIV LPAREN decl_args RPAREN COLON typeexpr LBRACE block RBRACE')
+        @self.pg.production(
+            'method_decl : TFN LPAREN MUL lvalue RPAREN TOPERATOR MOD LPAREN decl_args RPAREN COLON typeexpr LBRACE block RBRACE')
+        @self.pg.production(
+            'method_decl : TFN LPAREN MUL lvalue RPAREN TOPERATOR AND LPAREN decl_args RPAREN COLON typeexpr LBRACE block RBRACE')
+        @self.pg.production(
+            'method_decl : TFN LPAREN MUL lvalue RPAREN TOPERATOR OR LPAREN decl_args RPAREN COLON typeexpr LBRACE block RBRACE')
+        @self.pg.production(
+            'method_decl : TFN LPAREN MUL lvalue RPAREN TOPERATOR XOR LPAREN decl_args RPAREN COLON typeexpr LBRACE block RBRACE')
         def method_decl_bin(state, p):
             struct = p[3]
             if p[6].gettokentype() == 'ADD':
                 name = Token('IDENT', 'operator.add')
             elif p[6].gettokentype() == 'SUB':
                 name = Token('IDENT', 'operator.sub')
+            elif p[6].gettokentype() == 'MUL':
+                name = Token('IDENT', 'operator.mul')
+            elif p[6].gettokentype() == 'DIV':
+                name = Token('IDENT', 'operator.div')
+            elif p[6].gettokentype() == 'MOD':
+                name = Token('IDENT', 'operator.mod')
+            elif p[6].gettokentype() == 'AND':
+                name = Token('IDENT', 'operator.and')
+            elif p[6].gettokentype() == 'OR':
+                name = Token('IDENT', 'operator.or')
+            elif p[6].gettokentype() == 'XOR':
+                name = Token('IDENT', 'operator.xor')
+            else:
+                name = Token('IDENT', 'operator.undefined')
             declargs = p[8]
             rtype = p[11]
             block = p[13]
@@ -359,6 +387,11 @@ class Parser:
                 return p[0]
             else:
                 return p[0]
+
+        @self.pg.production('binary_include_decl : lvalue CEQ TBININCLUDE LPAREN STRING RPAREN SEMICOLON')
+        def binary_include_decl(state, p):
+            spos = p[0].getsourcepos()
+            return BinaryInclude(state.builder, state.module, state.package, spos, p[4], p[0])
 
         @self.pg.production('c_include_decl : TCINCLUDE STRING SEMICOLON')
         def c_include_decl(state, p):
@@ -887,6 +920,14 @@ class Parser:
             b = p[5]
             return SelectExpr(state.builder, state.module, state.package, spos, cond, a, b)
 
+        @self.pg.production('lambda_expr : TFN LPAREN decl_args RPAREN COLON typeexpr LBRACE block RBRACE')
+        def lambda_expr(state, p):
+            spos = p[0].getsourcepos()
+            args = p[2]
+            rtype = p[5]
+            block = p[7]
+            return LambdaExpr(state.builder, state.module, state.package, spos, rtype, block, args)
+
         @self.pg.production('func_call : lvalue LPAREN args RPAREN')
         def func_call(state, p):
             name = p[0]
@@ -961,6 +1002,10 @@ class Parser:
         def lvalue_expr_tuple_element(state, p):
             spos = p[0].getsourcepos()
             return TupleElementOf(state.builder, state.module, state.package, spos, p[0], p[2].value)
+
+        @self.pg.production('expr : lambda_expr')
+        def expr_lambda(state, p):
+            return p[0]
 
         @self.pg.production('expr : lvalue_expr')
         def expr_lvalue(state, p):

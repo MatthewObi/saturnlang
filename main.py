@@ -1,71 +1,119 @@
 import pstats
 import time
 
+import llvmlite
+
 from lexer import lexer
 from sparser import parser, ParserState
 from codegen import CodeGen
 from package import Package
 from cachedmodule import CachedModule
 from ctypes import create_string_buffer, c_char_p, pointer, byref
+from compilerutil import CompileTarget, targets
 # import cProfile
 
 import sys
 import os
 import glob
 
-opt_level = 0
-use_emscripten = False
-
-files = []
-eval_files = []
-llfiles = []
-linkfiles = []
-out_file = 'main.exe'
-
 cachedmods = {}
+packages = {}
 
-compile_target = 'windows-x64'
+
+class CommandArgs:
+    def __init__(self):
+        self.args = {}
+
+    def add_arg(self, arg, value: str = ''):
+        self.args[arg] = value
+
+    def has_arg(self, arg):
+        if arg not in self.args:
+            return False
+        return True
+
+    def __getitem__(self, item):
+        return self.args[item]
 
 
-def main():
-    global opt_level
-    global compile_target
-    global use_emscripten
+def parse_command_line_args() -> CommandArgs:
+    command_args = CommandArgs()
 
+    argv = sys.argv[1:]
+    for value in argv:
+        if value.startswith('-O'):
+            opt_value = value.strip('-O')
+            command_args.add_arg('O', opt_value)
+            continue
+        if value.startswith('-o'):
+            value = next(value)
+            command_args.add_arg('o', value)
+            continue
+        if value.startswith('--'):
+            long_arg = value.strip('--')
+            if '=' not in long_arg:
+                command_args.add_arg(long_arg)
+            else:
+                k, v = long_arg.split('=', maxsplit=1)
+                command_args.add_arg(k, v)
+            continue
+
+    print(command_args.args)
+    return command_args
+
+
+class PackageType:
+    PROGRAM = 0
+    LIBRARY = 1
+    DYNAMIC = 2
+
+
+def compile_package(name, working_directory='.',
+                    opt_level=-1,
+                    package_type=PackageType.LIBRARY) -> Package:
     global lexer
     global parser
 
     n1 = time.perf_counter()
-    if len(sys.argv) > 1:
-        if sys.argv[1] == '--clean':
-            for f in glob.glob("*.o"):
-                os.remove(f)
-            for f in glob.glob("symbols.json"):
-                os.remove(f)
-            # for f in glob.glob("packages/lang/symbols.json"):
-            #     os.remove(f)
 
-        if '-O1' in sys.argv:
-            opt_level = 1
-        if '-O2' in sys.argv:
-            opt_level = 2
-        if '--target=wasm' in sys.argv:
-            compile_target = 'wasm'
-        elif '--target=linux' in sys.argv:
-            compile_target = 'linux-x64'
-        elif '--target=linux32' in sys.argv:
-            compile_target = 'linux-x86'
-        elif '--target=windows' in sys.argv:
-            compile_target = 'windows-x64'
-        elif '--target=win32' in sys.argv:
-            compile_target = 'windows-x86'
+    args = parse_command_line_args()
+    compile_target = args['target'] if args.has_arg('target') else 'native'
+    if opt_level == -1:
+        opt_level = int(args['O']) if args.has_arg('O') else 0
+    use_emscripten = True if args.has_arg('use-emscripten') else False
+    clean = True if args.has_arg('clean') else False
 
-        if '--use-emscripten' in sys.argv:
-            use_emscripten = True
+    target = targets[compile_target]
 
-    package = Package('main')
+    if package_type == PackageType.LIBRARY:
+        out_file = f'{working_directory}/{name}.{target.short_name}.a' if not target.platform == 'windows' \
+            else f'{working_directory}/{name}.{target.short_name}.lib'
+    elif package_type == PackageType.PROGRAM:
+        out_file = f'{working_directory}/{name}' if not target.platform == 'windows' \
+            else f'{working_directory}/{name}.exe'
+    elif package_type == PackageType.DYNAMIC:
+        out_file = f'{working_directory}/{name}.{target.short_name}.so' if not target.platform == 'windows' \
+            else f'{working_directory}/{name}.{target.short_name}.dll'
+    else:
+        out_file = f''
 
-    for f in glob.glob("*.sat"):
+    if clean:
+        for f in glob.glob(f"{working_directory}/*.o"):
+            os.remove(f)
+        for f in glob.glob(f"{working_directory}/symbols.{target.short_name}.json"):
+            os.remove(f)
+        for f in glob.glob(f"{out_file}"):
+            os.remove(f)
+
+    files = []
+    eval_files = []
+    llfiles = []
+    linkfiles = []
+
+    package = Package.get_or_create(name, working_directory=working_directory, out_file=out_file, target=target)
+    print(f'Compiling package {name} in directory {working_directory} with target {target.name}...')
+
+    for f in glob.glob(f"{working_directory}/*.sat"):
         mod_t = os.path.getmtime(f)
         objf = f.replace('.sat', '.o')
         if not os.path.exists(objf):
@@ -100,7 +148,7 @@ def main():
     for file in files:
         package.add_module(file.rstrip('.sat'))
         mod = package.get_module(file.rstrip('.sat'))
-        mod.codegen = CodeGen(file, opt_level=opt_level, compile_target=compile_target)
+        mod.codegen = CodeGen(file, opt_level=opt_level, compile_target=target)
         mod.ir_module = mod.codegen.module
 
     for ff in files:
@@ -195,22 +243,26 @@ def main():
 
             cmod.ast.eval()
 
-        if compile_target == 'wasm':
+        if target.platform == 'wasm':
             if ff == 'main.sat':
                 codegen.create_entry()
 
         ir = codegen.create_ir()
-        if ff == 'main.sat':
-            res = codegen.jit_execute(package.lookup_symbol('addNum').get_default_overload().fn,
-                                      5)
-            print(res)
         dest = ff[:-4]
         codegen.save_ir(dest + '.ll', ir)
+
+        # if ff == '.\\main.sat' and package.name == 'main':
+        #     codegen.load_ir('./packages/std/packages/lang/main.ll')
+        #     codegen.load_ir('./packages/std/packages/math/main.ll')
+        #     fn = package.lookup_symbol("testPrint").get_default_overload().fn
+        #     result = codegen.jit_execute(ir, fn, 22.4)
+        #     print(result)
+
         llfiles.append(dest)
         f2 = time.perf_counter()
         print(f"Compiled file in {f2-f1} seconds.")
 
-    package.save_symbols_to_file('symbols.json')
+    package.save_symbols_to_file(f'symbols.{target.short_name}.json')
 
     for llf in llfiles:
         ll = llf + '.ll'
@@ -219,34 +271,72 @@ def main():
         os.system('llc -filetype=obj -O2 -o %s %s' % (llf + '.o', ll))
 
     modifiedobjs = []
-    exe_t = os.path.getmtime('main.exe')
-    for f in glob.glob("*.o"):
-        obj_t = os.path.getmtime(f)
-        linkfiles.append(f)
-        if obj_t > exe_t:
+    if os.path.isfile(out_file):
+        exe_t = os.path.getmtime(out_file)
+        for f in glob.glob(f"{working_directory}/*.o"):
+            obj_t = os.path.getmtime(f)
+            linkfiles.append(f)
+            if obj_t > exe_t:
+                modifiedobjs.append(f)
+    else:
+        for f in glob.glob(f"{working_directory}/*.o"):
+            linkfiles.append(f)
             modifiedobjs.append(f)
     if len(modifiedobjs) == 0:
         print('Project up to date. Nothing to do.')
         exit(0)
 
-    linkcmd = ''
-    if compile_target == 'wasm':
-        linkcmd = 'emcc -o ./wasm/emscripten/index.html ' if use_emscripten \
-            else 'wasm-ld -o ./wasm/static/main.wasm ' \
-                 '-L./wasm/sysroot/lib/wasm32-wasi -lc -lrt ' \
-                 '"./wasm/sysroot/lib/wasm32-wasi/crt1.o" '
-    elif compile_target == 'windows-x64':
-        linkcmd = f'lld-link -subsystem:console -out:{out_file} -defaultlib:libcmt ' \
-                  '-libpath:"C:/Program Files (x86)/Microsoft Visual Studio/2019/Community/VC/Tools/MSVC/14.26.28801/lib/x64" ' \
-                  '-libpath:"C:/Program Files (x86)/Windows Kits/10/Lib/10.0.18362.0/ucrt/x64" ' \
-                  '-libpath:"C:/Program Files (x86)/Windows Kits/10/Lib/10.0.18362.0/um/x64" -nologo '
-    elif compile_target == 'linux-x64':
-        linkcmd = f'clang -Wall -o {out_file} '
+    if package_type == PackageType.LIBRARY:
+        linkcmd = f'llvm-ar -r {out_file} '
+    elif package_type == PackageType.PROGRAM:
+        if target.platform == 'wasm':
+            linkcmd = 'emcc -o ./wasm/emscripten/index.html ' if use_emscripten \
+                else 'wasm-ld -o ./wasm/static/main.wasm ' \
+                     '-L./wasm/sysroot/lib/wasm32-wasi -lc -lrt ' \
+                     '"./wasm/sysroot/lib/wasm32-wasi/crt1.o" '
+        elif target.platform == 'windows':
+            linkcmd = f'lld-link -subsystem:console -out:{out_file} -defaultlib:libcmt ' \
+                      '-libpath:"C:/Program Files (x86)/Microsoft Visual Studio/2019/Community/VC/Tools/MSVC/14.26.28801/lib/x64" ' \
+                      '-libpath:"C:/Program Files (x86)/Windows Kits/10/Lib/10.0.18362.0/ucrt/x64" ' \
+                      '-libpath:"C:/Program Files (x86)/Windows Kits/10/Lib/10.0.18362.0/um/x64" -nologo '
+        elif target.platform == 'linux':
+            linkcmd = f'clang -lc -lrt -lm -Wall -o {out_file} '
+        else:
+            raise RuntimeError('Cannot proceed. Target has undefined link command.')
 
+    for link_package in package.imported_packages.values():
+        if link_package.name == 'C':
+            break
+        lib_file = f'{link_package.working_directory}/{link_package.name}.{target.short_name}.a' \
+            if not target.platform == 'windows' \
+            else f'{link_package.working_directory}/{link_package.name}.{target.short_name}.lib'
+        linkcmd += f'"{lib_file}" '
     for llf in linkfiles:
         linkcmd += f'"{llf}" '
     print(linkcmd)
     os.system(linkcmd)
+    n2 = time.perf_counter()
+    print(f"Compiled package in {n2-n1} seconds.")
+    return package
+
+
+def get_relative_directory_for_package(package_symbol):
+    symbols = package_symbol.split('::')
+    rel_dir = '.'
+    for symbol in symbols:
+        rel_dir += f'/packages/{symbol}'
+    return rel_dir
+
+
+def main():
+    n1 = time.perf_counter()
+
+    std_lang_package = compile_package('lang', working_directory=get_relative_directory_for_package('std::lang'),
+                                       opt_level=2)
+    std_math_package = compile_package('math', working_directory=get_relative_directory_for_package('std::math'),
+                                       opt_level=2)
+    main_package = compile_package('main', '.', package_type=PackageType.PROGRAM)
+
     n2 = time.perf_counter()
     print(f"Compiled program in {n2-n1} seconds.")
 

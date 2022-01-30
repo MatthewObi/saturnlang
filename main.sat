@@ -2,6 +2,8 @@ package main;
 import std::lang::{string};
 import std::math;
 
+myData := bin_include("test.bin");
+
 pub fn passByReference(x: &int)
 {
     x = 15;
@@ -12,16 +14,72 @@ pub fn addNum(n: int): int
     return n + n;
 }
 
+pub fn fnApply(input: int, fx: *fn(int) int): int
+{
+    return fx(input);
+}
+
+pub fn testLambda(): int
+{
+    lambda := fn(x: int): int {
+        return x * x;
+    };
+    printf("%d^2 = %d\n", 5, lambda(5));
+    printf("%d^2 = %d\n", 7, lambda(7));
+    return 0;
+}
+
+pub fn GetString(): string
+{
+    return string{};
+}
+
+pub fn testPassPtr(str: cstring): uint64
+{
+    len := 0ul;
+    s := cast<*byte>(str);
+    while *s != 0b {
+        ++len;
+        s = cast<*byte>(cast<uint64>(s) + 1ul);
+    }
+    return len;
+}
+
+pub fn testPassLambda()
+{
+    sq := fn(x: int): int {
+        return x * x;
+    };
+    sum := fn(x: int): int {
+        return x + x;
+    };
+    printf("  sq(%02d) = %02d\n", 5, fnApply(5,  sq));
+    printf(" sum(%02d) = %02d\n", 5, fnApply(5, sum));
+    printf("auto(%02d) = %02d\n", 5, fnApply(5,
+        fn(x: int): int {
+            if x > 0 {
+                return (x*2) - (x/2);
+            } else {
+                return x - (x/2);
+            }
+        }
+    ));
+}
+
 [[message("Hi! How are you doing? 🪐Ω»«°😃")]]
 pub fn main(argc: int, argv: *cstring): int
 {
     printf("Welcome to the 🪐Saturn Programming Language!🪐\n");
     str: string = "Hello, 世界! 😃 ";
     str2 := str + str;
-    printf("%s (len = %d, alloc = %s)\n", str.cstr(), str.len, if str.alloc then "true" else "false");
-    printf("%s (len = %d, alloc = %s)\n", str2.cstr(), str2.len, if str2.alloc then "true" else "false");
+    printf("%s (len = %d, alloc = %s)\n", str.ptr, str.len, if str.alloc then "true" else "false");
+    printf("%s (len = %d, alloc = %s)\n", str2.ptr, str2.len, if str2.alloc then "true" else "false");
     str3 := str.substr(1u, 4u);
-    printf("%s (len = %d, alloc = %s)\n", str3.cstr(), str3.len, if str3.alloc then "true" else "false");
+    printf("%s (len = %d, alloc = %s)\n", str3.ptr, str3.len, if str3.alloc then "true" else "false");
+    str4 := GetString();
+
+    testLambda();
+    testPassLambda();
 
     printf("pi = %lf\n", math::PI);
     printf("sin(pi / 2) = %lf\n", math::sin(math::PI / 2.0));
@@ -37,6 +95,11 @@ pub fn main(argc: int, argv: *cstring): int
     printf("x = %d\n", x);
     passByReference(x);
     printf("x = %d\n", x);
+
+    printf("test.bin: ");
+    for n in [0..7] do
+        printf("%02X ", myData[n]);
+    printf("\n");
 
     q := 0.123q;
     q += 0.25q;

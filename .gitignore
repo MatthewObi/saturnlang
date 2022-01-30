@@ -136,8 +136,10 @@ dmypy.json
 *.o
 *.wasm
 *.exe
+*.lib
+*.a
 concepttest/
 test/
-symbols.json
+symbols.*.json
 profile
 

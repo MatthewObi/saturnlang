@@ -1,7 +1,7 @@
 from llvmlite import ir
 from rply import Token
 from typesys import TupleType, Type, make_tuple_type, types, FuncType, StructType, Value, mangle_name, print_types, \
-    Func, make_optional_type, make_slice_type, array_to_slice
+    Func, GlobalValue, make_optional_type, mangle_symbol, mangle_symbol_name, demangle_name, make_slice_type, array_to_slice
 from serror import throw_saturn_error
 from package import Visibility, LinkageType, Package
 
@@ -521,16 +521,18 @@ class StructLiteral(Expr):
         super().__init__(builder, module, package, spos)
         self.stype = stype
         self.body = body
-        self.type = self.get_type()
+        self.type = None
 
     def get_type(self):
-        return self.stype.get_type()
+        if self.type is None:
+            self.type = self.stype.get_type()
+        return self.type
 
     def eval(self):
         name = self.module.get_unique_name("_unnamed_struct_literal")
         with self.builder.goto_entry_block():
             self.builder.position_at_start(self.builder.block)
-            ptr = self.builder.alloca(self.type.irtype, name=name)
+            ptr = self.builder.alloca(self.get_type().irtype, name=name)
         val = Value(name, self.type, ptr)
         add_new_local(name, val)
         #for m in membervals:
@@ -632,7 +634,11 @@ class LValue(Expr):
                 key = list(ptr.overloads.keys())[0]
                 begin = '_Z%d' % len(name)
                 key = begin + name + key[3:]
-                fnty = self.module.sfunctys[key]
+                ovrld = ptr.get_default_overload()
+                irtype: ir.FunctionType = ovrld.fn.type
+                ret_type: Type = ovrld.rtype
+                arg_types = ovrld.atypes
+                fnty = FuncType('', irtype, ret_type, arg_types)
                 return fnty
         # if ptr.type.is_pointer():
         #     return ptr.type.get_dereference_of()
@@ -702,13 +708,20 @@ class LValue(Expr):
                 fn, key = ovrld.fn, ovrld.key()
                 begin = '_Z%d' % len(name)
                 key = begin + name + key[3:]
-                fnty = self.module.sfunctys[key]
+                irtype: ir.FunctionType = ovrld.fn.type
+                ret_type: Type = ovrld.rtype
+                arg_types = ovrld.atypes
+                fnty = FuncType('', irtype, ret_type, arg_types)
                 return Value('', fnty.get_pointer_to(), fn)
             # else:
             #    ptr = self.module.sglobals[name]
+        if isinstance(ptr, GlobalValue):
+            irvalue = ptr.get_ir_value(self.module)
+        else:
+            irvalue = ptr.irvalue
         if ptr.type.is_reference():
             i64 = ir.IntType(64)
-            deref = self.builder.load(ptr.irvalue)
+            deref = self.builder.load(irvalue)
             v0 = self.builder.ptrtoint(deref, i64)
             v1 = self.builder.and_(v0, i64(-2))
             actualptr = self.builder.inttoptr(v1, self.get_ir_type())
@@ -749,8 +762,12 @@ class LValue(Expr):
                 return Value('', fnty.get_pointer_to(), fn)
             # else:
             #    ptr = self.module.sglobals[name]
+        if isinstance(ptr, GlobalValue):
+            irvalue = ptr.get_ir_value(self.module)
+        else:
+            irvalue = ptr.irvalue
         i64 = ir.IntType(64)
-        deref = self.builder.load(ptr.irvalue)
+        deref = self.builder.load(irvalue)
         v0 = self.builder.ptrtoint(deref, i64)
         v1 = self.builder.and_(v0, i64(-2))
         actualptr = self.builder.inttoptr(v1, self.get_ir_type())
@@ -778,18 +795,27 @@ class LValue(Expr):
             #     ptr = self.module.sfuncs[name].get_default_overload()
             # else:
             #     ptr = self.module.sglobals[name]
+        if isinstance(ptr, GlobalValue):
+            irvalue = ptr.get_ir_value(self.module)
+        else:
+            irvalue = ptr.irvalue
+        if irvalue is None:
+            lineno = self.getsourcepos().lineno
+            colno = self.getsourcepos().colno
+            throw_saturn_error(self.builder, self.module, lineno, colno,
+                               f"IRValue for {self.get_name()} in module {self.module.name} is None.")
         if ptr.is_atomic():
-            return self.builder.load_atomic(ptr.irvalue, 'seq_cst', 4)
+            return self.builder.load_atomic(irvalue, 'seq_cst', 4)
         if self.get_type().is_reference():
             # print(self.get_type(), self.get_ir_type())
             i64 = ir.IntType(64)
-            deref = self.builder.load(ptr.irvalue)
+            deref = self.builder.load(irvalue)
             v0 = self.builder.ptrtoint(deref, i64)
             v1 = self.builder.and_(v0, i64(-2))
             irtype = self.get_ir_type()
             actualptr = self.builder.inttoptr(v1, irtype)
             return self.builder.load(actualptr)
-        return self.builder.load(ptr.irvalue)
+        return self.builder.load(irvalue)
 
 
 class LValueField(Expr):
@@ -888,6 +914,7 @@ def cast_to(builder: ir.IRBuilder, module, package, expr, ctype):
         cast = ir.Constant(castt.irtype, expr.consteval())
     else:
         val = expr.eval()
+        # print(val, expr)
         if castt.is_reference() and exprt.is_value():
             if not hasattr(expr, 'get_pointer'):
                 _name = module.get_unique_name("_unnamed_reference_target")
@@ -1203,7 +1230,8 @@ class ElementOf(PostfixOp):
 
     def get_pointer(self):
         ptr = self.left.get_pointer()
-        print(ptr, self.expr.get_type())
+        irvalue = ptr.get_ir_value(self.module) if isinstance(ptr, GlobalValue) else ptr.irvalue
+        # print(ptr, self.expr.get_type())
         if self.expr.get_type().is_integer():
             leftty = self.left.get_type()
             if leftty.is_pointer():
@@ -1212,7 +1240,7 @@ class ElementOf(PostfixOp):
                 ], True)
                 return Value(ptr.name, ptr.type.get_dereference_of(), gep, ptr.qualifiers)
             else:
-                gep = self.builder.gep(ptr.irvalue, [
+                gep = self.builder.gep(irvalue, [
                     ir.Constant(ir.IntType(32), 0),
                     self.expr.eval()
                 ], True)
@@ -1290,7 +1318,11 @@ class AddressOf(PrefixOp):
                 "Cannot take the address of a non-lvalue."
             )
         ptr = self.right.get_pointer()
-        return ptr.irvalue
+        if isinstance(ptr, GlobalValue):
+            irvalue = ptr.get_ir_value(self.module)
+        else:
+            irvalue = ptr.irvalue
+        return irvalue
 
 
 class DerefOf(PrefixOp):
@@ -2403,7 +2435,7 @@ class ImportDecl(ASTNode):
         base_path = self.package.working_directory
         for path in package_paths:
             base_path += '/packages/' + path
-        self.new_package = Package(package_paths[-1], working_directory=base_path)
+        self.new_package = Package(package_paths[-1], working_directory=base_path, target=self.package.target)
 
     def generate_symbol(self):
         from sparser import parser, ParserState
@@ -2411,7 +2443,8 @@ class ImportDecl(ASTNode):
         from cachedmodule import CachedModule
         import os.path
         base_path = self.new_package.working_directory
-        symbols_path = base_path + '/symbols.json'
+        symbols_path = base_path + f'/symbols.{self.new_package.target.short_name}.json'
+        print('Symbols path:', symbols_path)
         package = self.new_package
         if os.path.isfile(symbols_path) and os.path.getmtime(symbols_path) > os.path.getmtime(base_path + '/main.sat'):
             package.load_symbols_from_file(self.module, symbols_path)
@@ -2471,6 +2504,7 @@ class ImportDecl(ASTNode):
         # print(self.new_package)
 
     def eval(self):
+        return
         from cachedmodule import CachedModule
         from lexer import lexer
         from sparser import parser, ParserState
@@ -2538,6 +2572,55 @@ class CIncludeDecl(ASTNode):
 
     def eval(self):
         pass
+
+
+class BinaryInclude(ASTNode):
+    """
+    A binary file include.\n
+    name := binary_include(path);\n
+    name: T = binary_include(path);
+    """
+    def __init__(self, builder, module, package, spos, path, name, var_type=None,
+                 visibility=Visibility.PUBLIC):
+        super().__init__(builder, module, package, spos)
+        self.path = clean_string_literal(path.value)
+        self.name = name.get_name()
+        self.type = None
+        self.symbol = None
+        self.visibility = visibility
+
+    def get_type(self):
+        if self.type is None:
+            import os
+            size = os.path.getsize(self.path)
+            self.type = types['byte'].get_array_of(size)
+        return self.type
+
+    def generate_symbol(self):
+        if self.symbol is None or self.symbol.get_ir_value(self.module) is None:
+            global_fmt = ir.GlobalVariable(self.module, self.get_type().get_ir_type(), name=self.name)
+            global_fmt.linkage = 'external'
+            global_fmt.global_constant = True
+            ptr = GlobalValue(self.name, self.get_type(), global_fmt,
+                              visibility=self.visibility,
+                              qualifiers=[('const',)])
+            ptr.add_ir_value(self.module, global_fmt)
+            self.symbol = self.package.add_symbol(self.name, ptr)
+            # print('Generating symbol ', ptr)
+
+    def eval(self):
+        data_type = self.get_type().get_ir_type()
+        bin_global = self.package.lookup_symbol(self.name)
+        global_fmt = bin_global.get_ir_value(self.module)
+        global_fmt.linkage = LinkageType.VALUE[LinkageType.DEFAULT]
+        global_fmt.global_constant = True
+        with open(self.path, 'rb') as file:
+            data = file.read()
+        fmt_data = bytearray(data)
+        c_data = ir.Constant(ir.ArrayType(ir.IntType(8), len(data)),
+                             fmt_data)
+        global_fmt.initializer = c_data.bitcast(data_type)
+        ptr = Value(self.name, self.get_type(), global_fmt, visibility=self.visibility, qualifiers=[('const',)])
         
 
 class CDeclareDecl(ASTNode):
@@ -2660,7 +2743,7 @@ class FuncArg(ASTNode):
 
         arg = ir.Argument(func, self.type.irtype, name=self.name.value)
         if 'sret' in self.qualifiers:
-            arg.add_attribute('sret')
+            arg.add_attribute(f'sret({str(self.type.irtype)})')
         if decl:
             val = Value(self.name.value, self.type, arg, qualifiers=self.qualifiers)
             add_new_local(self.name.value, val)
@@ -2765,6 +2848,10 @@ class FuncDecl(ASTNode):
         package = self.package
         if self.package.lookup_symbol(self.name.value) is None:
             rtype = self.rtype.get_type()
+            if rtype.is_struct() and rtype.is_value():
+                sret = True
+            else:
+                sret = False
             # if rtype.is_struct() and rtype.is_value():
             #     self.decl_args.add(FuncArg(
             #         self.builder,
@@ -2776,16 +2863,22 @@ class FuncDecl(ASTNode):
             decltypes = self.decl_args.get_arg_decl_type_list()
             sargtypes = [decltype.get_type() for decltype in decltypes]
             argtypes = [sargtype.get_ir_type() for sargtype in sargtypes]
-            fnty = ir.FunctionType(rtype.get_ir_type(), argtypes, var_arg=self.var_arg)
+            if sret:
+                argtypes.append(rtype.get_ir_type().as_pointer())
+                rirtype = ir.VoidType()
+            else:
+                rirtype = rtype.get_ir_type()
+            fnty = ir.FunctionType(rirtype, argtypes, var_arg=self.var_arg)
             #print(f"fn {self.name.value} ({[str(stype) for stype in sargtypes]}): {str(rtype)};")
             # print("%s (%s)" % (self.name.value, fnty))
             sfnty = FuncType("", fnty, rtype, sargtypes)
-            if self.attribute_list and self.attribute_list.has_attr('link_name'):
-                fname = self.attribute_list.get_attr('link_name').args[0]
-            else:
-                fname = self.name.value
+            fname = self.name.value
             if not self.builder.c_decl and not (self.name.value == 'main' or self.name.value == '_entry'):
                 fname = mangle_name(self.name.value, sfnty.atypes)
+                # print(fname, '=>', demangle_name(fname))
+
+            if self.attribute_list and self.attribute_list.has_attr('link_name'):
+                fname = self.attribute_list.get_attr('link_name').args[0].value.strip('\"')
             try:
                 self.module.get_global(fname)
                 text_input = self.builder.filestack[self.builder.filestack_idx]
@@ -2810,6 +2903,9 @@ class FuncDecl(ASTNode):
             fn = ir.Function(self.module, fnty, fname)
             if self.name.value not in self.module.sfuncs:
                 fn_symbol = package.add_symbol(self.name.value, Func(self.name.value, sfnty.rtype, visibility=self.visibility))
+                if self.attribute_list is not None and self.attribute_list.has_attr('link_name'):
+                    link_name = self.attribute_list.get_attr('link_name').args[0]
+                    fn_symbol.link_name = link_name
                 fn_symbol.add_overload(sfnty.atypes, fn)
             else:
                 symbol = package[self.name.value]
@@ -2834,19 +2930,30 @@ class FuncDecl(ASTNode):
         #                         self.package,
         #                         self.rtype.spos,
         #                         self.rtype), ['sret']))
-        rtype = self.rtype
+        rtype = self.rtype.get_type()
+        if rtype.is_struct() and rtype.is_value():
+            sret = True
+        else:
+            sret = False
 
         decltypes = self.decl_args.get_arg_decl_type_list()
         sargtypes = [decltype.get_type() for decltype in decltypes]
         argtypes = [argtype.get_ir_type() for argtype in sargtypes]
+        if sret:
+            argtypes.append(rtype.get_ir_type().as_pointer())
+            rirtype = ir.VoidType()
+        else:
+            rirtype = rtype.get_ir_type()
 
-        fnty = ir.FunctionType(rtype.get_ir_type(), argtypes, var_arg=self.var_arg)
+        fnty = ir.FunctionType(rirtype, argtypes, var_arg=self.var_arg)
         #print(f"fn {self.name.value} ({[str(stype) for stype in sargtypes]}): {str(self.rtype.type)};")
         #print("%s (%s)" % (self.name.value, fnty))
-        sfnty = FuncType("", fnty, rtype.type, sargtypes)
+        sfnty = FuncType("", fnty, rtype, sargtypes)
         fname = self.name.value
         if not self.builder.c_decl and not (self.name.value == 'main' or self.name.value == '_entry'):
             fname = mangle_name(self.name.value, sfnty.atypes)
+        if self.attribute_list and self.attribute_list.has_attr('link_name'):
+            fname = self.attribute_list.get_attr('link_name').args[0].value.strip('\"')
         symbol = self.package.lookup_symbol(self.name.value)
         #print(fname)
         if symbol is not None and symbol.get_overload(sfnty.atypes) is not None:
@@ -2875,6 +2982,7 @@ class FuncDecl(ASTNode):
                 self.module.sfuncs[self.name.value] = Func(self.name.value, sfnty.rtype, visibility=self.visibility)
                 self.package.add_symbol(self.name.value, self.module.sfuncs[self.name.value])
                 self.module.sfuncs[self.name.value].add_overload(sfnty.atypes, fn)
+                self.module.sfuncs[self.name.value].link_name = self.attribute_list.get_attr('link_name').args[0]
             else:
                 self.module.sfuncs[self.name.value].add_overload(sfnty.atypes, fn)
         #print("New function:", fname)
@@ -2891,15 +2999,30 @@ class FuncDecl(ASTNode):
             "isDefinition":True
         }, True)
         self.builder.position_at_start(block)
-        fn.args = tuple(self.decl_args.get_arg_list(fn))
+        args = self.decl_args.get_arg_list(fn)
+        if sret:
+            ty = rtype.get_pointer_to()
+            irty = ty.get_ir_type()
+            arg = ir.Argument(fn, irty, name='sret')
+            arg.add_attribute('sret')
+            with self.builder.goto_entry_block():
+                self.builder.position_at_start(self.builder.block)
+                ptr = self.builder.alloca(irty, name='sret')
+            self.builder.store(arg, ptr)
+            argval = Value('sret', ty, arg)
+            val = Value('sret', ty, ptr)
+            add_new_local('sret', val)
+            args.append(argval.irvalue)
+            self.builder.ret_dest = arg
+        fn.args = tuple(args)
         self.block.eval()
         if not self.builder.block.is_terminated:
-            #for stmt in self.builder.defer:
-            #    stmt.eval()
             if isinstance(self.builder.function.function_type.return_type, ir.VoidType):
                 self.builder.ret_void()
             else:
                 self.builder.ret(ir.Constant(ir.IntType(32), 0))
+        if sret:
+            self.builder.ret_dest = None
         pop_inner_scope()
 
 
@@ -2935,15 +3058,69 @@ class FuncDeclExtern(ASTNode):
     def getsourcepos(self):
         return self.spos
 
+    def generate_symbol(self):
+        package = self.package
+        if self.package.lookup_symbol(self.name.value) is None:
+            rtype = self.rtype.get_type()
+            # if rtype.is_struct() and rtype.is_value():
+            #     self.decl_args.add(FuncArg(
+            #         self.builder,
+            #         self.module,
+            #         self.package,
+            #         self.rtype.spos,
+            #         Token('IDENT', 'ret', self.spos),
+            #         rtype.get_pointer_to(), ['sret']))
+            decltypes = self.decl_args.get_arg_decl_type_list()
+            sargtypes = [decltype.get_type() for decltype in decltypes]
+            argtypes = [sargtype.get_ir_type() for sargtype in sargtypes]
+            fnty = ir.FunctionType(rtype.get_ir_type(), argtypes, var_arg=self.var_arg)
+            # print(f"fn {self.name.value} ({[str(stype) for stype in sargtypes]}): {str(rtype)};")
+            # print("%s (%s)" % (self.name.value, fnty))
+            sfnty = FuncType("", fnty, rtype, sargtypes)
+            fname = self.name.value
+            if not self.builder.c_decl and not (self.name.value == 'main' or self.name.value == '_entry'):
+                fname = mangle_name(self.name.value, sfnty.atypes)
+            if self.attribute_list and self.attribute_list.has_attr('link_name'):
+                fname = self.attribute_list.get_attr('link_name').args[0].value.strip('\"')
+            try:
+                self.module.get_global(fname)
+                text_input = self.builder.filestack[self.builder.filestack_idx]
+                lines = text_input.splitlines()
+                lineno = self.name.getsourcepos().lineno
+                colno = self.name.getsourcepos().colno
+                if lineno > 1:
+                    line1 = lines[lineno - 2]
+                    line2 = lines[lineno - 1]
+                    print("%s\n%s\n%s^" % (line1, line2, "~" * (colno - 1)))
+                else:
+                    line1 = lines[lineno - 1]
+                    print("%s\n%s^" % (line1, "~" * (colno - 1)))
+                raise RuntimeError("%s (%d:%d): Redefining global value, %s, as function." % (
+                    self.module.filestack[self.module.filestack_idx],
+                    lineno,
+                    colno,
+                    self.name.value
+                ))
+            except KeyError:
+                pass
+            fn = ir.Function(self.module, fnty, fname)
+            symbol = package.lookup_symbol(fname)
+            if symbol is None:
+                fn_symbol = package.add_symbol(self.name.value,
+                                               Func(self.name.value, sfnty.rtype, visibility=self.visibility))
+                if self.attribute_list and self.attribute_list.has_attr('link_name'):
+                    fn_symbol.link_name = fname
+                fn_symbol.add_overload(sfnty.atypes, fn)
+            else:
+                symbol.add_overload(sfnty.atypes, fn)
+
     def eval(self):
         push_new_scope(self.builder)
         rtype = self.rtype.get_type()
-
         decltypes = self.decl_args.get_arg_decl_type_list()
         sargtypes = [decltype.get_type() for decltype in decltypes]
         argtypes = [argtype.get_ir_type() for argtype in sargtypes]
         #print(self.name, rtype, *argtypes)
-
         fnty = ir.FunctionType(rtype.irtype, argtypes, var_arg=self.var_arg)
         #print("%s (%s)" % (self.name.value, fnty))
         sfnty = FuncType("", fnty, rtype, sargtypes)
@@ -2952,16 +3129,66 @@ class FuncDeclExtern(ASTNode):
             fname = mangle_name(self.name.value, sfnty.atypes)
         if self.attribute_list and self.attribute_list.has_attr('link_name'):
             fname = self.attribute_list.get_attr('link_name').args[0].value.strip('\"')
-        fn = ir.Function(self.module, fnty, fname)
+        try:
+            fn = self.module.get_global(fname)
+        except KeyError:
+            fn = ir.Function(self.module, fnty, fname)
         fn.args = tuple(self.decl_args.get_decl_arg_list(fn))
         #self.module.sfunctys[self.name.value] = sfnty
-        if self.name.value not in self.module.sfuncs:
+        symbol = self.package.lookup_symbol(self.name.value)
+        if symbol is None:
             self.module.sfuncs[self.name.value] = Func(self.name.value, sfnty.rtype)
             self.package.add_symbol(self.name.value, self.module.sfuncs[self.name.value])
             self.module.sfuncs[self.name.value].add_overload(sfnty.atypes, fn)
         else:
-            self.module.sfuncs[self.name.value].add_overload(sfnty.atypes, fn)
+            symbol.add_overload(sfnty.atypes, fn)
         pop_inner_scope()
+
+
+class LambdaExpr(Expr):
+    """
+    A lambda expression.\n
+    fn(decl_args): rtype { block }\n
+    [capture] fn(decl_args): rtype { block }
+    """
+    def __init__(self, builder, module, package, spos, rtype, block, decl_args, capture=None):
+        super().__init__(builder, module, package, spos)
+        self.rtype = rtype
+        self.block = block
+        self.decl_args = decl_args
+        self.capture = capture
+        self.type = None
+        self.irvalue = None
+
+    def get_type(self):
+        if self.type is None:
+            decltypes = self.decl_args.get_arg_decl_type_list()
+            sargtypes = [decltype.get_type() for decltype in decltypes]
+            argtypes = [argtype.get_ir_type() for argtype in sargtypes]
+            self.type = FuncType('',
+                                 ir.FunctionType(self.rtype.get_ir_type(), argtypes),
+                                 self.rtype.get_type(),
+                                 sargtypes).get_pointer_to()
+        return self.type
+
+    def eval(self):
+        if self.irvalue is None:
+            push_new_scope(self.builder)
+            fn = ir.Function(self.module,
+                             self.get_type().get_dereference_of().get_ir_type(),
+                             self.module.get_unique_name(self.builder.function.name + '._unnamed_lambda'))
+            fn.linkage = LinkageType.VALUE[LinkageType.PRIVATE]
+            block = fn.append_basic_block('entry')
+            with self.builder.goto_block(block):
+                fn.args = tuple(self.decl_args.get_arg_list(fn))
+                self.block.eval()
+                if not self.builder.block.is_terminated:
+                    if isinstance(self.builder.function.function_type.return_type, ir.VoidType):
+                        self.builder.ret_void()
+                    else:
+                        self.builder.ret(ir.Constant(ir.IntType(32), 0))
+            self.irvalue = fn
+        return self.irvalue
 
 
 class GlobalVarDecl(ASTNode):
@@ -3008,7 +3235,17 @@ class GlobalVarDecl(ASTNode):
 
             quals = [s[0] for s in self.spec.copy()]
 
-            val = Value(self.name.value, vartype, None, objtype='global', visibility=self.visibility, qualifiers=quals)
+            gvar = ir.GlobalVariable(self.module, vartype.irtype, self.name.value)
+            gvar.align = 4
+            gvar.linkage = LinkageType.VALUE[LinkageType.EXTERNAL]
+
+            val = GlobalValue(self.name.value, vartype, gvar,
+                              visibility=self.visibility, qualifiers=quals)
+            if val.is_const():
+                gvar.global_constant = True
+            val.add_ir_value(self.module, gvar)
+            self.symbol = val
+            self.package.add_symbol(self.name.value, val)
 
     def eval(self):
         self.vtype.eval()
@@ -3030,24 +3267,18 @@ class GlobalVarDecl(ASTNode):
                     lineno = self.spec[i][1].lineno
                     colno = self.spec[i][1].colno
                     throw_saturn_error(self.builder, self.module, lineno, colno,
-                                       "Can't create immut global variable with no initial value."
-                                       )
-        gvar = ir.GlobalVariable(self.module, vartype.irtype, self.name.value)
+                                       "Can't create immut global variable with no initial value.")
+
+        gvar = self.symbol.get_ir_value(self.module)
         gvar.align = 4
-        gvar.linkage = LinkageType.VALUE[self.visibility]
+        gvar.linkage = LinkageType.VALUE[LinkageType.DEFAULT]
 
         if self.initval:
             if self.initval.is_constexpr:
                 gvar.initializer = ir.Constant(vartype.irtype, self.initval.consteval())
             else:
                 gvar.initializer = self.initval.eval()
-        
-        ptr = Value(self.name.value, vartype, gvar, visibility=self.visibility, qualifiers=quals)
-        if ptr.is_const():
-            gvar.global_constant = True
-        self.package.add_symbol(self.name.value, ptr)
         # add_new_global(self.name.value, ptr)
-        return ptr
 
 
 class MethodDecl(ASTNode):
@@ -3093,14 +3324,6 @@ class MethodDecl(ASTNode):
         symbol_path = f"{self.struct.get_name()}::{self.name.value}"
         if self.package.lookup_symbol(symbol_path) is None:
             rtype = self.rtype.get_type()
-            # if rtype.is_struct() and rtype.is_value():
-            #     self.decl_args.add(FuncArg(
-            #         self.builder,
-            #         self.module,
-            #         self.package,
-            #         self.rtype.spos,
-            #         Token('IDENT', 'ret', self.spos),
-            #         rtype.get_pointer_to(), ['sret']))
             decltypes = self.decl_args.get_arg_decl_type_list()
             sargtypes = [decltype.get_type() for decltype in decltypes]
             argtypes = [sargtype.get_ir_type() for sargtype in sargtypes]
@@ -3109,9 +3332,17 @@ class MethodDecl(ASTNode):
             # print("%s (%s)" % (self.name.value, fnty))
             sfnty = FuncType("", fnty, rtype, sargtypes)
             name = self.name.value
-            fname = self.struct.get_name() + '.' + name
+
+            struct_symbol = package.lookup_symbol(self.struct.get_name())
+            fn_symbol = Func(self.name.value, sfnty.rtype, visibility=self.visibility)
+            fn_symbol.parent = struct_symbol
+
+            struct_symbol[name] = fn_symbol
+
+            fname = name
             if not self.builder.c_decl and not (self.name.value == 'main' or self.name.value == '_entry'):
-                fname = mangle_name(fname, sfnty.atypes)
+                fname = mangle_symbol(fn_symbol, atypes=sfnty.atypes)
+                # print(name, '=>', fname)
             try:
                 self.module.get_global(fname)
                 text_input = self.builder.filestack[self.builder.filestack_idx]
@@ -3140,6 +3371,34 @@ class MethodDecl(ASTNode):
                 fn_symbol = Func(name, sfnty.rtype, visibility=self.visibility)
                 fn_symbol.parent = struct_symbol
                 struct_symbol[name] = fn_symbol
+                if name == 'new':
+                    struct_symbol.add_ctor(fn_symbol)
+                elif self.name.value == 'delete':
+                    struct_symbol.add_dtor(fn_symbol)
+                elif self.name.value == 'operator.assign':
+                    struct_symbol.add_operator('=', fn_symbol)
+                elif self.name.value == 'operator.eq':
+                    struct_symbol.add_operator('==', fn_symbol)
+                elif self.name.value == 'operator.spaceship':
+                    struct_symbol.add_operator('<=>', fn_symbol)
+                elif self.name.value == 'operator.add':
+                    struct_symbol.add_operator('+', fn_symbol)
+                elif self.name.value == 'operator.sub':
+                    struct_symbol.add_operator('-', fn_symbol)
+                elif self.name.value == 'operator.mul':
+                    struct_symbol.add_operator('*', fn_symbol)
+                elif self.name.value == 'operator.div':
+                    struct_symbol.add_operator('/', fn_symbol)
+                elif self.name.value == 'operator.mod':
+                    struct_symbol.add_operator('%', fn_symbol)
+                elif self.name.value == 'operator.and':
+                    struct_symbol.add_operator('&', fn_symbol)
+                elif self.name.value == 'operator.or':
+                    struct_symbol.add_operator('|', fn_symbol)
+                elif self.name.value == 'operator.xor':
+                    struct_symbol.add_operator('^', fn_symbol)
+                else:
+                    struct_symbol.add_method(mname, fn_symbol)
                 fn_symbol.add_overload(sfnty.atypes, fn)
             else:
                 fn_symbol = struct_symbol[name]
@@ -3157,10 +3416,14 @@ class MethodDecl(ASTNode):
         #print("%s (%s)" % (self.name.value, fnty))
         sfnty = FuncType("", fnty, rtype, sargtypes)
         name = self.name.value
-        fname = self.struct.get_name() + '.' + name
-        if not self.builder.c_decl:
-            fname = mangle_name(name, sfnty.atypes)
+
+        struct_type = self.package.lookup_symbol(self.struct.get_name())
         symbol = self.package.lookup_symbol(f"{self.struct.get_name()}::{name}")
+
+        fname = name
+        if not self.builder.c_decl:
+            fname = mangle_symbol(symbol, atypes=sfnty.atypes)
+
         if symbol is not None and symbol.get_overload(sfnty.atypes) is not None:
             fn = symbol.get_overload(sfnty.atypes)
             if not fn.is_declaration:
@@ -3203,13 +3466,20 @@ class MethodDecl(ASTNode):
         # except(KeyError):
         #     pass
         else:
+            func = Func(name, sfnty.rtype, visibility=self.visibility)
+            func.parent = struct_type
+            struct_type[name] = func
+            fname = mangle_symbol(func, atypes=sfnty.atypes)
+
             fn = ir.Function(self.module, fnty, fname)
+
             if self.name.value not in self.module.sfuncs:
-                self.module.sfuncs[self.name.value] = Func(self.name.value, sfnty.rtype, visibility=self.visibility)
+                self.module.sfuncs[self.name.value] = func
                 self.package.add_symbol(self.name.value, self.module.sfuncs[self.name.value])
                 self.module.sfuncs[self.name.value].add_overload(sfnty.atypes, fn)
             else:
                 self.module.sfuncs[self.name.value].add_overload(sfnty.atypes, fn)
+            symbol = self.module.sfuncs[self.name.value]
         #print("New method:", fname)
         struct_type = self.package.lookup_symbol(self.struct.get_name())
         if struct_type is None:
@@ -3232,8 +3502,20 @@ class MethodDecl(ASTNode):
             struct_type.add_operator('+', symbol)
         elif self.name.value == 'operator.sub':
             struct_type.add_operator('-', symbol)
+        elif self.name.value == 'operator.mul':
+            struct_type.add_operator('*', symbol)
+        elif self.name.value == 'operator.div':
+            struct_type.add_operator('/', symbol)
+        elif self.name.value == 'operator.mod':
+            struct_type.add_operator('%', symbol)
+        elif self.name.value == 'operator.and':
+            struct_type.add_operator('&', symbol)
+        elif self.name.value == 'operator.or':
+            struct_type.add_operator('|', symbol)
+        elif self.name.value == 'operator.xor':
+            struct_type.add_operator('^', symbol)
         else:
-            struct_type.add_method(self.name.value, symbol)
+            struct_type.add_method(name, symbol)
         block = fn.append_basic_block("entry")
         self.builder.dbgsub = self.module.add_debug_info("DISubprogram", {
             "name": name, 
@@ -3701,10 +3983,10 @@ class TypeDecl(ASTNode):
 
 
 def calc_sizeof_struct(builder, module, stype):
+    int32 = ir.IntType(32)
     stypeptr = stype.irtype.as_pointer()
     null = stypeptr('zeroinitializer')
-    gep = null.gep([ir.Constant(ir.IntType(32), 1)])
-    size = builder.ptrtoint(gep, ir.IntType(32))
+    size = ir.Constant(int32, null.gep([ir.Constant(ir.IntType(32), 1)]).ptrtoint(int32))
     return size
 
 
@@ -3818,7 +4100,7 @@ class StructDecl(ASTNode):
                         ir.Constant(ir.IntType(32), 0),
                         ir.Constant(ir.IntType(32), i)
                     ])
-                    if fld.irvalue.constant == 'null':
+                    if fld.get_ir_value(self.module).constant == 'null':
                         self.builder.store(ir.Constant(gep.type.pointee, gep.type.pointee.null), gep)
                     else:
                         self.builder.store(fld.irvalue, gep)
@@ -3911,6 +4193,15 @@ class FuncCall(Expr):
                     #                    self.lvalue.get_name())
                     #                    )
                 args = [arg.eval() for arg in self.args]
+                rty = sfn.rtype
+                if rty.is_struct() and rty.is_value():
+                    irty = rty.get_ir_type()
+                    with self.builder.goto_entry_block():
+                        self.builder.position_at_start(self.builder.block)
+                        ptr = self.builder.alloca(irty, name='sret')
+                    args.append(ptr)
+                    call = self.builder.call(ovrld, args, self.lvalue.get_name())
+                    return self.builder.load(ptr)
                 return self.builder.call(ovrld, args, self.lvalue.get_name())
             #ptr = self.module.sglobals[name]
         args = [arg.eval() for arg in self.args]
@@ -3942,7 +4233,7 @@ class MethodCall(Expr):
         #return self.module.get_global(self.callee.get_type().name + '.' + self.lvalue.get_name()).ftype.return_type
 
     def eval(self):
-        name = self.callee.get_type().name + '::' + self.lvalue.get_name()
+        name = self.callee.get_type().get_full_name() + '::' + self.lvalue.get_name()
         # sfn = self.module.sfuncs[name]
         sfn = self.package.lookup_symbol(name)
         if not sfn:
@@ -3990,7 +4281,11 @@ class ReturnStatement(Statement):
             eval_dtor_scope()
             eval_defer_scope()
             if self.value is not None:
-                self.builder.ret(self.value.eval())
+                if self.builder.ret_dest is not None:
+                    self.builder.store(self.value.eval(), self.builder.ret_dest)
+                    self.builder.ret_void()
+                else:
+                    self.builder.ret(self.value.eval())
             else:
                 self.builder.ret_void()
         self.builder.branch(ret_block)

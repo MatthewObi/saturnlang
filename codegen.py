@@ -1,7 +1,10 @@
 import ctypes
+import glob
 
-from llvmlite import ir, binding
+from llvmlite import ir, binding as llvm
 from irutil import TokenType
+import ctypes.util
+import os
 
 char = ir.IntType(8)
 int1 = ir.IntType(1)
@@ -12,29 +15,26 @@ int64 = ir.IntType(64)
 double = ir.DoubleType()
 void = ir.VoidType()
 
+llvm.initialize()
+llvm.initialize_native_target()
+llvm.initialize_native_asmprinter()
+
 
 class CodeGen:
     def __init__(self, filename, opt_level, compile_target):
-        self.binding = binding
+        self.binding = llvm
         self.filename = filename
         self.opt_level = opt_level
         self.compile_target = compile_target
-        self.binding.initialize()
-        self.binding.initialize_native_target()
-        self.binding.initialize_native_asmprinter()
         self._config_llvm()
         self._create_execution_engine()
         self._declare_print_function()
+        self._link_ref()
 
     def _config_llvm(self):
         # Config LLVM
         self.module = ir.Module(name=self.filename)
-        if self.compile_target == 'wasm':
-            self.module.triple = "wasm32-unknown-wasi"
-        elif self.compile_target == 'windows-x64':
-            self.module.triple = "x86_64-pc-windows-msvc"
-        elif self.compile_target == 'linux-x64':
-            self.module.triple = "x86_64-pc-linux-gcc"
+        self.module.triple = self.compile_target.triple
         self.module.di_file = self.module.add_debug_info("DIFile", {
             "filename": "main.sat",
             "directory": "saturn",
@@ -98,6 +98,7 @@ class CodeGen:
         self.module.memmove = self.module.declare_intrinsic('llvm.memmove', [int8ptr, int8ptr, int32])
         self.builder = ir.IRBuilder()
         self.builder.c_decl = False
+        self.builder.ret_dest = None
         self.builder.compile_target = self.compile_target
 
     def _create_execution_engine(self):
@@ -110,9 +111,12 @@ class CodeGen:
         target_machine = target.create_target_machine()
         self.target_machine = target_machine
         # And an execution engine with an empty backing module
-        backing_mod = binding.parse_assembly("")
-        engine = binding.create_mcjit_compiler(backing_mod, target_machine)
+        backing_mod = llvm.parse_assembly("")
+        engine = llvm.create_mcjit_compiler(backing_mod, target_machine)
+        self.binding.check_jit_execution()
         self.engine = engine
+        # self.binding.load_library_permanently('C:/Program Files (x86)/Microsoft Visual Studio/2019/'
+        #                                       'Community/VC/Tools/MSVC/14.26.28801/lib/x64/libcmt.lib')
 
     def _declare_coroutine_functions(self):
         token_t = TokenType()
@@ -153,63 +157,8 @@ class CodeGen:
         # co_id_async = ir.Function(self.module, co_id_async_ty, 'llvm.coro.id.async')
         # self.module.co_id_async = co_id_async
 
-    def _define_ref_load(self):
-        # define i8* @saturn.ref.load(i8* %ref) {
-        ref_load_ty = ir.FunctionType(int8ptr, [int8ptr])
-        ref_load = ir.Function(self.module, ref_load_ty, 'saturn.ref.load')
-
-        # entry:
-        block = ref_load.append_basic_block("entry")
-        self.builder.position_at_start(block)
-        _args = [
-            ir.Argument(ref_load, int8ptr),
-        ]
-        ref_load.args = tuple(_args)
-
-        #   %0 = ptrtoint i8* %ref to 164
-        _0 = self.builder.ptrtoint(_args[0], int64)
-
-        #   %1 = and i64 %0, -4
-        _1 = self.builder.and_(_0, int64(-4))
-
-        #   %2 = inttoptr i64 %1 to i8*
-        _2 = self.builder.inttoptr(_1, int8ptr)
-
-        #   ret i8* %2
-        self.builder.ret(_2)
-        # }
-
-        self.module.ref_load = ref_load
-
-    def _define_ref_delete(self):
-        int8ptrptr = int8ptr.as_pointer()
-        # define void @saturn.ref.delete(i8** %arg0) {
-        ref_delete_ty = ir.FunctionType(void, [int8ptrptr])
-        ref_delete = ir.Function(self.module, ref_delete_ty, 'saturn.ref.delete')
-
-        # entry:
-        block = ref_delete.append_basic_block("entry")
-        self.builder.position_at_start(block)
-
-        #   %ref = alloca i8**
-        _entry_args = [
-            ir.Argument(ref_delete, int8ptrptr),
-        ]
-        ref_delete.args = tuple(_entry_args)
-        ref = self.builder.alloca(int8ptrptr)
-
-        #   store i8** %arg0, i8*** %ref
-        self.builder.store(_entry_args[0], ref)
-
-        #   %ld = load i8**, i8*** %ref
-        ld = self.builder.load(ref)
-
-        #   store i8* null, i8** %ld
-        self.builder.store(int8ptr(int8ptr.null), ld)
-
-        #   ret void
-        self.builder.ret_void()
-        # }
+    def _link_ref(self):
+        pass
 
     def _declare_print_function(self):
         # Declare Printf function
@@ -227,7 +176,7 @@ class CodeGen:
         self.module.llvm_dbg_decl = llvm_dbg_decl
 
         aligned_malloc_name = 'aligned_alloc'
-        if self.compile_target == 'windows-x64':
+        if self.compile_target.platform == 'windows':
             aligned_malloc_name = '_aligned_malloc'
         aligned_malloc_ty = ir.FunctionType(int8ptr, [int32, int32])
         aligned_malloc = ir.Function(self.module, aligned_malloc_ty, name=aligned_malloc_name)
@@ -235,7 +184,7 @@ class CodeGen:
 
         free_name = 'free'
         free_ty = ir.FunctionType(void, [int8ptr])
-        if self.compile_target == 'windows-x64':
+        if self.compile_target.platform == 'windows':
             free_name = '_aligned_free'
         free = ir.Function(self.module, free_ty, name=free_name)
         self.module.free = free
@@ -306,8 +255,8 @@ class CodeGen:
         self.builder.store(_entry_args[0], argc)
         argv = self.builder.alloca(i8_ptr_ptr)
         self.builder.store(_entry_args[1], argv)
-        ret_code = self.builder.call(self.module.get_global("main"), 
-            [self.builder.load(argc), self.builder.load(argv)])
+        ret_code = self.builder.call(self.module.get_global("main"),
+                                     [self.builder.load(argc), self.builder.load(argv)])
         self.builder.ret(ret_code)
 
     def ir_to_c_type(self, irtype: ir.Type):
@@ -354,23 +303,39 @@ class CodeGen:
             return CFUNCTYPE(retty, *argtys)
         return None
 
-    def jit_execute(self, fn: ir.Function, *params):
-        from ctypes import CFUNCTYPE, c_int
+    def jit_execute(self, ir: llvm.ModuleRef, fn: ir.Function, *params):
+        from ctypes import CFUNCTYPE, WINFUNCTYPE, c_int, c_char_p
+        # puts_ptr = self.binding.address_of_symbol('puts')
+        # self.engine.add_global_mapping(ir.get_function('puts'), puts_ptr)
         func_ptr = self.engine.get_function_address(fn.name)
-        # print(f"Function at 0x{func_ptr:X}")
+        print(f"Function at 0x{func_ptr:X}")
         retty = self.ir_to_c_type(fn.ftype.return_type)
         argtys = [self.ir_to_c_type(argty) for argty in fn.ftype.args]
-        # print(retty, *argtys, *params)
+        print(retty, *argtys, *params)
         cparams = [param for param in params]
         func = CFUNCTYPE(retty, *argtys)(func_ptr)
-        # print(func, *cparams)
+        print(fn.name, *cparams)
+        # puts_ir_ptr = self.engine.get_function_address('puts')
+        # puts_fn = CFUNCTYPE(c_int, c_char_p)(puts_ptr)
+        # puts_fn(b'Hello, world!')
+        # print(f"puts actual address: 0x{puts_ptr:X}")
         return func(*cparams)
 
     def save_ir(self, filename, ir):
-        with open(filename, 'w') as output_file:
+        with open(filename, 'w', encoding='utf8') as output_file:
             output_file.write(str(ir))
 
     def save_obj(self, filename, ir):
         obj = self.target_machine.emit_object(ir)
         with open(filename, 'wb') as output_file:
             output_file.write(obj)
+
+    def load_obj_file(self, filename):
+        self.engine.add_object_file(filename)
+
+    def load_ir(self, filename) -> llvm.ModuleRef:
+        with open(filename, 'r', encoding='utf8') as input_file:
+            ir_code = input_file.read()
+        mod = self.binding.parse_assembly(ir_code)
+        mod.verify()
+        return mod
