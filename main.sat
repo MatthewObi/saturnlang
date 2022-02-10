@@ -14,7 +14,7 @@ pub fn addNum(n: int): int
     return n + n;
 }
 
-pub fn fnApply(input: int, fx: *fn(int) int): int
+pub fn fnApply(input: int, fx: *fn(int) -> int): int
 {
     return fx(input);
 }
@@ -26,6 +26,9 @@ pub fn testLambda(): int
     };
     printf("%d^2 = %d\n", 5, lambda(5));
     printf("%d^2 = %d\n", 7, lambda(7));
+    printf("%d^2 = %d\n", 7, fn(x: int): int {
+        return x * x;
+    }(7));
     return 0;
 }
 
@@ -90,6 +93,10 @@ pub fn main(argc: int, argv: *cstring): int
     printf(strSwitchTest, 11, switch_test(11));
     printf(strSwitchTest, 45, switch_test(45));
     printf(strSwitchTest, 38, switch_test(38));
+    strElseIfTest := "elif_test(%d) = %d\n";
+    printf(strElseIfTest, 11, elif_test(11));
+    printf(strElseIfTest, 45, elif_test(45));
+    printf(strElseIfTest, 38, elif_test(38));
 
     x := 13;
     printf("x = %d\n", x);

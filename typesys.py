@@ -151,11 +151,10 @@ class Type(Symbol):
                     break
             ql.reverse()
             return Type(self.name,
-                self.tclass,
-                self.irtype.pointee,
-                qualifiers=ql,
-                traits=self.traits
-            )
+                        self.tclass,
+                        self.irtype.pointee,
+                        qualifiers=ql,
+                        traits=self.traits)
         else:
             ql = self.qualifiers.copy()
             ql.reverse()

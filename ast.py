@@ -387,6 +387,7 @@ class StringLiteral(Expr):
         global_fmt = ir.GlobalVariable(self.module, c_fmt.type, name=self.module.get_unique_name("str"))
         global_fmt.linkage = 'internal'
         global_fmt.global_constant = True
+        global_fmt.unnamed_addr = True
         global_fmt.initializer = c_fmt
         self.value = self.builder.bitcast(global_fmt, self.type.irtype)
         return self.value
@@ -461,6 +462,7 @@ class ArrayLiteralElement(Expr):
         super().__init__(builder, module, package, spos)
         self.expr = expr
         self.index = index
+        self.is_constexpr = self.expr.is_constexpr
 
 
 class ArrayLiteralBody:
@@ -469,9 +471,11 @@ class ArrayLiteralBody:
         self.module = module
         self.spos = spos
         self.values = []
+        self.is_constexpr = True
 
     def add_element(self, expr):
-        self.values.append( expr )
+        self.values.append(expr)
+        self.is_constexpr = self.is_constexpr and expr.is_constexpr
 
 
 class ArrayLiteral(Expr):
@@ -489,9 +493,31 @@ class ArrayLiteral(Expr):
 
     def eval(self):
         vals = []
-        for val in self.body.values:
-            vals.append(val.eval())
-        c = ir.Constant(self.get_type().irtype, vals)
+        print(str(self.get_type()))
+        if self.body.is_constexpr:
+            for val in self.body.values:
+                cast_v = cast_to(self.builder, self.module, self.package, val, self.get_type().get_element_of())
+                vals.append(cast_v)
+            c = ir.Constant(self.get_type().irtype, vals)
+        else:
+            name = self.module.get_unique_name("_unnamed_array_literal")
+            with self.builder.goto_entry_block():
+                self.builder.position_at_start(self.builder.block)
+                ptr = self.builder.alloca(self.get_type().irtype, name=name)
+            val = Value(name, self.type, ptr)
+            add_new_local(name, val)
+            for value in self.body.values:
+                gep = self.builder.gep(ptr, [
+                    ir.Constant(ir.IntType(32), 0),
+                    ir.Constant(ir.IntType(32), value.index)
+                ])
+                res = value.expr
+                if isinstance(res, Null):
+                    self.builder.store(ir.Constant(gep.type.pointee, gep.type.pointee.null), gep)
+                else:
+                    cast_c = cast_to(self.builder, self.module, self.package, res, self.get_type().get_element_of())
+                    self.builder.store(cast_c, gep)
+            c = self.builder.load(ptr)
         return c
 
 
@@ -2584,7 +2610,7 @@ class BinaryInclude(ASTNode):
                  visibility=Visibility.PUBLIC):
         super().__init__(builder, module, package, spos)
         self.path = clean_string_literal(path.value)
-        self.name = name.get_name()
+        self.name = name.value
         self.type = None
         self.symbol = None
         self.visibility = visibility
@@ -3149,7 +3175,7 @@ class LambdaExpr(Expr):
     """
     A lambda expression.\n
     fn(decl_args): rtype { block }\n
-    [capture] fn(decl_args): rtype { block }
+    fn[capture](decl_args): rtype { block }
     """
     def __init__(self, builder, module, package, spos, rtype, block, decl_args, capture=None):
         super().__init__(builder, module, package, spos)
@@ -3159,6 +3185,9 @@ class LambdaExpr(Expr):
         self.capture = capture
         self.type = None
         self.irvalue = None
+
+    def has_capture(self):
+        return self.capture is not None
 
     def get_type(self):
         if self.type is None:
@@ -4210,6 +4239,28 @@ class FuncCall(Expr):
         #return self.builder.call(self.module.get_global(self.lvalue.get_name()), args, self.lvalue.get_name())
 
 
+class LambdaCall(Expr):
+    """
+    Lambda expression call expression.\n
+    lambda_expr(args)
+    """
+    def __init__(self, builder, module, package, spos, lambda_, args):
+        super().__init__(builder, module, package, spos)
+        self.lambda_ = lambda_
+        self.args = args
+        self.is_constexpr = False
+
+    def get_type(self):
+        return self.lambda_.rtype
+
+    def get_ir_type(self):
+        return self.get_type().get_ir_type()
+
+    def eval(self):
+        eval_args = [arg.eval() for arg in self.args]
+        return self.builder.call(self.lambda_.eval(), eval_args)
+
+
 class MethodCall(Expr):
     """
     Method call expression.\n
@@ -4344,15 +4395,36 @@ class IfStatement(ASTNode):
     """
     If statement.\n
     if boolexpr { then }\n
+    if boolexpr { then } else if boolexpr { elif } ... else { el }\n
     if boolexpr { then } else { el }
     """
-    def __init__(self, builder, module, package, spos, boolexpr, then, elseif=[], el=None):
+    def __init__(self, builder, module, package, spos, boolexpr, then, elseif=None, el=None):
         """TODO: Implement else-if"""
         super().__init__(builder, module, package, spos)
+        if elseif is None:
+            elseif = []
         self.boolexpr = boolexpr
         self.then = then
         self.elseif = elseif
         self.el = el
+
+    def add_elseif(self, cond, block):
+        self.elseif.append((cond, block))
+
+    def add_else(self, block):
+        self.el = block
+
+    def eval_elif(self, _index, _elif):
+        boolexpr = _elif[0].eval()
+        with self.builder.if_else(boolexpr) as (_then, _otherwise):
+            with _then:
+                _elif[1].eval()
+            with _otherwise:
+                if _index + 1 < len(self.elseif):
+                    self.eval_elif(_index + 1, self.elseif[_index + 1])
+                else:
+                    self.el.eval()
+                    return
 
     def eval(self):
         bexpr = self.boolexpr.eval()
@@ -4364,29 +4436,10 @@ class IfStatement(ASTNode):
                 with then:
                     self.then.eval()
                 with otherwise:
-                    self.el.eval()
-        # return
-        # then = self.builder.append_basic_block(self.module.get_unique_name("then"))
-        # el = None
-        # if self.el is not None:
-        #     el = self.builder.append_basic_block(self.module.get_unique_name("else"))
-        # after = self.builder.append_basic_block(self.module.get_unique_name("after"))
-        # if self.el is not None:
-        #     self.builder.cbranch(bexpr, then, el)
-        # else:
-        #     self.builder.cbranch(bexpr, then, after)
-        # self.builder.goto_block(then)
-        # self.builder.position_at_start(then)
-        # self.then.eval()
-        # if not self.builder.block.is_terminated:
-        #     self.builder.branch(after)
-        # if self.el is not None:
-        #     self.builder.goto_block(el)
-        #     self.builder.position_at_start(el)
-        #     self.el.eval()
-        #     self.builder.branch(after)
-        # self.builder.goto_block(after)
-        # self.builder.position_at_start(after)
+                    if len(self.elseif) == 0:
+                        self.el.eval()
+                    else:
+                        self.eval_elif(0, self.elseif[0])
 
 
 class WhileStatement(ASTNode):

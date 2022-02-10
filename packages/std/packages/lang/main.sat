@@ -5,8 +5,14 @@ package lang;
  *
  * Copyright Matthew Obi 2022
  *
- * Last modified 2022 January 11
+ * Last modified 2022 February 10
  */
+
+/*
+ * Common types
+ */
+
+type hash_t: uint64;
 
 /*
  * String (utf8-encoded string)

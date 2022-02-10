@@ -106,6 +106,8 @@ class Lexer:
         self.lexer.add('LSHFT',     r'<<')
         self.lexer.add('RSHFT',     r'>>')
 
+        self.lexer.add('RARROW',    r'->')
+
         self.lexer.add('BOOLAND',   r'\&\&')
         self.lexer.add('BOOLOR',    r'\|\|')
         self.lexer.add('BOOLEQ',    r'==')

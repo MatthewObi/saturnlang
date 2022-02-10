@@ -1,4 +1,5 @@
 from rply import ParserGenerator, Token
+
 from ast import (
     Program, CodeBlock, Statement, ReturnStatement, BreakStatement, ContinueStatement, FallthroughStatement,
     DeferStatement,
@@ -14,7 +15,7 @@ from ast import (
     TupleLiteralElement, TupleLiteralBody, TupleLiteral,
     FuncDecl, FuncDeclExtern, FuncArgList, FuncArg, GlobalVarDecl, VarDecl, VarDeclAssign, LambdaExpr,
     MethodDecl, MethodDeclExtern,
-    LValue, LValueField, FuncCall, MethodCall, CastExpr, SelectExpr,
+    LValue, LValueField, FuncCall, LambdaCall, MethodCall, CastExpr, SelectExpr,
     MakeExpr, MakeSharedExpr, MakeUnsafeExpr, DestroyExpr,
     Assignment, AddAssignment, SubAssignment, MulAssignment, ModAssignment, AndAssignment, OrAssignment, XorAssignment,
     PrefixIncrementOp, PrefixDecrementOp,
@@ -41,8 +42,8 @@ class Parser:
              'INT', 'UINT', 'LONGINT', 'ULONGINT', 'SBYTE', 'BYTE', 'SHORTINT', 'USHORTINT',
              'HALF', 'FLOAT', 'DOUBLE', 'QUAD', 'STRING', 'MLSTRING',
              'HEXINT', 'HEXUINT', 'HEXLINT', 'HEXULINT', 'HEXSINT', 'HEXUSINT', 'HEXBINT', 'HEXSBINT',
-             'IDENT', 'TPRINT', 'DOT', 'TRETURN',
-             'LPAREN', 'RPAREN', 'LBRACKET', 'RBRACKET', 'LDBRACKET', 'RDBRACKET',
+             'IDENT', 'TPRINT', 'DOT', 'RARROW', 'TRETURN',
+             'LPAREN', 'RPAREN', 'LBRACKET', 'RBRACKET', 'LDBRACKET', 'RDBRACKET', 'LANGLE', 'RANGLE',
              'SEMICOLON', 'ADD', 'SUB', 'MUL', 'DIV', 'MOD', 'LSHFT', 'RSHFT',
              'AND', 'OR', 'XOR', 'BOOLAND', 'BOOLOR', 'BINNOT', 'QMARK', 'INC', 'DEC',
              'TFN', 'TPUB', 'TPRIV', 'COLON', 'LBRACE', 'RBRACE', 'COMMA', 'CC',
@@ -62,22 +63,33 @@ class Parser:
                 ('left', ['ADD', 'SUB']),
                 ('left', ['MUL', 'DIV', 'MOD']),
                 ('left', ['INC', 'DEC']),
-                ('right', ['BOOLNOT', 'BINNOT'])
+                ('right', ['BOOLNOT', 'BINNOT']),
+                ('left', ['LBRACKET', 'RBRACKET'])
             ]
         )
 
     def parse(self):
-        @self.pg.production('program : program gstmt')
         @self.pg.production('program : gstmt')
+        @self.pg.production('program : gstmt_preamble gstmt')
         @self.pg.production('program : ')
-        def program(state, p):
+        def program_start(state, p):
             if len(p) == 0:
                 return Program(state.package)
             elif len(p) == 1:
                 return Program(state.package, p[0])
             else:
+                p[1].add_preamble(p[0])
+                return Program(state.package, p[1])
+
+        @self.pg.production('program : program gstmt_preamble gstmt')
+        @self.pg.production('program : program gstmt')
+        def program_append(state, p):
+            if len(p) == 3:
+                p[2].add_preamble(p[1])
+                p[0].add(p[2])
+            else:
                 p[0].add(p[1])
-                return p[0]
+            return p[0]
 
         @self.pg.production('gstmt : func_decl')
         @self.pg.production('gstmt : func_decl_extern')
@@ -153,16 +165,6 @@ class Parser:
                 return FuncDecl(state.builder, state.module, state.package, spos, name, rtype, block, declargs)
             # return FuncDeclExtern(state.builder, state.module, state.package, spos, name, rtype, declargs)
             # return FuncDeclExtern(state.builder, state.module, state.package, spos, name, rtype, declargs)
-
-        @self.pg.production('func_decl : gstmt_preamble func_decl')
-        def func_decl_preamble(state, p):
-            p[1].add_preamble(p[0])
-            return p[1]
-
-        @self.pg.production('func_decl_extern : gstmt_preamble func_decl_extern')
-        def func_decl_extern_preamble(state, p):
-            p[1].add_preamble(p[0])
-            return p[1]
 
         @self.pg.production('func_decl : TFN IDENT LPAREN decl_args RPAREN LBRACE block RBRACE')
         def func_decl_retvoid(state, p):
@@ -263,11 +265,6 @@ class Parser:
             initval = p[5]
             spos = p[1].getsourcepos()
             return GlobalVarDecl(state.builder, state.module, state.package, spos, name, vtype, initval, spec=p[0])
-
-        @self.pg.production('gvar_decl : gstmt_preamble gvar_decl')
-        def gvar_decl_preamble(state, p):
-            p[1].add_preamble(p[0])
-            return p[1]
 
         @self.pg.production('method_decl : TFN LPAREN MUL lvalue RPAREN IDENT LPAREN decl_args RPAREN COLON typeexpr LBRACE block RBRACE')
         def method_decl(state, p):
@@ -388,7 +385,7 @@ class Parser:
             else:
                 return p[0]
 
-        @self.pg.production('binary_include_decl : lvalue CEQ TBININCLUDE LPAREN STRING RPAREN SEMICOLON')
+        @self.pg.production('binary_include_decl : IDENT CEQ TBININCLUDE LPAREN STRING RPAREN SEMICOLON')
         def binary_include_decl(state, p):
             spos = p[0].getsourcepos()
             return BinaryInclude(state.builder, state.module, state.package, spos, p[4], p[0])
@@ -417,11 +414,6 @@ class Parser:
         def struct_decl_opaque(state, p):
             spos = p[0].getsourcepos()
             return StructDecl(state.builder, state.module, state.package, spos, p[1], None, state.decl_mode)
-
-        @self.pg.production('struct_decl : gstmt_preamble struct_decl')
-        def struct_decl_preamble(state, p):
-            p[1].add_preamble(p[0])
-            return p[1]
 
         @self.pg.production('struct_decl_body : struct_decl_body struct_decl_field')
         @self.pg.production('struct_decl_body : struct_decl_field')
@@ -514,13 +506,11 @@ class Parser:
         @self.pg.production('stmt : TDEFER stmt')
         def stmt_defer(state, p):
             spos = p[0].getsourcepos()
-            block = CodeBlock(state.builder, state.module, state.package, p[1].getsourcepos(), p[1])
-            return DeferStatement(state.builder, state.module, state.package, spos, block)
-
-        @self.pg.production('stmt : TDEFER LBRACE block RBRACE')
-        def stmt_defer_block(state, p):
-            spos = p[0].getsourcepos()
-            return DeferStatement(state.builder, state.module, state.package, spos, p[2])
+            if not isinstance(p[1], CodeBlock):
+                _block = CodeBlock(state.builder, state.module, state.package, p[1].getsourcepos(), p[1])
+            else:
+                _block = p[0]
+            return DeferStatement(state.builder, state.module, state.package, spos, _block)
 
         @self.pg.production('stmt : IDENT COLON typeexpr SEMICOLON')
         def stmt_var_decl(state, p):
@@ -646,7 +636,6 @@ class Parser:
             spos = p[0].getsourcepos()
             return OptionalTypeExpr(state.builder, state.module, state.package, spos, p[1])
 
-        @self.pg.production('tuple_type_list : ')
         @self.pg.production('tuple_type_list : typeexpr')
         @self.pg.production('tuple_type_list : tuple_type_list COMMA typeexpr')
         def tuple_type_list(state, p):
@@ -658,18 +647,20 @@ class Parser:
                 p[0].append(p[2])
                 return p[0]
 
-        @self.pg.production('typeexpr : TFN LPAREN func_arg_type_list RPAREN typeexpr')
+        @self.pg.production('typeexpr : TFN LPAREN func_arg_type_list RPAREN RARROW typeexpr')
         def typeexpr_func(state, p):
             spos = p[0].getsourcepos()
-            return FuncTypeExpr(state.builder, state.module, state.package, spos, p[2], p[4])
+            return FuncTypeExpr(state.builder, state.module, state.package, spos, p[2], p[5])
 
-        @self.pg.production('func_arg_type_list : ')
+        @self.pg.production('typeexpr : TFN LPAREN RPAREN RARROW typeexpr')
+        def typeexpr_func_empty(state, p):
+            spos = p[0].getsourcepos()
+            return FuncTypeExpr(state.builder, state.module, state.package, spos, [], p[5])
+
         @self.pg.production('func_arg_type_list : typeexpr')
         @self.pg.production('func_arg_type_list : func_arg_type_list COMMA typeexpr')
         def func_arg_type_list(state, p):
-            if len(p) == 0:
-                return []
-            elif len(p) == 1:
+            if len(p) == 1:
                 return [p[0]]
             else:
                 p[0].append(p[2])
@@ -714,10 +705,15 @@ class Parser:
             spos = p[0].getsourcepos()
             return IfStatement(state.builder, state.module, state.package, spos, p[1], p[3])
 
-        @self.pg.production('if_stmt : TIF expr LBRACE block RBRACE TELSE LBRACE block RBRACE')
+        @self.pg.production('if_stmt : if_stmt TELSE TIF expr LBRACE block RBRACE')
+        def if_stmt_elseif(state, p):
+            p[0].add_elseif(p[3], p[5])
+            return p[0]
+
+        @self.pg.production('if_stmt : if_stmt TELSE LBRACE block RBRACE')
         def if_stmt_else(state, p):
-            spos = p[0].getsourcepos()
-            return IfStatement(state.builder, state.module, state.package, spos, p[1], p[3], el=p[7])
+            p[0].add_else(p[3])
+            return p[0]
 
         @self.pg.production('if_stmt : TIF expr TTHEN stmt')
         def if_stmt_then(state, p):
@@ -944,6 +940,18 @@ class Parser:
         def expr_func_call(state, p):
             return p[0]
 
+        @self.pg.production('func_call : lambda_expr LPAREN args RPAREN')
+        def lambda_call(state, p):
+            lambda_ = p[0]
+            spos = p[0].getsourcepos()
+            return LambdaCall(state.builder, state.module, state.package, spos, lambda_, p[2])
+
+        @self.pg.production('func_call : lambda_expr LPAREN RPAREN')
+        def lambda_call_empty(state, p):
+            lambda_ = p[0]
+            spos = p[0].getsourcepos()
+            return LambdaCall(state.builder, state.module, state.package, spos, lambda_, [])
+
         @self.pg.production('expr : TPRINT LPAREN args RPAREN')
         def expr_print_call(state, p):
             spos = p[0].getsourcepos()
@@ -1027,10 +1035,16 @@ class Parser:
         def expr_make_expr(state, p):
             return p[0]
 
-        @self.pg.production('struct_literal : typeexpr LBRACE struct_literal_body RBRACE')
+        @self.pg.production('struct_literal : lvalue LBRACE struct_literal_body RBRACE')
         def struct_literal(state, p):
             spos = p[1].getsourcepos()
-            return StructLiteral(state.builder, state.module, state.package, spos, p[0], p[2])
+            strct = TypeExpr(state.builder, state.module, state.package, spos, p[0])
+            return StructLiteral(state.builder, state.module, state.package, spos, strct, p[2])
+
+        @self.pg.production('struct_literal : LBRACKET typeexpr RBRACKET LBRACE struct_literal_body RBRACE')
+        def struct_literal(state, p):
+            spos = p[1].getsourcepos()
+            return StructLiteral(state.builder, state.module, state.package, spos, p[1], p[4])
 
         @self.pg.production('struct_literal_body : struct_literal_body COMMA struct_literal_element')
         @self.pg.production('struct_literal_body : struct_literal_body COMMA')
@@ -1055,10 +1069,18 @@ class Parser:
             spos = p[0].getsourcepos()
             return StructLiteralElement(state.builder, state.module, state.package, spos, p[0], p[2])
 
-        @self.pg.production('array_literal : LBRACKET RBRACKET typeexpr LBRACE array_literal_body RBRACE')
+        @self.pg.production(
+            'array_literal : LBRACKET RBRACKET lvalue LBRACE array_literal_body RBRACE')
         def array_literal(state, p):
             spos = p[1].getsourcepos()
-            return ArrayLiteral(state.builder, state.module, state.package, spos, p[2], p[4])
+            elty = TypeExpr(state.builder, state.module, state.package, spos, p[2])
+            return ArrayLiteral(state.builder, state.module, state.package, spos, elty, p[4])
+
+        @self.pg.production(
+            'array_literal : LBRACKET RBRACKET LBRACKET typeexpr RBRACKET LBRACE array_literal_body RBRACE')
+        def array_literal_elty(state, p):
+            spos = p[1].getsourcepos()
+            return ArrayLiteral(state.builder, state.module, state.package, spos, p[3], p[6])
 
         @self.pg.production('array_literal_body : array_literal_body COMMA array_literal_element')
         @self.pg.production('array_literal_body : array_literal_body COMMA')
@@ -1070,12 +1092,12 @@ class Parser:
             elif len(p) == 1:
                 spos = p[0].getsourcepos()
                 body = ArrayLiteralBody(state.builder, state.module, state.package, spos)
-                body.add_element(p[0].expr)
+                body.add_element(p[0])
                 return body
             elif len(p) == 2:
                 return p[0]
             else:
-                p[0].add_element(p[2].expr)
+                p[0].add_element(p[2])
                 return p[0]
 
         @self.pg.production('array_literal_element : expr')
