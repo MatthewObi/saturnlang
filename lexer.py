@@ -61,6 +61,7 @@ class Lexer:
         self.lexer.add('TCINCLUDE',    r'\bc_include\b')
         self.lexer.add('TCDECLARE',    r'\bc_declare\b')
         self.lexer.add('TBININCLUDE',  r'\bbin_include\b')
+        self.lexer.add('TNEW',         r'\bnew\b')
         self.lexer.add('TTUPLE',       r'\btuple\b')
         self.lexer.add('TVECTOR',      r'\bvector\b')
         self.lexer.add('TMAP',         r'\bmap\b')

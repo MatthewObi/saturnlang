@@ -1,7 +1,8 @@
 from llvmlite import ir
 from rply import Token
 from typesys import TupleType, Type, make_tuple_type, types, FuncType, StructType, Value, mangle_name, print_types, \
-    Func, GlobalValue, make_optional_type, mangle_symbol, mangle_symbol_name, demangle_name, make_slice_type, array_to_slice
+    Func, GlobalValue, ConstexprValue, make_optional_type, mangle_symbol, mangle_symbol_name, demangle_name, \
+    make_slice_type, array_to_slice, EnumType
 from serror import throw_saturn_error
 from package import Visibility, LinkageType, Package
 
@@ -821,6 +822,8 @@ class LValue(Expr):
             #     ptr = self.module.sfuncs[name].get_default_overload()
             # else:
             #     ptr = self.module.sglobals[name]
+        if isinstance(ptr, ConstexprValue):
+            return ir.Constant(ptr.get_ir_type(), ptr.value)
         if isinstance(ptr, GlobalValue):
             irvalue = ptr.get_ir_value(self.module)
         else:
@@ -1133,6 +1136,68 @@ class MakeUnsafeExpr(Expr):
             sizeof = calc_sizeof_struct(self.builder, self.module, self.mtype)
         else:
             sizeof = self.builder.mul(int32(self.melement_count),
+                                      calc_sizeof_struct(self.builder, self.module, self.mtype))
+        # asize = (size + 3) & ~3
+        aligned_sizeof = self.builder.and_(
+            self.builder.add(sizeof, int32(3)),
+            int32(~3))
+        malloc_args = [aligned_sizeof, int32(4)] if malloc_fn.name.startswith('_') \
+            else [int32(4), aligned_sizeof]
+        mallocptr = self.builder.call(malloc_fn, malloc_args)
+        self.builder.call(self.module.memset, [
+            mallocptr,
+            ir.Constant(ir.IntType(8), 0),
+            aligned_sizeof,
+            ir.Constant(ir.IntType(1), 0),
+        ])
+        bitcast = self.builder.bitcast(mallocptr, self.type.irtype)
+
+        _name = self.module.get_unique_name('_unnamed_unsafe_make_expr')
+        ptr = Value(_name, self.type, bitcast, objtype='heap')
+        add_new_local(_name, ptr)
+        lvalue = LValue(self.builder, self.module, self.package, self.spos, _name)
+        return bitcast
+
+
+class MakeUnsafeArrayExpr(Expr):
+    """
+    A make expression for creating new arrays on the heap.\n
+    make unsafe [count_expr]typeexpr;\n
+    make unsafe [count_expr]typeexpr{init};\n
+    """
+    def __init__(self, builder, module, package, spos, typeexpr, count_expr, init=None):
+        super().__init__(builder, module, package, spos)
+        self.typeexpr = typeexpr
+        self.mtype = None
+        self.type = None
+        self.count_expr = count_expr
+        self.init = init
+        self.melement_count = 1
+        self.stack_value = None
+
+    def get_type(self):
+        if self.type is None:
+            self.mtype = self.typeexpr.get_type()
+            self.type = self.mtype.get_pointer_to()
+            # print(self.mtype, self.type)
+        return self.type
+
+    def get_ir_type(self):
+        return self.get_type().get_ir_type()
+
+    def eval(self):
+        int32 = ir.IntType(32)
+        self.get_type()
+        malloc_fn = self.module.aligned_malloc
+        if self.count_expr.is_constexpr:
+            el_count = self.count_expr.consteval()
+            if el_count == 1:
+                sizeof = calc_sizeof_struct(self.builder, self.module, self.mtype)
+            else:
+                sizeof = self.builder.mul(int32(el_count),
+                                          calc_sizeof_struct(self.builder, self.module, self.mtype))
+        else:
+            sizeof = self.builder.mul(self.count_expr.eval(),
                                       calc_sizeof_struct(self.builder, self.module, self.mtype))
         # asize = (size + 3) & ~3
         aligned_sizeof = self.builder.and_(
@@ -1698,10 +1763,8 @@ class And(BinaryOp):
             lineno = self.spos.lineno
             colno = self.spos.colno
             throw_saturn_error(self.builder, self.module, lineno, colno, 
-            "Attempting to perform a binary and with at least one operand of a non-integer type (%s and %s)." % (
-                str(self.left.get_type()),
-                str(self.right.get_type())
-            ))
+                               f"Attempting to perform a binary and with at least one operand of a non-integer type "
+                               f"({str(self.left.get_type())} and {str(self.right.get_type())}).")
         return i
 
     def consteval(self):
@@ -1721,11 +1784,9 @@ class Or(BinaryOp):
         else:
             lineno = self.spos.lineno
             colno = self.spos.colno
-            throw_saturn_error(self.builder, self.module, lineno, colno, 
-            "Attempting to perform a binary or with at least one operand of a non-integer type (%s and %s)." % (
-                str(self.left.get_type()),
-                str(self.right.get_type())
-            ))
+            throw_saturn_error(self.builder, self.module, lineno, colno,
+                               f"Attempting to perform a binary and with at least one operand of a non-integer type "
+                               f"({str(self.left.get_type())} and {str(self.right.get_type())}).")
         return i
 
     def consteval(self):
@@ -1881,7 +1942,7 @@ class Spaceship(BoolCmpOp):
                     str(self.left.get_type()),
                     str(self.right.get_type())
                 ))
-        cmptysat = self.getcmptype()
+        cmpty = self.getcmptype()
         begin = self.builder.basic_block
         lt = self.builder.append_basic_block(self.module.get_unique_name("ship.less"))
         gt = self.builder.append_basic_block(self.module.get_unique_name("ship.greater"))
@@ -1889,34 +1950,31 @@ class Spaceship(BoolCmpOp):
         ltv = ir.Constant(ir.IntType(32), -1)
         eqv = ir.Constant(ir.IntType(32), 0)
         gtv = ir.Constant(ir.IntType(32), 1)
-        if cmptysat.is_pointer():
+        if cmpty.is_pointer():
             i = self.builder.icmp_unsigned('==', self.lhs, self.rhs)
             return i
-        cmpty = cmptysat.irtype
-        if isinstance(cmpty, ir.IntType):
+        if cmpty.is_unsigned():
+            i = self.builder.icmp_unsigned('==', self.lhs, self.rhs)
+        elif cmpty.is_integer():
             i = self.builder.icmp_signed('==', self.lhs, self.rhs)
-        elif isinstance(cmpty, ir.FloatType) or isinstance(cmpty, ir.DoubleType):
-            i = self.builder.fcmp_ordered('==', self.lhs, self.rhs)
+        elif cmpty.is_float():
+            i = self.builder.fcmp_unordered('==', self.lhs, self.rhs)
         else:
             i = self.builder.fcmp_ordered('==', self.lhs, self.rhs)
         self.builder.cbranch(i, after, lt)
         self.builder.goto_block(lt)
         self.builder.position_at_start(lt)
-        if isinstance(cmpty, ir.IntType):
+        if cmpty.is_unsigned():
+            j = self.builder.icmp_unsigned('<', self.lhs, self.rhs)
+        elif cmpty.is_integer():
             j = self.builder.icmp_signed('<', self.lhs, self.rhs)
-        elif isinstance(cmpty, ir.FloatType) or isinstance(cmpty, ir.DoubleType):
-            j = self.builder.fcmp_ordered('<', self.lhs, self.rhs)
+        elif cmpty.is_float():
+            j = self.builder.fcmp_unordered('<', self.lhs, self.rhs)
         else:
             j = self.builder.fcmp_ordered('<', self.lhs, self.rhs)
         self.builder.cbranch(j, after, gt)
         self.builder.goto_block(gt)
         self.builder.position_at_start(gt)
-        if isinstance(cmpty, ir.IntType):
-            k = self.builder.icmp_signed('>', self.lhs, self.rhs)
-        elif isinstance(cmpty, ir.FloatType) or isinstance(cmpty, ir.DoubleType):
-            k = self.builder.fcmp_ordered('>', self.lhs, self.rhs)
-        else:
-            k = self.builder.fcmp_ordered('>', self.lhs, self.rhs)
         self.builder.branch(after)
         self.builder.goto_block(after)
         self.builder.position_at_start(after)
@@ -1933,15 +1991,33 @@ class BooleanEq(BoolCmpOp):
     left == right
     """
     def eval(self):
-        cmptysat = self.getcmptype()
-        if cmptysat.is_pointer():
+        cmpty = self.getcmptype()
+        if cmpty.is_pointer():
             i = self.builder.icmp_unsigned('==', self.lhs, self.rhs)
             return i
-        cmpty = cmptysat.irtype
-        if isinstance(cmpty, ir.IntType):
+        if cmpty.is_struct():
+            if cmpty.has_operator('<=>'):
+                method = cmpty.operator['<=>']
+                ptr = self.left.get_pointer().irvalue
+                value = self.right.eval()
+                ovrld = method.get_overload([cmpty.get_pointer_to(), self.right.get_type()])
+                if not ovrld:
+                    pass
+                call = self.builder.call(ovrld, [ptr, value])
+                i = self.builder.icmp_unsigned('==', call, ir.Constant(ovrld.rtype.get_ir_type(), 0))
+                return i
+            else:
+                lineno = self.spos.lineno
+                colno = self.spos.colno
+                throw_saturn_error(self.builder, self.module, lineno, colno,
+                                   f"Comparing structs using operator '<=>', but no matching operator method found. "
+                                   f"({str(self.left.get_type())} and {str(self.right.get_type())}).")
+        if cmpty.is_unsigned() or cmpty.is_bool():
+            i = self.builder.icmp_unsigned('==', self.lhs, self.rhs)
+        elif cmpty.is_integer():
             i = self.builder.icmp_signed('==', self.lhs, self.rhs)
-        elif isinstance(cmpty, ir.FloatType) or isinstance(cmpty, ir.DoubleType):
-            i = self.builder.fcmp_ordered('==', self.lhs, self.rhs)
+        elif cmpty.is_float():
+            i = self.builder.fcmp_unordered('==', self.lhs, self.rhs)
         else:
             i = self.builder.fcmp_ordered('==', self.lhs, self.rhs)
         return i
@@ -1956,15 +2032,16 @@ class BooleanNeq(BoolCmpOp):
     left != right
     """
     def eval(self):
-        cmptysat = self.getcmptype()
-        if cmptysat.is_pointer():
+        cmpty = self.getcmptype()
+        if cmpty.is_pointer():
             i = self.builder.icmp_unsigned('!=', self.lhs, self.rhs)
             return i
-        cmpty = cmptysat.irtype
-        if isinstance(cmpty, ir.IntType):
+        if cmpty.is_unsigned() or cmpty.is_bool():
+            i = self.builder.icmp_unsigned('!=', self.lhs, self.rhs)
+        elif cmpty.is_integer():
             i = self.builder.icmp_signed('!=', self.lhs, self.rhs)
-        elif isinstance(cmpty, ir.FloatType) or isinstance(cmpty, ir.DoubleType):
-            i = self.builder.fcmp_ordered('!=', self.lhs, self.rhs)
+        elif cmpty.is_float():
+            i = self.builder.fcmp_unordered('!=', self.lhs, self.rhs)
         else:
             i = self.builder.fcmp_ordered('!=', self.lhs, self.rhs)
         return i
@@ -1979,14 +2056,15 @@ class BooleanGt(BoolCmpOp):
     left > right
     """
     def eval(self):
-        cmptysat = self.getcmptype()
-        cmpty = cmptysat.irtype
-        if isinstance(cmpty, ir.IntType):
+        cmpty = self.getcmptype()
+        if cmpty.is_unsigned() or cmpty.is_bool():
+            i = self.builder.icmp_unsigned('>', self.lhs, self.rhs)
+        elif cmpty.is_integer():
             i = self.builder.icmp_signed('>', self.lhs, self.rhs)
-        elif isinstance(cmpty, ir.FloatType) or isinstance(cmpty, ir.DoubleType):
-            i = self.builder.fcmp_ordered('>', self.lhs, self.rhs)
+        elif cmpty.is_float():
+            i = self.builder.fcmp_unordered('>', self.lhs, self.rhs)
         else:
-            i = self.builder.fcmp_ordered('>', self.lhs, self.rhs)
+            i = self.builder.fcmp_unordered('>', self.lhs, self.rhs)
         return i
 
     def consteval(self):
@@ -1999,12 +2077,13 @@ class BooleanLt(BoolCmpOp):
     left < right
     """
     def eval(self):
-        cmptysat = self.getcmptype()
-        cmpty = cmptysat.irtype
-        if isinstance(cmpty, ir.IntType):
+        cmpty = self.getcmptype()
+        if cmpty.is_unsigned() or cmpty.is_bool():
+            i = self.builder.icmp_unsigned('<', self.lhs, self.rhs)
+        elif cmpty.is_integer():
             i = self.builder.icmp_signed('<', self.lhs, self.rhs)
-        elif isinstance(cmpty, ir.FloatType) or isinstance(cmpty, ir.DoubleType):
-            i = self.builder.fcmp_ordered('<', self.lhs, self.rhs)
+        elif cmpty.is_float():
+            i = self.builder.fcmp_unordered('<', self.lhs, self.rhs)
         else:
             i = self.builder.fcmp_ordered('<', self.lhs, self.rhs)
         return i
@@ -2019,12 +2098,13 @@ class BooleanGte(BoolCmpOp):
     left >= right
     """
     def eval(self):
-        cmptysat = self.getcmptype()
-        cmpty = cmptysat.irtype
-        if isinstance(cmpty, ir.IntType):
+        cmpty = self.getcmptype()
+        if cmpty.is_unsigned():
+            i = self.builder.icmp_unsigned('>=', self.lhs, self.rhs)
+        elif cmpty.is_integer():
             i = self.builder.icmp_signed('>=', self.lhs, self.rhs)
-        elif isinstance(cmpty, ir.FloatType) or isinstance(cmpty, ir.DoubleType):
-            i = self.builder.fcmp_ordered('>=', self.lhs, self.rhs)
+        elif cmpty.is_float():
+            i = self.builder.fcmp_unordered('>=', self.lhs, self.rhs)
         else:
             i = self.builder.fcmp_ordered('>=', self.lhs, self.rhs)
         return i
@@ -2039,12 +2119,13 @@ class BooleanLte(BoolCmpOp):
     left <= right
     """
     def eval(self):
-        cmptysat = self.getcmptype()
-        cmpty = cmptysat.irtype
-        if isinstance(cmpty, ir.IntType):
+        cmpty = self.getcmptype()
+        if cmpty.is_unsigned():
+            i = self.builder.icmp_unsigned('<=', self.lhs, self.rhs)
+        elif cmpty.is_integer():
             i = self.builder.icmp_signed('<=', self.lhs, self.rhs)
-        elif isinstance(cmpty, ir.FloatType) or isinstance(cmpty, ir.DoubleType):
-            i = self.builder.fcmp_ordered('<=', self.lhs, self.rhs)
+        elif cmpty.is_float():
+            i = self.builder.fcmp_unordered('<=', self.lhs, self.rhs)
         else:
             i = self.builder.fcmp_ordered('<=', self.lhs, self.rhs)
         return i
@@ -2076,28 +2157,40 @@ class Assignment(ASTNode):
         if sptr.is_const() or sptr.is_immut():
             lineno = self.expr.getsourcepos().lineno
             colno = self.expr.getsourcepos().colno
+            msg = ''
             if sptr.is_const():
                 msg = 'const'
             if sptr.is_immut():
                 msg = 'immut'
-            throw_saturn_error(self.builder, self.module, lineno, colno, 
-                "Cannot reassign to %s variable, %s." % (msg, sptr.name)
-            )
+            if msg == '':
+                throw_saturn_error(self.builder, self.module, lineno, colno,
+                                   f"Cannot reassign to variable, {sptr.name}.")
+            else:
+                throw_saturn_error(self.builder, self.module, lineno, colno,
+                                   f"Cannot reassign to {msg} variable, {sptr.name}.")
         if sptr.is_readonly() and self.lvalue.is_deref:
             lineno = self.expr.getsourcepos().lineno
             colno = self.expr.getsourcepos().colno
-            throw_saturn_error(self.builder, self.module, lineno, colno, 
-                "Cannot write to readonly pointer variable, %s." % (sptr.name)
-            )
+            throw_saturn_error(self.builder, self.module, lineno, colno,
+                               f"Cannot write to readonly pointer variable, {sptr.name}.")
         if stype.is_struct():
             if stype.has_operator('='):
                 method = stype.operator['=']
                 value = self.expr.eval()
                 ovrld = method.get_overload([stype.get_pointer_to(), self.expr.get_type()])
                 if not ovrld:
-                    pass
+                    lineno = self.expr.getsourcepos().lineno
+                    colno = self.expr.getsourcepos().colno
+                    throw_saturn_error(self.builder, self.module, lineno, colno,
+                                       f"No matching overload of = operator for struct, {stype.name}, "
+                                       f"for types ({print_types([stype.get_pointer_to(), self.expr.get_type()])}).")
                 self.builder.call(ovrld, [ptr, value])
                 return
+            else:
+                lineno = self.expr.getsourcepos().lineno
+                colno = self.expr.getsourcepos().colno
+                throw_saturn_error(self.builder, self.module, lineno, colno,
+                                   f"Struct, {stype.name}, has no operator= defined.")
         value = self.expr.eval()
         #print("(%s) => (%s)" % (value, ptr))
         if sptr.is_atomic():
@@ -2106,7 +2199,6 @@ class Assignment(ASTNode):
         if isinstance(self.expr, Null):
             self.builder.store(ir.Constant(ptr.type.pointee, 'null'), ptr)
             return
-        # print(value, ptr)
         self.builder.store(value, ptr)
 
 
@@ -2120,9 +2212,8 @@ class AddAssignment(Assignment):
         if ptr.is_const() or ptr.is_immut():
             lineno = self.expr.getsourcepos().lineno
             colno = self.expr.getsourcepos().colno
-            throw_saturn_error(self.builder, self.module, lineno, colno, 
-                "Cannot reassign to const variable, %s." % ptr.name
-            )
+            throw_saturn_error(self.builder, self.module, lineno, colno,
+                               f"Cannot reassign to const variable, {ptr.name}.")
         if not ptr.is_atomic():
             value = self.builder.load(ptr.irvalue)
             ty = self.expr.get_type()
@@ -2152,9 +2243,8 @@ class SubAssignment(Assignment):
         if ptr.is_const() or ptr.is_immut():
             lineno = self.expr.getsourcepos().lineno
             colno = self.expr.getsourcepos().colno
-            throw_saturn_error(self.builder, self.module, lineno, colno, 
-                "Cannot reassign to const variable, %s." % ptr.name
-            )
+            throw_saturn_error(self.builder, self.module, lineno, colno,
+                               f"Cannot reassign to const variable, {ptr.name}.")
         if not ptr.is_atomic():
             value = self.builder.load(ptr.irvalue)
             ty = self.expr.get_type()
@@ -2222,15 +2312,13 @@ class PrefixDecrementOp(PrefixOp):
             lineno = self.right.getsourcepos().lineno
             colno = self.right.getsourcepos().colno
             throw_saturn_error(self.builder, self.module, lineno, colno,
-                               "Cannot decrement expression which is not an lvalue."
-                               )
+                               "Cannot decrement expression which is not an lvalue.")
         ptr = self.right.get_pointer()
         if ptr.is_const() or ptr.is_immut():
             lineno = self.right.getsourcepos().lineno
             colno = self.right.getsourcepos().colno
             throw_saturn_error(self.builder, self.module, lineno, colno,
-                               f"Cannot reassign to const variable, {ptr.name}."
-                               )
+                               f"Cannot reassign to const variable, {ptr.name}.")
         if not ptr.is_atomic():
             value = self.builder.load(ptr.irvalue)
             ty = self.right.get_type()
@@ -2261,9 +2349,8 @@ class MulAssignment(Assignment):
         if ptr.is_const() or ptr.is_immut():
             lineno = self.expr.getsourcepos().lineno
             colno = self.expr.getsourcepos().colno
-            throw_saturn_error(self.builder, self.module, lineno, colno, 
-                "Cannot reassign to const variable, %s." % ptr.name
-            )
+            throw_saturn_error(self.builder, self.module, lineno, colno,
+                               f"Cannot reassign to const variable, {ptr.name}.")
         if not ptr.is_atomic():
             value = self.builder.load(ptr.irvalue)
             res = self.builder.mul(value, self.expr.eval())
@@ -2284,9 +2371,8 @@ class DivAssignment(Assignment):
         if ptr.is_const() or ptr.is_immut():
             lineno = self.expr.getsourcepos().lineno
             colno = self.expr.getsourcepos().colno
-            throw_saturn_error(self.builder, self.module, lineno, colno, 
-                "Cannot reassign to const variable, %s." % ptr.name
-            )
+            throw_saturn_error(self.builder, self.module, lineno, colno,
+                               f"Cannot reassign to const variable, {ptr.name}.")
         value = None
         if not ptr.is_atomic():
             value = self.builder.load(ptr.irvalue)
@@ -2321,9 +2407,8 @@ class ModAssignment(Assignment):
         if ptr.is_const() or ptr.is_immut():
             lineno = self.expr.getsourcepos().lineno
             colno = self.expr.getsourcepos().colno
-            throw_saturn_error(self.builder, self.module, lineno, colno, 
-                "Cannot reassign to const variable, %s." % ptr.name
-            )
+            throw_saturn_error(self.builder, self.module, lineno, colno,
+                               f"Cannot reassign to const variable, {ptr.name}.")
         value = None
         if not ptr.is_atomic():
             value = self.builder.load(ptr.irvalue)
@@ -2339,9 +2424,8 @@ class ModAssignment(Assignment):
         else:
             lineno = self.expr.getsourcepos().lineno
             colno = self.expr.getsourcepos().colno
-            throw_saturn_error(self.builder, self.module, lineno, colno, 
-                "Cannot do modulus assignment on variable, %s." % ptr.name
-            )
+            throw_saturn_error(self.builder, self.module, lineno, colno,
+                               f"Cannot do modulus assignment on variable, {ptr.name}.")
         if not ptr.is_atomic():
             self.builder.store(res, ptr.irvalue)
         else:
@@ -2358,12 +2442,11 @@ class AndAssignment(Assignment):
         if ptr.is_const() or ptr.is_immut():
             lineno = self.expr.getsourcepos().lineno
             colno = self.expr.getsourcepos().colno
-            throw_saturn_error(self.builder, self.module, lineno, colno, 
-                "Cannot reassign to const variable, %s." % ptr.name
-            )
+            throw_saturn_error(self.builder, self.module, lineno, colno,
+                               f"Cannot reassign to const variable, {ptr.name}.")
         if not ptr.is_atomic():
             value = self.builder.load(ptr.irvalue)
-            res = self.builder._and(value, self.expr.eval())
+            res = self.builder.and_(value, self.expr.eval())
             self.builder.store(res, ptr.irvalue)
         else:
             self.builder.atomic_rmw('and', ptr.irvalue, self.expr.eval(), 'seq_cst')
@@ -2379,12 +2462,11 @@ class OrAssignment(Assignment):
         if ptr.is_const() or ptr.is_immut():
             lineno = self.expr.getsourcepos().lineno
             colno = self.expr.getsourcepos().colno
-            throw_saturn_error(self.builder, self.module, lineno, colno, 
-                "Cannot reassign to const variable, %s." % ptr.name
-            )
+            throw_saturn_error(self.builder, self.module, lineno, colno,
+                               f"Cannot reassign to const variable, {ptr.name}.")
         if not ptr.is_atomic():
             value = self.builder.load(ptr.irvalue)
-            res = self.builder._or(value, self.expr.eval())
+            res = self.builder.or_(value, self.expr.eval())
             self.builder.store(res, ptr.irvalue)
         else:
             self.builder.atomic_rmw('or', ptr.irvalue, self.expr.eval(), 'seq_cst')
@@ -2400,9 +2482,8 @@ class XorAssignment(Assignment):
         if ptr.is_const() or ptr.is_immut():
             lineno = self.expr.getsourcepos().lineno
             colno = self.expr.getsourcepos().colno
-            throw_saturn_error(self.builder, self.module, lineno, colno, 
-                "Cannot reassign to const variable, %s." % ptr.name
-            )
+            throw_saturn_error(self.builder, self.module, lineno, colno,
+                               f"Cannot reassign to const variable, {ptr.name}.")
         if not ptr.is_atomic():
             value = self.builder.load(ptr.irvalue)
             res = self.builder.xor(value, self.expr.eval())
@@ -2699,12 +2780,6 @@ class AttributeList(ASTNode):
         return self.attr_list[attr_name]
 
 
-class SymbolPreamble:
-    def __init__(self, visibility_decl=None, attribute_list=None):
-        self.visibility_decl = visibility_decl
-        self.attribute_list = attribute_list
-
-
 class CodeBlock(ASTNode):
     """
     A block of multiple statements with an enclosing scope.
@@ -2749,23 +2824,45 @@ def from_type_get_name(builder, module, t):
     return "bool"
 
 
+class ValueDecl(ASTNode):
+    """
+    A definition of a named value.\n
+    {qualifiers}* name
+    """
+    def __init__(self, builder, module, package, spos, name, qualifiers=None):
+        super().__init__(builder, module, package, spos)
+        if qualifiers is None:
+            qualifiers = []
+        self.name = name
+        self.qualifiers = qualifiers.copy()
+
+
 class FuncArg(ASTNode):
     """
     An definition of a function parameter.\n
-    name : rtype, 
+    name : rtype, \n
+    name : rtype = default_value,\n
+    name := default_value,
     """
-    def __init__(self, builder, module, package, spos, name, atype, qualifiers=None):
+    def __init__(self, builder, module, package, spos, name, atype, default_value=None, qualifiers=None):
         super().__init__(builder, module, package, spos)
         if qualifiers is None:
             qualifiers = []
         self.name = name
         self.atype = atype
         self.type = None
+        self.default_value = default_value
         self.qualifiers = qualifiers.copy()
+
+    def has_default_value(self):
+        return self.default_value is not None
     
     def eval(self, func: ir.Function, decl=True):
-        self.type = self.atype.get_type()
-        self.type.irtype = self.type.get_ir_type()
+        if self.atype is None:
+            self.type = self.default_value.get_type()
+        else:
+            self.type = self.atype.get_type()
+            self.type.irtype = self.type.get_ir_type()
 
         arg = ir.Argument(func, self.type.irtype, name=self.name.value)
         if 'sret' in self.qualifiers:
@@ -2826,6 +2923,13 @@ class FuncArgList(ASTNode):
             atypes.append(arg.type)
         return atypes
 
+    def get_default_args_list(self):
+        default_args = []
+        for arg in self.args:
+            if arg.has_default_value():
+                default_args.append(arg)
+        return default_args
+
     def get_arg_decl_type_list(self):
         return [arg.atype for arg in self.args]
 
@@ -2855,20 +2959,18 @@ class FuncDecl(ASTNode):
         self.visibility = visibility
         self.attribute_list = attribute_list
 
-    def add_preamble(self, preamble: SymbolPreamble):
-        if preamble.visibility_decl is not None:
-            tt = preamble.visibility_decl.gettokentype()
-            if tt == 'TPRIV':
-                visibility = Visibility.PRIVATE
-            elif tt == 'TPUB':
-                visibility = Visibility.PUBLIC
-            else:
-                visibility = Visibility.DEFAULT
+    def add_attribute_list(self, attr_list: AttributeList):
+        self.attribute_list = attr_list
+
+    def add_visibility(self, visibility_decl):
+        tt = visibility_decl.gettokentype()
+        if tt == 'TPRIV':
+            visibility = Visibility.PRIVATE
+        elif tt == 'TPUB':
+            visibility = Visibility.PUBLIC
         else:
             visibility = Visibility.DEFAULT
         self.visibility = visibility
-        if preamble.attribute_list is not None:
-            self.attribute_list = preamble.attribute_list
 
     def generate_symbol(self):
         package = self.package
@@ -2878,14 +2980,6 @@ class FuncDecl(ASTNode):
                 sret = True
             else:
                 sret = False
-            # if rtype.is_struct() and rtype.is_value():
-            #     self.decl_args.add(FuncArg(
-            #         self.builder,
-            #         self.module,
-            #         self.package,
-            #         self.rtype.spos,
-            #         Token('IDENT', 'ret', self.spos),
-            #         rtype.get_pointer_to(), ['sret']))
             decltypes = self.decl_args.get_arg_decl_type_list()
             sargtypes = [decltype.get_type() for decltype in decltypes]
             argtypes = [sargtype.get_ir_type() for sargtype in sargtypes]
@@ -2896,7 +2990,6 @@ class FuncDecl(ASTNode):
                 rirtype = rtype.get_ir_type()
             fnty = ir.FunctionType(rirtype, argtypes, var_arg=self.var_arg)
             #print(f"fn {self.name.value} ({[str(stype) for stype in sargtypes]}): {str(rtype)};")
-            # print("%s (%s)" % (self.name.value, fnty))
             sfnty = FuncType("", fnty, rtype, sargtypes)
             fname = self.name.value
             if not self.builder.c_decl and not (self.name.value == 'main' or self.name.value == '_entry'):
@@ -2944,18 +3037,6 @@ class FuncDecl(ASTNode):
             msg = self.attribute_list.get_attr('message').args[0].value.strip("\"")
             print("message:", msg)
 
-        # if rtype.is_struct() and rtype.is_value():
-        #     self.decl_args.add(FuncArg(
-        #         self.builder,
-        #         self.module,
-        #         self.package,
-        #         self.rtype.spos,
-        #         Token('IDENT', 'ret', self.spos),
-        #         PointerTypeExpr(self.builder,
-        #                         self.module,
-        #                         self.package,
-        #                         self.rtype.spos,
-        #                         self.rtype), ['sret']))
         rtype = self.rtype.get_type()
         if rtype.is_struct() and rtype.is_value():
             sret = True
@@ -3016,13 +3097,13 @@ class FuncDecl(ASTNode):
         self.module.sfunctys[fname] = sfnty
         block = fn.append_basic_block("entry")
         self.builder.dbgsub = self.module.add_debug_info("DISubprogram", {
-            "name":self.name.value, 
+            "name": self.name.value,
             "scope": self.module.di_file,
             "file": self.module.di_file,
             "line": self.spos.lineno,
             "unit": self.module.di_compile_unit,
             #"column": self.spos.colno,
-            "isDefinition":True
+            "isDefinition": True
         }, True)
         self.builder.position_at_start(block)
         args = self.decl_args.get_arg_list(fn)
@@ -3066,20 +3147,18 @@ class FuncDeclExtern(ASTNode):
         self.visibility = Visibility.PUBLIC
         self.attribute_list = None
 
-    def add_preamble(self, preamble: SymbolPreamble):
-        if preamble.visibility_decl is not None:
-            tt = preamble.visibility_decl.gettokentype()
-            if tt == 'TPRIV':
-                visibility = Visibility.PRIVATE
-            elif tt == 'TPUB':
-                visibility = Visibility.PUBLIC
-            else:
-                visibility = Visibility.DEFAULT
+    def add_attribute_list(self, attr_list: AttributeList):
+        self.attribute_list = attr_list
+
+    def add_visibility(self, visibility_decl):
+        tt = visibility_decl.gettokentype()
+        if tt == 'TPRIV':
+            visibility = Visibility.PRIVATE
+        elif tt == 'TPUB':
+            visibility = Visibility.PUBLIC
         else:
             visibility = Visibility.DEFAULT
         self.visibility = visibility
-        if preamble.attribute_list is not None:
-            self.attribute_list = preamble.attribute_list
 
     def getsourcepos(self):
         return self.spos
@@ -3171,6 +3250,17 @@ class FuncDeclExtern(ASTNode):
         pop_inner_scope()
 
 
+class LambdaCapture(ASTNode):
+    """
+    A lambda capture.\n
+    """
+    def __init__(self, builder, module, package, spos, rtype, block, decl_args, capture=None):
+        super().__init__(builder, module, package, spos)
+        self.rtype = rtype
+        self.block = block
+        self.decl_args = decl_args
+
+
 class LambdaExpr(Expr):
     """
     A lambda expression.\n
@@ -3239,20 +3329,18 @@ class GlobalVarDecl(ASTNode):
         self.symbol = None
         self.attribute_list = None
 
-    def add_preamble(self, preamble: SymbolPreamble):
-        if preamble.visibility_decl is not None:
-            tt = preamble.visibility_decl.gettokentype()
-            if tt == 'TPRIV':
-                visibility = Visibility.PRIVATE
-            elif tt == 'TPUB':
-                visibility = Visibility.PUBLIC
-            else:
-                visibility = Visibility.DEFAULT
+    def add_attribute_list(self, attr_list: AttributeList):
+        self.attribute_list = attr_list
+
+    def add_visibility(self, visibility_decl):
+        tt = visibility_decl.gettokentype()
+        if tt == 'TPRIV':
+            visibility = Visibility.PRIVATE
+        elif tt == 'TPUB':
+            visibility = Visibility.PUBLIC
         else:
             visibility = Visibility.DEFAULT
         self.visibility = visibility
-        if preamble.attribute_list is not None:
-            self.attribute_list = preamble.attribute_list
 
     def getsourcepos(self):
         return self.spos
@@ -3262,7 +3350,7 @@ class GlobalVarDecl(ASTNode):
             self.vtype.eval()
             vartype = self.vtype.get_type()
 
-            quals = [s[0] for s in self.spec.copy()]
+            quals = [s for s in self.spec.copy()]
 
             gvar = ir.GlobalVariable(self.module, vartype.irtype, self.name.value)
             gvar.align = 4
@@ -3280,9 +3368,8 @@ class GlobalVarDecl(ASTNode):
         self.vtype.eval()
         vartype = self.vtype.type
 
-        quals = [s[0] for s in self.spec.copy()]
+        quals = [s for s in self.spec.copy()]
 
-        #vartype = get_type_by_name(self.builder, self.module, str(self.vtype))
         for i in range(len(self.spec)):
             if self.spec[i][0] == 'const':
                 if self.initval is None:
@@ -3333,20 +3420,18 @@ class MethodDecl(ASTNode):
         self.visibility = visibility
         self.attribute_list = None
 
-    def add_preamble(self, preamble: SymbolPreamble):
-        if preamble.visibility_decl is not None:
-            tt = preamble.visibility_decl.gettokentype()
-            if tt == 'TPRIV':
-                visibility = Visibility.PRIVATE
-            elif tt == 'TPUB':
-                visibility = Visibility.PUBLIC
-            else:
-                visibility = Visibility.DEFAULT
+    def add_attribute_list(self, attr_list: AttributeList):
+        self.attribute_list = attr_list
+
+    def add_visibility(self, visibility_decl):
+        tt = visibility_decl.gettokentype()
+        if tt == 'TPRIV':
+            visibility = Visibility.PRIVATE
+        elif tt == 'TPUB':
+            visibility = Visibility.PUBLIC
         else:
             visibility = Visibility.DEFAULT
         self.visibility = visibility
-        if preamble.attribute_list is not None:
-            self.attribute_list = preamble.attribute_list
 
     def generate_symbol(self):
         package = self.package
@@ -3427,7 +3512,7 @@ class MethodDecl(ASTNode):
                 elif self.name.value == 'operator.xor':
                     struct_symbol.add_operator('^', fn_symbol)
                 else:
-                    struct_symbol.add_method(mname, fn_symbol)
+                    struct_symbol.add_method(name, fn_symbol)
                 fn_symbol.add_overload(sfnty.atypes, fn)
             else:
                 fn_symbol = struct_symbol[name]
@@ -3589,20 +3674,18 @@ class MethodDeclExtern(ASTNode):
         self.visibility = Visibility.PUBLIC
         self.attribute_list = None
 
-    def add_preamble(self, preamble: SymbolPreamble):
-        if preamble.visibility_decl is not None:
-            tt = preamble.visibility_decl.gettokentype()
-            if tt == 'TPRIV':
-                visibility = Visibility.PRIVATE
-            elif tt == 'TPUB':
-                visibility = Visibility.PUBLIC
-            else:
-                visibility = Visibility.DEFAULT
+    def add_attribute_list(self, attr_list: AttributeList):
+        self.attribute_list = attr_list
+
+    def add_visibility(self, visibility_decl):
+        tt = visibility_decl.gettokentype()
+        if tt == 'TPRIV':
+            visibility = Visibility.PRIVATE
+        elif tt == 'TPUB':
+            visibility = Visibility.PUBLIC
         else:
             visibility = Visibility.DEFAULT
         self.visibility = visibility
-        if preamble.attribute_list is not None:
-            self.attribute_list = preamble.attribute_list
 
     def eval(self):
         push_new_scope(self.builder)
@@ -4074,21 +4157,18 @@ class StructDecl(ASTNode):
             for fld in self.body.get_fields():
                 types[name].add_field(fld.name.value, fld.ftype.get_type(), fld.initvalue)
 
-    def add_preamble(self, preamble: SymbolPreamble):
-        if preamble.visibility_decl is not None:
-            tt = preamble.visibility_decl.gettokentype()
-            if tt == 'TPRIV':
-                visibility = Visibility.PRIVATE
-            elif tt == 'TPUB':
-                visibility = Visibility.PUBLIC
-            else:
-                visibility = Visibility.DEFAULT
+    def add_attribute_list(self, attr_list: AttributeList):
+        self.attribute_list = attr_list
+
+    def add_visibility(self, visibility_decl):
+        tt = visibility_decl.gettokentype()
+        if tt == 'TPRIV':
+            visibility = Visibility.PRIVATE
+        elif tt == 'TPUB':
+            visibility = Visibility.PUBLIC
         else:
             visibility = Visibility.DEFAULT
         self.visibility = visibility
-        self.symbol.visibility = self.visibility
-        if preamble.attribute_list is not None:
-            self.attribute_list = preamble.attribute_list
 
     def generate_symbol(self):
         name = self.lvalue.get_name()
@@ -4137,6 +4217,84 @@ class StructDecl(ASTNode):
             pop_inner_scope()
 
 
+class EnumBody(ASTNode):
+    """
+    Enumeration type body.
+    """
+    def __init__(self, builder, module, package, spos):
+        super().__init__(builder, module, package, spos)
+        self.values = {}
+        self.current_value = 0
+
+    def has_value(self, value=None):
+        if value is None:
+            val = self.current_value
+        else:
+            val = value.consteval()
+        return val in self.values
+
+    def add_value(self, name, value=None):
+        if value is None:
+            val = self.current_value
+        else:
+            if not value.is_constexpr:
+                lineno = self.getsourcepos().lineno
+                colno = self.getsourcepos().colno
+                throw_saturn_error(self.builder, self.module, lineno, colno,
+                                   f"Enum value for {name.name} cannot be computed at compile time.")
+            val = value.consteval()
+        self.values[val] = name.name
+        self.current_value = val + 1
+
+
+class EnumDecl(ASTNode):
+    """
+    A struct declaration expression.\n
+    type lvalue : enum { body }\n
+    type lvalue : enum(value_type) { body }
+    """
+    def __init__(self, builder, module, package, spos, lvalue, body,
+                 value_type=None, decl_mode=False,
+                 visibility=Visibility.PUBLIC,
+                 attribute_list=None):
+        super().__init__(builder, module, package, spos)
+        self.lvalue = lvalue
+        self.body = body
+        if value_type is None:
+            value_type = TypeExpr(self.builder, self.module, self.package, self.spos,
+                                  LValue(self.builder, self.module, self.package, self.spos, 'int'))
+        self.value_type = value_type
+        self.decl_mode = decl_mode
+        self.visibility = visibility
+        self.attribute_list = attribute_list
+        name = self.lvalue.get_name()
+        types[name] = EnumType(name, self.value_type.get_type())
+        self.package.add_symbol(name, types[name])
+        self.symbol = types[name]
+        if self.body is not None:
+            for value, el in self.body.values.items():
+                types[name].add_value(el, value)
+
+    def add_attribute_list(self, attr_list: AttributeList):
+        self.attribute_list = attr_list
+
+    def add_visibility(self, visibility_decl):
+        tt = visibility_decl.gettokentype()
+        if tt == 'TPRIV':
+            visibility = Visibility.PRIVATE
+        elif tt == 'TPUB':
+            visibility = Visibility.PUBLIC
+        else:
+            visibility = Visibility.DEFAULT
+        self.visibility = visibility
+
+    def generate_symbol(self):
+        name = self.lvalue.get_name()
+
+    def eval(self):
+        name = self.lvalue.get_name()
+
+
 class FuncCall(Expr):
     """
     Function call expression.\n
@@ -4166,7 +4324,6 @@ class FuncCall(Expr):
 
     def get_ir_type(self):
         return self.get_type().irtype
-        #return self.module.sfuncs[self.lvalue.get_name()].rtype.irtype
 
     def eval(self):
         name = self.lvalue.get_name()
@@ -4274,7 +4431,7 @@ class MethodCall(Expr):
 
     def get_type(self):
         # name = self.callee.get_type().name + '.' + self.lvalue.get_name()
-        name = self.callee.get_type().name + '::' + self.lvalue.get_name()
+        name = self.callee.get_type().get_full_name() + '::' + self.lvalue.get_name()
         # sfn = self.module.sfuncs[name]
         sfn = self.package.lookup_symbol(name)
         return sfn.rtype
@@ -4296,7 +4453,10 @@ class MethodCall(Expr):
         # sfn = self.module.sfuncs[name]
         #print(name, self.module.sfuncs[name], sfn.overloads)
         sargs = [arg for arg in self.args]
-        sargs.insert(0, AddressOf(self.builder, self.module, self.package, self.spos, self.callee))
+        if self.callee.get_type().is_value():
+            sargs.insert(0, AddressOf(self.builder, self.module, self.package, self.spos, self.callee))
+        else:
+            sargs.insert(0, self.callee)
         aargs = [arg.get_type() for arg in sargs]
         ovrld = sfn.search_overload(aargs)
         if not ovrld:
@@ -4550,10 +4710,45 @@ class IterExpr(ASTNode):
             self.builder.store(add, ptr.irvalue)
 
 
+class LValueIterator(ASTNode):
+    def __init__(self, builder, module, package, spos, lvalue):
+        super().__init__(builder, module, package, spos)
+        self.lvalue = lvalue
+        self.start = ElementOf(self.builder, self.module, self.package, self.spos, self.lvalue,
+                               Integer(self.builder, self.module, self.package, self.spos, '0'))
+        self.end = ElementOf(self.builder, self.module, self.package, self.spos, self.lvalue,
+                             Integer(self.builder, self.module, self.package, self.spos,
+                                     str(self.lvalue.get_type().get_array_count())))
+
+    def get_type(self):
+        return self.lvalue.get_type().get_element_of().get_pointer_to()
+
+    def get_ir_type(self):
+        return self.get_type().get_ir_type()
+
+    def eval_init(self):
+        return self.start.get_pointer().irvalue
+
+    def eval_loop_check(self, loopvar):
+        tocheck = AddressOf(self.builder, self.module, self.package, self.spos, self.end)
+        return BooleanLt(self.builder, self.module, self.package, self.spos, loopvar, tocheck).eval()
+
+    def get_inc_amount(self):
+        return ir.Constant(self.get_ir_type(), 1)
+
+    def eval_loop_inc(self, loopvar, valuevar):
+        ptr = loopvar.get_pointer()
+        ld = self.builder.load(ptr.irvalue)
+        gep = self.builder.gep(ld, [ir.Constant(ir.IntType(32), 1)])
+        self.builder.store(gep, ptr.irvalue)
+        ptr = valuevar.get_pointer()
+        self.builder.store(self.builder.load(gep), ptr.irvalue)
+
+
 class ForStatement(ASTNode):
     """
     For loop statement.\n
-    for it in itexpr { loop }
+    for it in itexpr { loop }\n
     """
     def __init__(self, builder, module, package, spos, it, itexpr, loop):
         super().__init__(builder, module, package, spos)
@@ -4562,16 +4757,31 @@ class ForStatement(ASTNode):
         self.loop = loop
 
     def eval(self):
+        if not isinstance(self.itexpr, IterExpr):
+            self.itexpr = LValueIterator(self.builder, self.module, self.package, self.itexpr.spos, self.itexpr)
         init = self.builder.append_basic_block(self.module.get_unique_name("for.init"))
         self.builder.branch(init)
         self.builder.goto_block(init)
         self.builder.position_at_start(init)
         push_new_scope(self.builder)
-        name = self.it.get_name()
-        ty = self.itexpr.get_type()
-        ptr = Value(name, ty, self.builder.alloca(ty.irtype, name=name))
-        add_new_local(name, ptr)
-        self.builder.store(self.itexpr.eval_init(), ptr.irvalue)
+        if not isinstance(self.itexpr, IterExpr):
+            name = self.it.get_name() + '.ptr'
+            ty = self.itexpr.get_type()
+            ptr = Value(name, ty, self.builder.alloca(ty.irtype, name=name))
+            add_new_local(name, ptr)
+            name = self.it.get_name()
+            value_ty = self.itexpr.get_type().get_dereference_of()
+            val_ptr = Value(name, value_ty, self.builder.alloca(value_ty.irtype, name=name))
+            add_new_local(name, val_ptr)
+        else:
+            name = self.it.get_name()
+            ty = self.itexpr.get_type()
+            ptr = Value(name, ty, self.builder.alloca(ty.irtype, name=name))
+            add_new_local(name, ptr)
+        init_val = self.itexpr.eval_init()
+        self.builder.store(init_val, ptr.irvalue)
+        if not isinstance(self.itexpr, IterExpr):
+            self.builder.store(self.builder.load(init_val), val_ptr.irvalue)
         check = self.builder.append_basic_block(self.module.get_unique_name("for.check"))
         loop = self.builder.append_basic_block(self.module.get_unique_name("for.loop"))
         inc = self.builder.append_basic_block(self.module.get_unique_name("for.inc"))
@@ -4581,7 +4791,11 @@ class ForStatement(ASTNode):
         self.builder.position_at_start(check)
         self.builder.break_dest = after
         self.builder.continue_dest = inc
-        checkval = self.itexpr.eval_loop_check(self.it)
+        if isinstance(self.itexpr, IterExpr):
+            checkval = self.itexpr.eval_loop_check(self.it)
+        else:
+            checkval = self.itexpr.eval_loop_check(LValue(self.builder, self.module, self.package, self.itexpr.spos,
+                                                          self.it.get_name() + '.ptr'))
         self.builder.cbranch(checkval, loop, after)
         self.builder.goto_block(loop)
         self.builder.position_at_start(loop)
@@ -4589,7 +4803,11 @@ class ForStatement(ASTNode):
         self.builder.branch(inc)
         self.builder.goto_block(inc)
         self.builder.position_at_start(inc)
-        self.itexpr.eval_loop_inc(self.it)
+        if isinstance(self.itexpr, IterExpr):
+            self.itexpr.eval_loop_inc(self.it)
+        else:
+            self.itexpr.eval_loop_inc(LValue(self.builder, self.module, self.package, self.itexpr.spos,
+                                             self.it.get_name() + '.ptr'), self.it)
         self.builder.break_dest = None
         self.builder.continue_dest = None
         self.builder.branch(check)

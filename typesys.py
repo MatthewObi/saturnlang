@@ -104,11 +104,10 @@ class Type(Symbol):
 
     def get_array_of(self, size):
         return Type(self.name,
-            self.tclass,
-            ir.ArrayType(self.irtype, size),
-            qualifiers=self.qualifiers + [('array', size)],
-            traits=self.traits
-        )
+                    self.tclass,
+                    ir.ArrayType(self.irtype, size),
+                    qualifiers=self.qualifiers + [('array', size)],
+                    traits=self.traits)
 
     def make_pointer(self):
         self.qualifiers.append(('ptr',))
@@ -130,11 +129,10 @@ class Type(Symbol):
                 break
         ql.reverse()
         return Type(self.name,
-            self.tclass,
-            self.irtype.pointee,
-            qualifiers=ql,
-            traits=self.traits
-        )
+                    self.tclass,
+                    self.irtype.pointee,
+                    qualifiers=ql,
+                    traits=self.traits)
 
     def get_reference_to(self):
         return ReferenceType(self.name,
@@ -176,6 +174,9 @@ class Type(Symbol):
 
     def has_trait(self, trait):
         return trait in self.traits
+
+    def get_base_type(self):
+        return self
 
     def is_array(self):
         if len(self.qualifiers) > 0:
@@ -226,6 +227,9 @@ class Type(Symbol):
 
     def is_reference(self):
         return ('ref',) in self.qualifiers
+
+    def is_enum(self):
+        return self.tclass == 'enum'
 
     def is_void(self):
         return self.tclass == 'void'
@@ -504,6 +508,160 @@ class GlobalValue(Symbol):
         return d
 
 
+class ConstexprValue(Symbol):
+    """
+    A saturn constexpr value.
+    """
+    def __init__(self, name, stype, value, objtype='stack', visibility=Visibility.DEFAULT):
+        super().__init__(name, visibility)
+        self.type = stype
+        self.objtype = objtype
+        self.value = value
+
+    def get_ir_type(self):
+        return self.type.get_ir_type()
+
+    def is_stack_object(self):
+        return self.objtype == 'stack'
+
+    def is_shared_object(self):
+        return self.objtype == 'shared'
+
+    def is_owned_object(self):
+        return self.objtype == 'owned'
+
+    def is_global(self):
+        return self.objtype == 'global'
+
+    def is_heap_object(self):
+        return self.objtype == 'shared' or self.objtype == 'owned'
+
+    def __str__(self):
+        s = f"{Visibility.VALUE[self.visibility]} constexpr value {self.name}: {str(self.type)} = {str(self.value)}"
+        return s
+
+    def to_dict(self):
+        d = super().to_dict()
+        d['name'] = self.name
+        d['symbol_type'] = 'value'
+        d['value_type'] = self.type.to_dict()
+        d['obj_type'] = self.objtype
+        d['value'] = self.value
+        return d
+
+
+# Float constants
+types["float64"].symbols["max"] = ConstexprValue('max', types['float64'], 1.7976931348623157e+308)
+types["float64"].symbols["min"] = ConstexprValue('min', types['float64'], -1.7976931348623157e+308)
+types["float64"].symbols["nan"] = ConstexprValue('nan', types['float64'], float('NaN'))
+types["float64"].symbols["inf"] = ConstexprValue('inf', types['float64'], float('infinity'))
+types["float64"].symbols["negative_inf"] = ConstexprValue("negative_inf", types['float64'], -float('infinity'))
+
+types["float32"].symbols["max"] = ConstexprValue('max', types['float32'], 3.4028234663852886e+38)
+types["float32"].symbols["min"] = ConstexprValue('min', types['float32'], -3.4028234663852886e+38)
+types["float32"].symbols["nan"] = ConstexprValue('nan', types['float32'], float('NaN'))
+types["float32"].symbols["inf"] = ConstexprValue('inf', types['float32'], float('infinity'))
+types["float32"].symbols["negative_inf"] = ConstexprValue("negative_inf", types['float32'], -float('infinity'))
+
+# Integer constants
+types["int8"].symbols["max"] = ConstexprValue('max', types["int8"], 0x7f)
+types["int8"].symbols["min"] = ConstexprValue('min', types["int8"], 0-0x80)
+types["byte"].symbols["max"] = ConstexprValue('max', types["byte"], 0xff)
+types["byte"].symbols["min"] = ConstexprValue('min', types["byte"], 0)
+types["int16"].symbols["max"] = ConstexprValue('max', types["int16"], 0x7fff)
+types["int16"].symbols["min"] = ConstexprValue('min', types["int16"], 0-0x8000)
+types["int32"].symbols["max"] = ConstexprValue('max', types["int32"], 0x7fffffff)
+types["int32"].symbols["min"] = ConstexprValue('min', types["int32"], 0-0x80000000)
+types["uint32"].symbols["max"] = ConstexprValue('max', types["uint32"], 0xffffffff)
+types["uint32"].symbols["min"] = ConstexprValue('min', types["uint32"], 0)
+types["int64"].symbols["max"] = ConstexprValue('max', types["int64"], 0x7fffffffffffffff)
+types["int64"].symbols["min"] = ConstexprValue('min', types["int64"], 0-0x8000000000000000)
+types["uint64"].symbols["max"] = ConstexprValue('max', types["uint64"], 0xffffffffffffffff)
+types["uint64"].symbols["min"] = ConstexprValue('min', types["uint64"], 0)
+
+
+class PointerType(Type):
+    def __init__(self, pointee_type, qualifiers=None, traits=None):
+        if qualifiers is None:
+            qualifiers = []
+        super().__init__('', pointee_type.tclass, None, qualifiers=qualifiers.copy(), traits=traits)
+        self.pointee = pointee_type
+
+    def get_ir_type(self):
+        return self.pointee.get_ir_type().as_pointer()
+
+    def is_pointer(self):
+        return True
+
+    def get_dereference_of(self):
+        return self.pointee
+
+    def get_pointer_to(self):
+        return PointerType(self, self.qualifiers, self.traits)
+
+    def get_base_type(self):
+        return self.pointee.get_base_type()
+
+
+class ArrayType(Type):
+    def __init__(self, element_type, count, qualifiers=None, traits=None):
+        super().__init__('', element_type.tclass, None, qualifiers=qualifiers.copy(), traits=traits)
+        self.element = element_type
+        self.count = count
+
+    def get_array_count(self):
+        return self.count
+
+    def get_ir_type(self):
+        return ir.ArrayType(self.element.get_ir_type(), self.count)
+
+    def is_array(self):
+        return True
+
+    def get_pointer_to(self):
+        return PointerType(self, self.qualifiers, self.traits)
+
+    def get_array_of(self, size):
+        return ArrayType(self, size, self.qualifiers, self.traits)
+
+    def get_element_of(self):
+        return self.element
+
+    def get_base_type(self):
+        return self.element.get_base_type()
+
+    def __str__(self):
+        return f'[{self.count}]{str(self.element)}'
+
+
+class HVectorType(Type):
+    def __init__(self, element_type, count, qualifiers=None, traits=None):
+        super().__init__('', element_type.tclass, None, qualifiers=qualifiers.copy(), traits=traits)
+        self.element = element_type
+        self.count = count
+
+    def get_array_count(self):
+        return self.count
+
+    def get_ir_type(self):
+        return ir.VectorType(self.element.get_ir_type(), self.count)
+
+    def is_array(self):
+        return True
+
+    def get_pointer_to(self):
+        return PointerType(self, self.qualifiers, self.traits)
+
+    def get_element_of(self):
+        return self.element
+
+    def get_array_of(self, size):
+        return ArrayType(self, size)
+
+    def __str__(self):
+        return f'[{self.count}]{str(self.element)}'
+
+
 class FuncType(Type):
     """
     A semantic function type in Saturn.
@@ -524,12 +682,11 @@ class FuncType(Type):
 
     def get_pointer_to(self):
         return FuncType(self.name,
-            self.irtype.as_pointer(),
-            self.rtype,
-            self.atypes.copy(),
-            qualifiers=self.qualifiers + [('ptr',)],
-            traits=self.traits
-        )
+                        self.irtype.as_pointer(),
+                        self.rtype,
+                        self.atypes.copy(),
+                        qualifiers=self.qualifiers + [('ptr',)],
+                        traits=self.traits)
 
     def __str__(self):
         s = ""
@@ -717,6 +874,59 @@ class StructType(Type):
         return d
 
 
+class EnumType(Type):
+    """
+    An enumeration type in Saturn.
+    """
+    def __init__(self, name, base_type,
+                 qualifiers=None, traits=None):
+        if traits is None:
+            traits = {}
+        if qualifiers is None:
+            qualifiers = []
+        super().__init__(name, 'enum', None, qualifiers=qualifiers, traits=traits)
+        self.name = name
+        self.base_type = base_type
+        self.irtype = None
+        self.tclass = 'enum'
+        self.qualifiers = qualifiers
+        self.traits = traits
+
+    def get_ir_type(self):
+        if self.irtype is None:
+            self.irtype = self.base_type.get_ir_type()
+        return self.irtype
+
+    def add_value(self, name, value):
+        val = ConstexprValue(name, self.base_type, value)
+        self[name] = val
+
+    def get_array_of(self, size):
+        return self
+
+    def get_pointer_to(self):
+        return self
+
+    def get_reference_to(self):
+        return ReferenceType(self.name,
+                             self,
+                             self.tclass)
+
+    def get_dereference_of(self):
+        return self
+
+    def get_element_of(self):
+        return self
+
+    def to_dict(self, full_def=True):
+        if not full_def:
+            d = super().to_dict()
+            return d
+        d = super().to_dict()
+        d['children'] = {k: v.to_dict() for k, v in self.symbols.items()}
+        return d
+
+
 class ReferenceType(Type):
     """
     A reference type in Saturn. Can hold a raw pointer, stack allocated object, or shared object.
@@ -731,6 +941,9 @@ class ReferenceType(Type):
         self.qualifiers = self.type.qualifiers.copy() + [('ref',)]
         self.traits = self.type.traits.copy()
         self.bits = -1
+
+    def get_base_type(self):
+        return self.type.get_base_type()
 
     def add_field(self, name, ftype, irvalue):
         self.type.add_field(name, ftype, irvalue)
@@ -1015,7 +1228,7 @@ class FuncOverload:
     """
     A specific overload for a function.
     """
-    def __init__(self, name, fn, rtype, atypes=None, traits=None):
+    def __init__(self, name, fn, rtype, atypes=None, default_args=None, traits=None):
         if traits is None:
             traits = {}
         if atypes is None:
@@ -1024,6 +1237,7 @@ class FuncOverload:
         self.fn = fn
         self.rtype = rtype
         self.atypes = atypes
+        self.default_args = default_args
         self.traits = traits
         self._key = ''
         self.irvalue = None
@@ -1087,7 +1301,9 @@ def get_implicit_conversion_for_match(expected: list, actual: list):
     return None
 
 
-def get_arg_list_match_value(expected: list, actual: list):
+def get_arg_list_match_value(expected: list, actual: list, default: list):
+    if default is None:
+        default = []
     if len(expected) < len(actual):
         return 0
     if len(expected) == len(actual):
@@ -1100,6 +1316,8 @@ def get_arg_list_match_value(expected: list, actual: list):
                 return 0
             match += val
         return match
+    if len(expected) > len(actual) >= len(expected) - len(default):
+        pass
     return 0
 
 
@@ -1121,7 +1339,7 @@ class OverloadMatch:
 
 def get_overload_match(expected: FuncOverload, actual: list):
     match = OverloadMatch(expected, actual,
-                          get_arg_list_match_value(expected.atypes, actual),
+                          get_arg_list_match_value(expected.atypes, actual, expected.default_args),
                           get_implicit_conversion_for_match(expected.atypes, actual))
     return match
 

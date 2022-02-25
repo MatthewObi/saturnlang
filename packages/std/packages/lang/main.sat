@@ -5,7 +5,7 @@ package lang;
  *
  * Copyright Matthew Obi 2022
  *
- * Last modified 2022 February 10
+ * Last modified 2022 February 24
  */
 
 /*
@@ -13,6 +13,42 @@ package lang;
  */
 
 type hash_t: uint64;
+
+/*
+ * Rotate shift functions
+ */
+
+fn rotl8(x: uint8, n: uint8): uint8 {
+    return (x << n) | (x >> (-n & 7b));
+}
+
+fn rotr8(x: uint8, n: uint8): uint8 {
+    return (x >> n) | (x << (-n & 7b));
+}
+
+fn rotl16(x: uint16, n: uint16): uint16 {
+    return (x << n) | (x >> (-n & 15us));
+}
+
+fn rotr16(x: uint16, n: uint16): uint16 {
+    return (x >> n) | (x << (-n & 15us));
+}
+
+fn rotl32(x: uint32, n: uint32): uint32 {
+    return (x << n) | (x >> (-n & 31u));
+}
+
+fn rotr32(x: uint32, n: uint32): uint32 {
+    return (x >> n) | (x << (-n & 31u));
+}
+
+fn rotl64(x: uint64, n: uint64): uint64 {
+    return (x << n) | (x >> (-n & 63ul));
+}
+
+fn rotr64(x: uint64, n: uint64): uint64 {
+    return (x >> n) | (x << (-n & 63ul));
+}
 
 /*
  * String (utf8-encoded string)
@@ -37,12 +73,14 @@ fn(*string) delete(): void {
 }
 
 fn(*string) operator=(str: cstring): void {
+    this.delete();
     this.ptr = str;
     this.len = strlen(str);
     this.alloc = false;
 }
 
 fn(*string) operator=(str: &string): void {
+    if this.ptr != str.ptr then this.delete();
     this.ptr = str.ptr;
     this.len = cast<uint>(str.len);
     this.alloc = str.alloc;
@@ -60,7 +98,7 @@ fn(*string) operator+(str: *string): string {
     new_ptr := make unsafe [100]byte;
     strcpy(new_ptr, this.ptr);
     strcat(new_ptr, str.ptr);
-    return string {
+    return (string) {
         ptr: new_ptr,
         len: cast<uint>(strlen(new_ptr)),
         alloc: true
@@ -70,11 +108,11 @@ fn(*string) operator+(str: *string): string {
 fn(*string) substr(start: uint, len: uint): string {
     new_ptr := make unsafe [100]byte;
     src_ptr := cast<*byte>(this.ptr);
-    for i in [0u..len] {
+    for i in 0u..len {
         if i >= this.len then break;
         new_ptr[i] = src_ptr[start + i];
     }
-    return string {
+    return (string) {
         ptr: new_ptr,
         len: cast<uint>(strlen(new_ptr)),
         alloc: true

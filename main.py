@@ -71,6 +71,7 @@ class PackageType:
 def compile_package(name, working_directory='.',
                     opt_level=-1,
                     package_type=PackageType.LIBRARY) -> Package:
+    from typesys import types
     global lexer
     global parser
 
@@ -111,6 +112,9 @@ def compile_package(name, working_directory='.',
     linkfiles = []
 
     package = Package.get_or_create(name, working_directory=working_directory, out_file=out_file, target=target)
+    for ty in types.values():
+        if not ty.name.startswith('C::'):
+            package.add_symbol_extern(ty.name, ty)
     print(f'Compiling package {name} in directory {working_directory} with target {target.name}...')
 
     for f in glob.glob(f"{working_directory}/*.sat"):

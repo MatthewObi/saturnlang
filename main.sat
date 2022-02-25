@@ -2,14 +2,20 @@ package main;
 import std::lang::{string};
 import std::math;
 
-myData := bin_include("test.bin");
+const myData := bin_include("test.bin");
 
-pub fn passByReference(x: &int)
-{
-    x = 15;
+type myEnum: enum(uint8) {
+    CLOSED,
+    OPEN,
+    EH,
 }
 
-pub fn addNum(n: int): int
+fn passByReference(x: &int)
+{
+    x += 15;
+}
+
+priv fn addNum(n: int): int
 {
     return n + n;
 }
@@ -32,9 +38,9 @@ pub fn testLambda(): int
     return 0;
 }
 
-pub fn GetString(): string
+priv fn GetString(): string
 {
-    return string{};
+    return (string){};
 }
 
 pub fn testPassPtr(str: cstring): uint64
@@ -72,13 +78,18 @@ pub fn testPassLambda()
 [[message("Hi! How are you doing? 🪐Ω»«°😃")]]
 pub fn main(argc: int, argv: *cstring): int
 {
+    myE := myEnum::OPEN;
+    if myE == myEnum::OPEN {
+        myE = myEnum::CLOSED;
+    }
+
     printf("Welcome to the 🪐Saturn Programming Language!🪐\n");
     str: string = "Hello, 世界! 😃 ";
     str2 := str + str;
-    printf("%s (len = %d, alloc = %s)\n", str.ptr, str.len, if str.alloc then "true" else "false");
-    printf("%s (len = %d, alloc = %s)\n", str2.ptr, str2.len, if str2.alloc then "true" else "false");
+    printf("%s (len = %d, alloc = %s)\n", str.ptr, str.len, "true" if str.alloc else "false");
+    printf("%s (len = %d, alloc = %s)\n", str2.ptr, str2.len, "true" if str2.alloc else "false");
     str3 := str.substr(1u, 4u);
-    printf("%s (len = %d, alloc = %s)\n", str3.ptr, str3.len, if str3.alloc then "true" else "false");
+    printf("%s (len = %d, alloc = %s)\n", str3.ptr, str3.len, "true" if str3.alloc else "false");
     str4 := GetString();
 
     testLambda();
@@ -88,6 +99,8 @@ pub fn main(argc: int, argv: *cstring): int
     printf("sin(pi / 2) = %lf\n", math::sin(math::PI / 2.0));
     printf("tan(pi / 4) = %lf\n", math::tan(math::PI / 4.0));
     printf("e^pi = %lf\n", math::exp(math::PI));
+    printf("float64::max = %lf\n", float64::max);
+    printf("int32::max = %d\n", int32::max);
     printf("%d! = %d\n", 4, factorial(4));
     strSwitchTest := "switch_test(%d) = %d\n";
     printf(strSwitchTest, 11, switch_test(11));
@@ -104,8 +117,14 @@ pub fn main(argc: int, argv: *cstring): int
     printf("x = %d\n", x);
 
     printf("test.bin: ");
-    for n in [0..7] do
-        printf("%02X ", myData[n]);
+    for n in myData do
+        printf("%02X ", n);
+    printf("\n");
+
+    printf("Evens: ");
+    for i in 0...10:2 {
+        printf("%02d ", i);
+    }
     printf("\n");
 
     q := 0.123q;

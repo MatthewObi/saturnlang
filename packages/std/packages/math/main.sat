@@ -5,7 +5,7 @@ package math;
  *
  * Copyright Matthew Obi 2022
  *
- * Last modified 2022 January 8
+ * Last modified 2022 February 22
  */
 
 /*
@@ -19,13 +19,13 @@ const TAU: float64 = 2.0 * 3.141592653589793238462643383279502884197169399375105
  * Basic Mathematical Functions
  */
 
-fn absb(x: int8): int8 { return if x < 0sb then -x else x; }
+fn absb(x: int8): int8 { return -x if x < 0sb else x; }
 
-fn abss(x: int16): int16 { return if x < 0s then -x else x; }
+fn abss(x: int16): int16 { return -x if x < 0s else x; }
 
-fn abs(x: int32): int32 { return if x < 0 then -x else x; }
+fn abs(x: int32): int32 { return -x if x < 0 else x; }
 
-fn absl(x: int64): int64 { return if x < 0l then -x else x; }
+fn absl(x: int64): int64 { return -x if x < 0l else x; }
 
 [[link_name("llvm.fabs.f32")]]
 fn fabsf(x: float32): float32;
