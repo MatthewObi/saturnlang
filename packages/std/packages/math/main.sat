@@ -5,161 +5,161 @@ package math;
  *
  * Copyright Matthew Obi 2022
  *
- * Last modified 2022 February 22
+ * Last modified 2022 March 08
  */
 
 /*
  * Mathematical Constants
  */
-const  PI: float64 = 3.14159265358979323846264338327950288419716939937510582097494459;
-const   E: float64 = 2.71828182845904523536028747135266249775724709369995;
-const TAU: float64 = 2.0 * 3.14159265358979323846264338327950288419716939937510582097494459;
+pub const  PI: float64 = 3.14159265358979323846264338327950288419716939937510582097494459;
+pub const   E: float64 = 2.71828182845904523536028747135266249775724709369995;
+pub const TAU: float64 = 2.0 * 3.14159265358979323846264338327950288419716939937510582097494459;
 
 /*
  * Basic Mathematical Functions
  */
 
-fn absb(x: int8): int8 { return -x if x < 0sb else x; }
+pub fn abs(x: int8): int8 { return -x if x < 0sb else x; }
 
-fn abss(x: int16): int16 { return -x if x < 0s else x; }
+pub fn abs(x: int16): int16 { return -x if x < 0s else x; }
 
-fn abs(x: int32): int32 { return -x if x < 0 else x; }
+pub fn abs(x: int32): int32 { return -x if x < 0 else x; }
 
-fn absl(x: int64): int64 { return -x if x < 0l else x; }
+pub fn abs(x: int64): int64 { return -x if x < 0l else x; }
 
 [[link_name("llvm.fabs.f32")]]
-fn fabsf(x: float32): float32;
+pub fn fabs(x: float32): float32;
 
 [[link_name("llvm.fabs.f64")]]
-fn fabs(x: float64): float64;
+pub fn fabs(x: float64): float64;
 
 [[link_name("llvm.fabs.f128")]]
-fn fabsq(x: float128): float128;
+pub fn fabs(x: float128): float128;
 
 [[link_name("llvm.sqrt.f32")]]
-fn sqrtf(x: float32): float32;
+pub fn sqrt(x: float32): float32;
 
 [[link_name("llvm.sqrt.f64")]]
-fn sqrt(x: float64): float64;
+pub fn sqrt(x: float64): float64;
 
 [[link_name("llvm.sqrt.f128")]]
-fn sqrtq(x: float128): float128;
+pub fn sqrt(x: float128): float128;
 
 /*
  * Trig Functions
  */
 
 [[link_name("llvm.sin.f32")]]
-fn sinf(x: float32): float32;
+pub fn sin(x: float32): float32;
 
 [[link_name("llvm.sin.f64")]]
-fn sin(x: float64): float64;
+pub fn sin(x: float64): float64;
 
 [[link_name("llvm.sin.f128")]]
-fn sinq(x: float128): float128;
+pub fn sin(x: float128): float128;
 
 [[link_name("llvm.cos.f32")]]
-fn cosf(x: float32): float32;
+pub fn cos(x: float32): float32;
 
 [[link_name("llvm.cos.f64")]]
-fn cos(x: float64): float64;
+pub fn cos(x: float64): float64;
 
 [[link_name("llvm.cos.f128")]]
-fn cosq(x: float128): float128;
+pub fn cos(x: float128): float128;
 
-fn tanf(x: float32): float32 { return sinf(x) / cosf(x); }
+pub fn tan(x: float32): float32 { return sin(x) / cos(x); }
 
-fn tan(x: float64): float64 { return sin(x) / cos(x); }
+pub fn tan(x: float64): float64 { return sin(x) / cos(x); }
 
 /*
  * Exponential Functions
  */
 
 [[link_name("llvm.pow.f32")]]
-fn powf(val: float32, pow: float32): float32;
+pub fn pow(val: float32, pow: float32): float32;
 
 [[link_name("llvm.pow.f64")]]
-fn pow(val: float64, pow: float64): float64;
+pub fn pow(val: float64, pow: float64): float64;
 
 [[link_name("llvm.pow.f128")]]
-fn powq(val: float128, pow: float128): float128;
+pub fn pow(val: float128, pow: float128): float128;
 
 [[link_name("llvm.exp.f32")]]
-fn expf(x: float32): float32;
+pub fn exp(x: float32): float32;
 
 [[link_name("llvm.exp.f64")]]
-fn exp(x: float64): float64;
+pub fn exp(x: float64): float64;
 
 [[link_name("llvm.exp.f128")]]
-fn expq(x: float128): float128;
+pub fn exp(x: float128): float128;
 
 [[link_name("llvm.exp2.f32")]]
-fn exp2f(x: float32): float32;
+pub fn exp2(x: float32): float32;
 
 [[link_name("llvm.exp2.f64")]]
-fn exp2(x: float64): float64;
+pub fn exp2(x: float64): float64;
 
 [[link_name("llvm.exp2.f128")]]
-fn exp2q(x: float128): float128;
+pub fn exp2(x: float128): float128;
 
 /*
  * Logarithmic Functions
  */
 
 [[link_name("llvm.log.f32")]]
-fn lnf(x: float32): float32;
+pub fn ln(x: float32): float32;
 
 [[link_name("llvm.log.f64")]]
-fn ln(x: float64): float64;
+pub fn ln(x: float64): float64;
 
 [[link_name("llvm.log.f128")]]
-fn lnq(x: float128): float128;
+pub fn ln(x: float128): float128;
 
 [[link_name("llvm.log10.f32")]]
-fn log10f(x: float32): float32;
+pub fn log10(x: float32): float32;
 
 [[link_name("llvm.log10.f64")]]
-fn log10(x: float64): float64;
+pub fn log10(x: float64): float64;
 
 [[link_name("llvm.log10.f128")]]
-fn log10q(x: float128): float128;
+pub fn log10(x: float128): float128;
 
 [[link_name("llvm.log2.f32")]]
-fn log2f(x: float32): float32;
+pub fn log2(x: float32): float32;
 
 [[link_name("llvm.log2.f64")]]
-fn log2(x: float64): float64;
+pub fn log2(x: float64): float64;
 
 [[link_name("llvm.log2.f128")]]
-fn log2q(x: float128): float128;
+pub fn log2(x: float128): float128;
 
 /*
  * Rounding Functions
  */
 
 [[link_name("llvm.floor.f32")]]
-fn floorf(x: float32): float32;
+pub fn floor(x: float32): float32;
 
 [[link_name("llvm.floor.f64")]]
-fn floor(x: float64): float64;
+pub fn floor(x: float64): float64;
 
 [[link_name("llvm.floor.f128")]]
-fn floorq(x: float128): float128;
+pub fn floor(x: float128): float128;
 
 [[link_name("llvm.ceil.f32")]]
-fn ceilf(x: float32): float32;
+pub fn ceil(x: float32): float32;
 
 [[link_name("llvm.ceil.f64")]]
-fn ceil(x: float64): float64;
+pub fn ceil(x: float64): float64;
 
 [[link_name("llvm.ceil.f128")]]
-fn ceilq(x: float128): float128;
+pub fn ceil(x: float128): float128;
 
 [[link_name("llvm.round.f32")]]
-fn roundf(x: float32): float32;
+pub fn round(x: float32): float32;
 
 [[link_name("llvm.round.f64")]]
-fn round(x: float64): float64;
+pub fn round(x: float64): float64;
 
 [[link_name("llvm.round.f128")]]
-fn roundq(x: float128): float128;
+pub fn round(x: float128): float128;

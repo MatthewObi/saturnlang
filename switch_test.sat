@@ -1,5 +1,5 @@
 fn switch_test(x: int): int {
-    y := 0;
+    mut y := 0;
     switch x {
         case 11:
             printf("Woo!\n");
@@ -16,7 +16,7 @@ fn switch_test(x: int): int {
 }
 
 fn elif_test(x: int): int {
-    y := 0;
+    mut y := 0;
     if x == 11 {
         printf("Woo!\n");
         y += 5;

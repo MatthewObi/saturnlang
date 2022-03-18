@@ -63,14 +63,17 @@ class Lexer:
         self.lexer.add('TBININCLUDE',  r'\bbin_include\b')
         self.lexer.add('TNEW',         r'\bnew\b')
         self.lexer.add('TTUPLE',       r'\btuple\b')
-        self.lexer.add('TVECTOR',      r'\bvector\b')
-        self.lexer.add('TMAP',         r'\bmap\b')
 
         self.lexer.add('TTRUE',        r'\btrue\b')
         self.lexer.add('TFALSE',       r'\bfalse\b')
         # Parenthesis
         self.lexer.add('LPAREN',    r'\(')
         self.lexer.add('RPAREN',    r'\)')
+        # Angle Bracket
+        self.lexer.add('LANGLE', r'<\[')
+        self.lexer.add('RANGLE', r'\]>')
+        self.lexer.add('LVEC', r'\[<')
+        self.lexer.add('RVEC', r'>\]')
         # Bracket
         self.lexer.add('LDBRACKET', r'\[\[')
         self.lexer.add('RDBRACKET', r'\]\]')
@@ -97,9 +100,6 @@ class Lexer:
         # Operators
         self.lexer.add('MUL',       r'\*')
         self.lexer.add('DIV',       r'\/')
-        
-        self.lexer.add('LANGLE',    r'<\[')
-        self.lexer.add('RANGLE',    r'\]>')
 
         self.lexer.add('LSHFTEQ',   r'<<=')
         self.lexer.add('RSHFTEQ',   r'>>=')

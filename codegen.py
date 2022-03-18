@@ -203,7 +203,9 @@ class CodeGen:
         llvm_ir = str(self.module)
         with open('out.ll', 'w') as output_file:
             output_file.write(llvm_ir)
-        mod = self.binding.parse_assembly(llvm_ir.replace('target triple = ', 'source_filename = "%s"\ntarget triple = ' % self.filename))
+        mod = self.binding.parse_assembly(
+            llvm_ir.replace('target triple = ',
+                            f'source_filename = "{self.filename}"\ntarget triple = '))
         mod.name = self.module.name
         mod.verify()
         if self.opt_level > 0:
@@ -305,27 +307,22 @@ class CodeGen:
 
     def jit_execute(self, ir: llvm.ModuleRef, fn: ir.Function, *params):
         from ctypes import CFUNCTYPE, WINFUNCTYPE, c_int, c_char_p
-        # puts_ptr = self.binding.address_of_symbol('puts')
-        # self.engine.add_global_mapping(ir.get_function('puts'), puts_ptr)
-        func_ptr = self.engine.get_function_address(fn.name)
-        print(f"Function at 0x{func_ptr:X}")
+        print(ir.get_function(fn.name))
+        func_ptr = self.engine.get_function_address(ir.get_function(fn.name).name)
+        print(f"Function {fn.name} at 0x{func_ptr:X}")
         retty = self.ir_to_c_type(fn.ftype.return_type)
         argtys = [self.ir_to_c_type(argty) for argty in fn.ftype.args]
         print(retty, *argtys, *params)
         cparams = [param for param in params]
         func = CFUNCTYPE(retty, *argtys)(func_ptr)
-        print(fn.name, *cparams)
-        # puts_ir_ptr = self.engine.get_function_address('puts')
-        # puts_fn = CFUNCTYPE(c_int, c_char_p)(puts_ptr)
-        # puts_fn(b'Hello, world!')
-        # print(f"puts actual address: 0x{puts_ptr:X}")
+        print(func, fn.name, *cparams)
         return func(*cparams)
 
     def save_ir(self, filename, ir):
         with open(filename, 'w', encoding='utf8') as output_file:
             output_file.write(str(ir))
 
-    def save_obj(self, filename, ir):
+    def save_obj(self, filename, ir: llvm.ModuleRef):
         obj = self.target_machine.emit_object(ir)
         with open(filename, 'wb') as output_file:
             output_file.write(obj)
@@ -339,3 +336,50 @@ class CodeGen:
         mod = self.binding.parse_assembly(ir_code)
         mod.verify()
         return mod
+
+
+def test_jit():
+    with open('main.ll', 'r', encoding='utf8') as f:
+        code = f.read()
+
+    target = llvm.Target.from_default_triple()
+    target_machine = target.create_target_machine()
+    backing_mod = llvm.parse_assembly(code)
+    backing_mod.verify()
+    engine = llvm.create_mcjit_compiler(backing_mod, target_machine)
+    llvm.check_jit_execution()
+
+    def load_package_ir(package_path: str):
+        dirs = package_path.split('::')
+        base_dir = './'
+        for dir in dirs:
+            base_dir += f'packages/{dir}/'
+        with open(f'{base_dir}/main.ll', 'r', encoding='utf8') as input_file:
+            ir_mod = input_file.read()
+        mod = llvm.parse_assembly(ir_mod)
+        mod.verify()
+        engine.add_module(mod)
+
+    load_package_ir('std::lang')
+    load_package_ir('std::math')
+
+    def load_ir_module(path: str):
+        with open(f'{path}', 'r', encoding='utf8') as input_file:
+            ir_mod = input_file.read()
+        mod = llvm.parse_assembly(ir_mod)
+        mod.verify()
+        engine.add_module(mod)
+
+    load_ir_module('factorial.ll')
+    load_ir_module('switch_test.ll')
+    load_ir_module('square.ll')
+
+    engine.finalize_object()
+
+    func_ptr = engine.get_function_address('main')
+    print(f"Function at address 0x{engine.get_function_address('main'):X}")
+    ret_ty = ctypes.c_int
+    arg_tys = []
+    func = ctypes.CFUNCTYPE(ret_ty, *arg_tys)(func_ptr)
+    res = func()
+    print(f"Test: {res}")

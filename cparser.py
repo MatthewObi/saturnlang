@@ -111,8 +111,8 @@ def get_type(node, module: ir.Module, package: Package):
         for param_decl in node.args.params:
             args.append((param_decl.name, get_type(param_decl.type, module, package)))
         sargtypes = [arg[1] for arg in args]
-        argtypes = [arg.irtype for arg in sargtypes]
-        fnty = ir.FunctionType(rtype.irtype, argtypes)
+        argtypes = [arg.get_ir_type() for arg in sargtypes]
+        fnty = ir.FunctionType(rtype.get_ir_type(), argtypes)
         sfnty = FuncType("", fnty, rtype, sargtypes)
         return sfnty
     return get_type(node.type, module, package)
@@ -136,7 +136,7 @@ def create_typedef_c_struct(builder, module, package, node, name):
     # print(s_str)
     if module.context.get_identified_type(name).is_opaque and len(fields) > 0:
         idstruct = module.context.get_identified_type(name)
-        idstruct.set_body(*[field[1].irtype for field in fields])
+        idstruct.set_body(*[field[1].get_ir_type() for field in fields])
 
 
 def create_c_struct(builder, module, package, node):
@@ -166,13 +166,13 @@ def create_c_funcdecl_from_def(builder, module, package, node):
         args.append((param_decl.name, get_type(param_decl.type, module, package)))
     # print(f"fn {name}({[str(arg[1]) for arg in args]}): {rtype};")
     sargtypes = [arg[1] for arg in args]
-    argtypes = [arg.irtype for arg in sargtypes]
-    fnty = ir.FunctionType(rtype.irtype, argtypes)
+    argtypes = [arg.get_ir_type() for arg in sargtypes]
+    fnty = ir.FunctionType(rtype.get_ir_type(), argtypes)
     # print("%s (%s)" % (self.name.value, fnty))
     sfnty = FuncType("", fnty, rtype, sargtypes)
     fname = "C::" + name
     fn = ir.Function(module, fnty, name)
-    fn.args = tuple([ir.Argument(fn, arg[1].irtype, arg[0]) for arg in args])
+    fn.args = tuple([ir.Argument(fn, arg[1].get_ir_type(), arg[0]) for arg in args])
 
     arg_str = ""
     for sarg in sargtypes:
@@ -196,8 +196,8 @@ def create_c_funcdecl(builder, module: ir.Module, package, name, decl):
         args.append((param_decl.name, get_type(param_decl.type, module, package)))
     # print(f"fn {name}({[str(arg[1]) for arg in args]}): {rtype};")
     sargtypes = [arg[1] for arg in args]
-    argtypes = [arg.irtype for arg in sargtypes]
-    fnty = ir.FunctionType(rtype.irtype, argtypes)
+    argtypes = [arg.get_ir_type() for arg in sargtypes]
+    fnty = ir.FunctionType(rtype.get_ir_type(), argtypes)
     # print("%s (%s)" % (self.name.value, fnty))
     sfnty = FuncType("", fnty, rtype, sargtypes)
     fname = "C::" + name
@@ -205,8 +205,9 @@ def create_c_funcdecl(builder, module: ir.Module, package, name, decl):
         fn = module.get_global(name)
     except KeyError:
         fn = ir.Function(module, fnty, name)
-    if len(args) > 0 and not isinstance(args[0][1].irtype, ir.VoidType):
-        fn.args = tuple([ir.Argument(fn, arg[1].irtype, arg[0]) if arg[0] is not None else ir.Argument(fn, arg[1].irtype) for arg in args])
+    if len(args) > 0 and not isinstance(args[0][1].get_ir_type(), ir.VoidType):
+        fn.args = tuple([ir.Argument(fn, arg[1].get_ir_type(), arg[0]) if arg[0] is not None
+                         else ir.Argument(fn, arg[1].get_ir_type()) for arg in args])
     else:
         fn.args = tuple()
     arg_str = ""

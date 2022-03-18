@@ -10,7 +10,22 @@ type myEnum: enum(uint8) {
     EH,
 }
 
-fn passByReference(x: &int)
+fn hVectorAdd(x: [<4>]int, y: [<4>]int): [<4>]int {
+    return x + y;
+}
+
+fn dAdd(x: int, y: int = 0, z: int = 2): int {
+    return x + y + z;
+}
+
+fn otherStuff() {
+    mut x := 0;
+    x += dAdd(12);
+    x += dAdd(11, 1);
+    x += dAdd(13, 2, 3);
+}
+
+fn passByReference(mut x: &int)
 {
     x += 15;
 }
@@ -45,13 +60,36 @@ priv fn GetString(): string
 
 pub fn testPassPtr(str: cstring): uint64
 {
-    len := 0ul;
-    s := cast<*byte>(str);
+    mut len := 0ul;
+    mut s := cast<*byte>(str);
     while *s != 0b {
         ++len;
-        s = cast<*byte>(cast<uint64>(s) + 1ul);
+        ++s;
     }
     return len;
+}
+
+pub fn jitTest()
+{
+    printf("Hello.\n");
+}
+
+pub fn testCapture(): int32
+{
+    mut x := 32;
+    mut y := 16;
+    [mut &x, mut &y] {
+        x = 16;
+        [&, const &y] {
+            x += 1;
+            //y += 1; //Cannot modify y as it is considered const in this scope.
+        }
+        y += 1;
+        [mut x] {
+            x += 1;
+        }
+    }
+    return x;
 }
 
 pub fn testPassLambda()
@@ -78,10 +116,12 @@ pub fn testPassLambda()
 [[message("Hi! How are you doing? 🪐Ω»«°😃")]]
 pub fn main(argc: int, argv: *cstring): int
 {
-    myE := myEnum::OPEN;
+    mut myE := myEnum::OPEN;
     if myE == myEnum::OPEN {
         myE = myEnum::CLOSED;
     }
+
+    array := []int { 11, 13, 15 };
 
     printf("Welcome to the 🪐Saturn Programming Language!🪐\n");
     str: string = "Hello, 世界! 😃 ";
@@ -127,11 +167,11 @@ pub fn main(argc: int, argv: *cstring): int
     }
     printf("\n");
 
-    q := 0.123q;
+    mut q := 0.123q;
     q += 0.25q;
-    q = math::sinq(q);
+    // q = math::sin(q);
 
-    i := 5;
+    mut i := 5;
     ++i;
     j := ++i;
 

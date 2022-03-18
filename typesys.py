@@ -1,8 +1,11 @@
-from llvmlite import ir, binding
+import typing
+
+from llvmlite import ir
 
 import irutil
 from package import Symbol, Visibility, LinkageType
 from irutil import FP128Type
+from typing import Union
 
 
 class DebugTypeInfo:
@@ -18,7 +21,7 @@ class Type(Symbol):
     name: identifier for type.\n
     irtype: the underlying llvm type of this semantic type.\n
     tclass: a category for how the type is treated semantically.\n
-    qualifiers: adds special qualifiers to the base type (pointers, arrays, const, immut...)\n
+    qualifiers: adds special qualifiers to the base type (pointers, arrays, const, mut...)\n
     traits: special instances that change how a type is treated by the compiler.\n
     c_decl: Whether the function is a C declaration.\n
     """
@@ -103,17 +106,22 @@ class Type(Symbol):
         self.qualifiers.append(('array', size))
 
     def get_array_of(self, size):
+        return ArrayType(self, size)
+
+    def get_array_of_old(self, size):
         return Type(self.name,
                     self.tclass,
                     ir.ArrayType(self.irtype, size),
                     qualifiers=self.qualifiers + [('array', size)],
                     traits=self.traits)
 
-    def make_pointer(self):
-        self.qualifiers.append(('ptr',))
-        self.irtype = self.irtype.as_pointer()
+    def get_hvector_of(self, size):
+        return HVectorType(self, size)
 
     def get_pointer_to(self):
+        return PointerType(self)
+
+    def get_pointer_to_old(self):
         return Type(self.name,
                     self.tclass,
                     self.irtype.as_pointer(),
@@ -121,6 +129,9 @@ class Type(Symbol):
                     traits=self.traits)
 
     def get_dereference_of(self):
+        return self
+
+    def get_dereference_of_old(self):
         ql = self.qualifiers.copy()
         ql.reverse()
         for i in range(len(ql)):
@@ -140,6 +151,9 @@ class Type(Symbol):
                              self.tclass)
 
     def get_element_of(self):
+        return self
+
+    def get_element_of_old(self):
         if self.is_pointer():
             ql = self.qualifiers.copy()
             ql.reverse()
@@ -178,25 +192,59 @@ class Type(Symbol):
     def get_base_type(self):
         return self
 
-    def is_array(self):
+    def is_array_old(self):
         if len(self.qualifiers) > 0:
             return self.qualifiers[-1][0] == 'array'
         return False
 
-    def is_pointer(self):
+    def is_array(self):
+        return False
+
+    def is_hvector(self):
+        return False
+
+    def get_mutable_of(self):
+        return Type(self.name,
+                    self.tclass,
+                    self.irtype.as_pointer(),
+                    qualifiers=self.qualifiers + [('mut',)],
+                    traits=self.traits)
+
+    def get_const_of(self):
+        return Type(self.name,
+                    self.tclass,
+                    self.irtype.as_pointer(),
+                    qualifiers=self.qualifiers + [('const',)],
+                    traits=self.traits)
+
+    def is_pointer_old(self):
         return ('ptr',) in self.qualifiers or self.name == 'cstring' or self.name == 'null_t'
 
+    def is_pointer(self):
+        return self.name == 'cstring' or self.name == 'null_t'
+
     def is_actual_pointer(self):
+        return False
+
+    def is_actual_pointer_old(self):
         return ('ptr',) in self.qualifiers
 
     def is_byte_pointer(self):
-        return self.is_actual_pointer() and (self.name == 'byte' or self.name == 'C::char')
+        base_ty = self.get_base_type()
+        return self.is_actual_pointer() and (base_ty.name == 'byte' or base_ty.name == 'C::char')
 
     def is_value(self):
-        return not (self.is_array() or self.is_pointer())
+        return not (self.is_array()
+                    or self.is_hvector()
+                    or self.is_pointer()
+                    or self.is_actual_pointer()
+                    or self.is_reference())
 
     def is_unsigned(self):
         return self.tclass == 'uint'
+
+    def is_signed(self):
+        return self.tclass == 'int'
 
     def is_integer(self):
         return self.tclass == 'int' or self.tclass == 'uint'
@@ -226,7 +274,7 @@ class Type(Symbol):
         return self.tclass == 'optional'
 
     def is_reference(self):
-        return ('ref',) in self.qualifiers
+        return False
 
     def is_enum(self):
         return self.tclass == 'enum'
@@ -243,6 +291,9 @@ class Type(Symbol):
     def is_immut(self):
         return 'immut' in self.qualifiers
 
+    def is_mutable(self):
+        return not (self.is_const() or self.is_immut())
+
     def is_atomic(self):
         return 'atomic' in self.qualifiers
 
@@ -252,43 +303,29 @@ class Type(Symbol):
     def to_dict(self, full_def=True):
         d = super().to_dict()
         d['symbol_type'] = 'type'
-        d['type'] = {}
-        dt = d['type']
-        for q in self.qualifiers:
-            if q[0] == 'ptr':
-                dt['type'] = 'pointer'
-                dt['pointee'] = {}
-                dt = dt['pointee']
-            elif q[0] == 'array':
-                dt['type'] = 'array'
-                dt['size'] = q[1]
-                dt['element'] = {}
-                dt = dt['element']
-        dt['type'] = 'named'
-        dt['name'] = self.name
-        dt['tclass'] = self.tclass
+        d['qualifiers'] = self.qualifiers
+        d['type'] = 'named'
         d['tclass'] = self.tclass
         d['traits'] = self.traits
         d['name'] = self.name
-        d['qualifiers'] = self.qualifiers
         # print(d)
         return d
 
     def __str__(self):
         s = str()
         for q in reversed(self.qualifiers):
-            if q[0] == 'ptr':
-                s += '*'
-            elif q[0] == 'array':
-                s += '[%d]' % q[1]
-            elif q[0] == 'ref':
-                s += '&'
+            if q[0] == 'const':
+                s += 'const '
+            elif q[0] == 'mut':
+                s += 'mut '
+            elif q[0] == 'immut':
+                s += 'immut '
         s += self.name
         return s
 
     def is_similar(self, other):
         """
-        Checks whether the two values have similar types for the purpose of fundimental operations.
+        Checks whether the two values have similar types for the purpose of fundamental operations.
         """
         if self is other:
             return True
@@ -299,6 +336,9 @@ class Type(Symbol):
                 return True
             if self.is_array() and other.is_array():
                 return True
+            if self.is_hvector() and other.is_hvector():
+                return self.get_array_count() == other.get_array_count() \
+                       and self.get_element_of().is_similar(other.get_element_of())
         if self.tclass == other.tclass and self.is_integer():
             return True
         return False
@@ -402,6 +442,9 @@ class Value(Symbol):
     def is_immut(self):
         return 'immut' in self.qualifiers
 
+    def is_mut(self):
+        return 'mut' in self.qualifiers
+
     def is_readonly(self):
         return 'readonly' in self.qualifiers
 
@@ -469,6 +512,9 @@ class GlobalValue(Symbol):
 
     def is_const(self):
         return 'const' in self.qualifiers
+
+    def is_mut(self):
+        return 'mut' in self.qualifiers
 
     def is_immut(self):
         return 'immut' in self.qualifiers
@@ -584,7 +630,7 @@ class PointerType(Type):
     def __init__(self, pointee_type, qualifiers=None, traits=None):
         if qualifiers is None:
             qualifiers = []
-        super().__init__('', pointee_type.tclass, None, qualifiers=qualifiers.copy(), traits=traits)
+        super().__init__(pointee_type.name, pointee_type.tclass, None, qualifiers=qualifiers.copy(), traits=traits)
         self.pointee = pointee_type
 
     def get_ir_type(self):
@@ -593,19 +639,37 @@ class PointerType(Type):
     def is_pointer(self):
         return True
 
+    def is_actual_pointer(self):
+        return True
+
     def get_dereference_of(self):
         return self.pointee
 
+    def get_element_of(self):
+        return self.pointee.get_element_of()
+
     def get_pointer_to(self):
-        return PointerType(self, self.qualifiers, self.traits)
+        return PointerType(self)
 
     def get_base_type(self):
         return self.pointee.get_base_type()
 
+    def to_dict(self, full_def=True):
+        d = super().to_dict(full_def)
+        d['type'] = 'pointer'
+        d['pointee'] = self.pointee.to_dict(full_def)
+        return d
+
+    def __str__(self):
+        return f'*{str(self.pointee)}'
+
 
 class ArrayType(Type):
+    """
+    An array type in Saturn
+    """
     def __init__(self, element_type, count, qualifiers=None, traits=None):
-        super().__init__('', element_type.tclass, None, qualifiers=qualifiers.copy(), traits=traits)
+        super().__init__(element_type.name, element_type.tclass, None, qualifiers=qualifiers, traits=traits)
         self.element = element_type
         self.count = count
 
@@ -619,10 +683,10 @@ class ArrayType(Type):
         return True
 
     def get_pointer_to(self):
-        return PointerType(self, self.qualifiers, self.traits)
+        return PointerType(self)
 
     def get_array_of(self, size):
-        return ArrayType(self, size, self.qualifiers, self.traits)
+        return ArrayType(self, size)
 
     def get_element_of(self):
         return self.element
@@ -630,13 +694,24 @@ class ArrayType(Type):
     def get_base_type(self):
         return self.element.get_base_type()
 
+    def to_dict(self, full_def=True):
+        d = super().to_dict(full_def)
+        d['type'] = 'array'
+        d['count'] = self.count
+        d['element'] = self.element.to_dict(full_def)
+        return d
+
     def __str__(self):
         return f'[{self.count}]{str(self.element)}'
 
 
 class HVectorType(Type):
+    """
+    A hardware vector type suitable for SIMD operations.\n
+    Supports parallel binary operations.
+    """
     def __init__(self, element_type, count, qualifiers=None, traits=None):
-        super().__init__('', element_type.tclass, None, qualifiers=qualifiers.copy(), traits=traits)
+        super().__init__('', element_type.tclass, None, qualifiers=qualifiers, traits=traits)
         self.element = element_type
         self.count = count
 
@@ -646,7 +721,7 @@ class HVectorType(Type):
     def get_ir_type(self):
         return ir.VectorType(self.element.get_ir_type(), self.count)
 
-    def is_array(self):
+    def is_hvector(self):
         return True
 
     def get_pointer_to(self):
@@ -659,7 +734,14 @@ class HVectorType(Type):
         return ArrayType(self, size)
 
     def __str__(self):
-        return f'[{self.count}]{str(self.element)}'
+        return f'[<{self.count}>]{str(self.element)}'
+
+    def to_dict(self, full_def=True):
+        d = super().to_dict(full_def)
+        d['type'] = 'hvector'
+        d['count'] = self.count
+        d['element'] = self.element.to_dict(full_def)
+        return d
 
 
 class FuncType(Type):
@@ -681,23 +763,74 @@ class FuncType(Type):
         return self.rtype
 
     def get_pointer_to(self):
-        return FuncType(self.name,
-                        self.irtype.as_pointer(),
-                        self.rtype,
-                        self.atypes.copy(),
-                        qualifiers=self.qualifiers + [('ptr',)],
-                        traits=self.traits)
+        return FuncPointerType(self.name,
+                               self.irtype.as_pointer(),
+                               self.rtype,
+                               self.atypes.copy(),
+                               qualifiers=self.qualifiers,
+                               traits=self.traits)
 
     def __str__(self):
         s = ""
-        if self.is_pointer():
-            s += '*'
         arg_str = ""
         for atype in self.atypes:
             arg_str += f"{str(atype)}, "
         arg_str = arg_str.rstrip(", ")
         s += f"fn({arg_str}): {str(self.rtype)}"
         return s
+
+    def to_dict(self, full_def=True):
+        d = super().to_dict(full_def)
+        d['type'] = 'fn'
+        d['rtype'] = self.rtype.to_dict(full_def)
+        d['atypes'] = [atype.to_dict(full_def) for atype in self.atypes]
+        return d
+
+
+class FuncPointerType(Type):
+    """
+    A semantic function reference type in Saturn.
+    """
+    def __init__(self, name, irtype, rtype, atypes=None, qualifiers=None, traits=None):
+        if atypes is None:
+            atypes = []
+        if traits is None:
+            traits = {}
+        if qualifiers is None:
+            qualifiers = []
+        super().__init__(name, 'function', irtype, qualifiers=qualifiers, traits=traits)
+        self.rtype = rtype
+        self.atypes = atypes
+
+    def get_return_type(self):
+        return self.rtype
+
+    def get_dereference_of(self):
+        return FuncType(self.name,
+                        self.irtype.pointee,
+                        self.rtype,
+                        self.atypes.copy(),
+                        qualifiers=self.qualifiers,
+                        traits=self.traits)
+
+    def get_pointer_to(self):
+        return PointerType(self)
+
+    def __str__(self):
+        s = "*"
+        arg_str = ""
+        for atype in self.atypes:
+            arg_str += f"{str(atype)}, "
+        arg_str = arg_str.rstrip(", ")
+        s += f"fn({arg_str}): {str(self.rtype)}"
+        return s
+
+    def to_dict(self, full_def=True):
+        d = super().to_dict(full_def)
+        d['type'] = 'fn_ptr'
+        d['rtype'] = self.rtype.to_dict(full_def)
+        d['atypes'] = [atype.to_dict(full_def) for atype in self.atypes]
+        return d
 
 
 class StructType(Type):
@@ -734,11 +867,11 @@ class StructType(Type):
             pass
         return self.irtype
 
-    def add_field(self, name, ftype, irvalue):
+    def add_field(self, name, ftype, irvalue, qualifiers=None):
         if irvalue is not None:
-            value = Value(name, ftype, irvalue.eval())
+            value = Value(name, ftype, irvalue.eval(), qualifiers=qualifiers)
         else:
-            value = Value(name, ftype, None)
+            value = Value(name, ftype, None, qualifiers=qualifiers)
         self.fields.append(value)
         self[name] = value
 
@@ -798,7 +931,7 @@ class StructType(Type):
             self[name] = fn
             fn.parent = self
 
-    def get_array_of(self, size):
+    def get_array_of_old(self, size):
         return StructType(self.name,
                           ir.ArrayType(self.irtype, size),
                           self.fields,
@@ -809,7 +942,7 @@ class StructType(Type):
                           ctor=self.ctor,
                           dtor=self.dtor)
 
-    def get_pointer_to(self):
+    def get_pointer_to_old(self):
         return StructType(self.name,
                           self.irtype.as_pointer(),
                           self.fields,
@@ -825,7 +958,7 @@ class StructType(Type):
                              self,
                              self.tclass)
 
-    def get_dereference_of(self):
+    def get_dereference_of_old(self):
         ql = self.qualifiers.copy()
         ql.reverse()
         for i in range(len(ql)):
@@ -842,7 +975,7 @@ class StructType(Type):
                           ctor=self.ctor,
                           dtor=self.dtor)
 
-    def get_element_of(self):
+    def get_element_of_old(self):
         ql = self.qualifiers.copy()
         ql.reverse()
         for i in range(len(ql)):
@@ -985,19 +1118,120 @@ class ReferenceType(Type):
     def get_operator(self, op, fn):
         return self.type.get_operator(op)
 
+    def is_reference(self):
+        return True
+
     def to_dict(self, full_def=True):
         d = super().to_dict()
         d['symbol_type'] = 'type'
-        d['type'] = {}
-        dt = d['type']
-        dt['type'] = 'named'
-        dt['name'] = self.name
-        d['tclass'] = self.tclass
-        d['traits'] = self.traits
-        d['name'] = self.name
-        d['qualifiers'] = self.qualifiers
+        d['type'] = 'reference'
+        d['base'] = self.type.to_dict(full_def)
         # print(d)
         return d
+
+    def __str__(self):
+        return f'&{str(self.type)}'
+
+
+class GenericType(Type):
+    """
+    A generic type in Saturn.
+    """
+    def __init__(self, name, base, type_args=None,
+                 qualifiers=None, traits=None):
+        if traits is None:
+            traits = {}
+        if qualifiers is None:
+            qualifiers = []
+        super().__init__(name, 'generic', None, qualifiers=qualifiers, traits=traits)
+        self.name = name
+        self.base: Type = base
+        self.type_args = type_args
+        self.qualifiers = qualifiers
+        self.traits = traits
+        self.specl = {}
+
+    def specialize(self, module: ir.Module, targs):
+        type_str = f'T{len(targs)}'
+        for targ in targs:
+            type_str += mangle_type(targ.get_type())
+        uid = (module, type_str)
+        type_name_to_arg = {}
+        for i, arg in enumerate(self.type_args):
+            type_name_to_arg[arg.name] = targs[i]
+        if uid not in self.specl.keys():
+            if isinstance(self.base, StructType):
+                irtype = module.context.get_identified_type(self.base.name + type_str)
+                spec = StructType(self.base.name, irtype,
+                                  [],
+                                  self.qualifiers.copy(),
+                                  self.traits.copy())
+                from ast import TupleTypeExpr
+                for fld in self.base.fields:
+                    base_type = fld.type.get_base_type()
+                    if not isinstance(base_type, TupleTypeExpr):
+                        if base_type.lvalue.name in type_name_to_arg.keys():
+                            if base_type.is_generic_type():
+                                fld_type = base_type.replace_types([
+                                   (type_arg, type_name_to_arg[type_arg.name]) for type_arg in self.type_args])
+                            else:
+                                fld_type = fld.type.replace_base_type(type_name_to_arg[base_type.lvalue.name])
+                        else:
+                            if base_type.is_generic_type():
+                                fld_type = base_type.replace_types([
+                                   (type_arg, type_name_to_arg[type_arg.name]) for type_arg in self.type_args])
+                                fld_type = fld.type.replace_base_type(fld_type)
+                            else:
+                                fld_type = fld.type.copy().get_type()
+                    else:
+                        replace_table = []
+                        for ty in base_type.types:
+                            if ty.is_generic_type():
+                                new_type = ty.replace_types([
+                                    (type_arg, type_name_to_arg[type_arg.name]) for type_arg in self.type_args])
+                                replace_table.append((ty, new_type))
+                        tuple_type = base_type.replace_types(replace_table + [
+                            (type_arg, type_name_to_arg[type_arg.name]) for type_arg in self.type_args])
+                        fld_type = fld.type.replace_base_type(tuple_type)
+                    print(fld_type)
+                    spec.add_field(fld.name, fld_type, None)
+                    spec[fld.name].irvalue = fld.irvalue
+                irtype.elements = [fld.type.get_ir_type() for fld in spec.fields]
+                spec.irtype = irtype
+            else:
+                spec = None
+            self.specl[uid] = spec
+        return self.specl[uid]
+
+    def get_ir_type(self):
+        if self.irtype is None:
+            pass
+        return self.irtype
+
+    def get_array_of(self, size):
+        return ArrayType(self, size)
+
+    def get_pointer_to(self):
+        return PointerType(self)
+
+    def get_reference_to(self):
+        return ReferenceType(self.name,
+                             self,
+                             self.tclass)
+
+    def to_dict(self, full_def=True):
+        if not full_def:
+            d = super().to_dict()
+            return d
+        d = super().to_dict()
+        return d
+
+    def __str__(self):
+        s = f'{self.name}<['
+        for arg in self.type_args:
+            s += f'{str(arg)}, '
+        s = s.rstrip(', ') + ']>'
+        return s
 
 
 def get_base_type(ty: Type):
@@ -1016,45 +1250,76 @@ def mangle_type(atype: Type):
     mname = ''
     if atype.is_const():
         mname += 'K'
-    for q in atype.qualifiers:
-        if q[0] == 'ptr':
-            mname += 'P'
-        elif q[0] == 'ref':
-            mname += 'R'
     if atype.is_atomic():
-        mname += 'A'
-    if atype.is_function():
+        mname += 'V'
+    if isinstance(atype, PointerType):
+        mname += 'P'
+        mname += mangle_type(atype.pointee)
+        return mname
+    if isinstance(atype, HVectorType):
+        mname += f'H{atype.count}_'
+        mname += mangle_type(atype.element)
+        return mname
+    if isinstance(atype, ArrayType):
+        mname += f'A{atype.count}_'
+        mname += mangle_type(atype.element)
+        return mname
+    if isinstance(atype, ReferenceType):
+        mname += 'R'
+        mname += mangle_type(atype.type)
+        return mname
+    if isinstance(atype, OptionalType):
+        mname += 'O'
+        mname += mangle_type(atype.base)
+        return mname
+    if isinstance(atype, FuncPointerType):
+        mname += 'PF' + mangle_fn(atype)
+        return mname
+    if isinstance(atype, FuncType):
         mname += 'F' + mangle_fn(atype)
         return mname
     atype = get_base_type(atype)
-    if atype.irtype == types['int'].irtype:
-        mname += 'i'
-    elif atype.irtype == types['int64'].irtype:
-        mname += 'l'
-    elif atype.irtype == types['int16'].irtype:
-        mname += 's'
-    elif atype.irtype == types['int8'].irtype:
-        mname += 'c'
-    elif atype.irtype == types['cstring'].irtype:
-        mname += 'Pc'
+    if atype.is_integer():
+        if atype.get_integer_bits() == 8:
+            mname += 'h' if atype.is_unsigned() else 'c'
+        elif atype.get_integer_bits() == 16:
+            mname += 't' if atype.is_unsigned() else 's'
+        elif atype.get_integer_bits() == 32:
+            mname += 'j' if atype.is_unsigned() else 'i'
+        elif atype.get_integer_bits() == 64:
+            mname += 'm' if atype.is_unsigned() else 'l'
+        else:
+            mname += 'j' if atype.is_unsigned() else 'i'
     elif atype.irtype == ir.FloatType():
         mname += 'f'
     elif atype.irtype == ir.DoubleType():
         mname += 'd'
     elif atype.irtype == irutil.FP128Type():
         mname += 'q'
-    elif atype.irtype == ir.IntType(1):
+    elif atype.is_bool():
         mname += 'b'
-    elif atype.irtype == ir.VoidType():
+    elif atype.is_void():
         mname += 'v'
     elif atype.is_struct():
         mname += 'S%d%s' % (len(atype.name), atype.name)
+    elif atype.is_tuple():
+        tuple_elements = ''
+        for ty in atype.type_list:
+            tuple_elements += mangle_type(ty)
+        mname += f'U{len(atype.type_list)}'
     else:
         mname += 'u'
     return mname
 
 
-def mangle_fn(ty: FuncType):
+def mangle_generic(ty: GenericType):
+    mname = '_ZN%s' % (mangle_symbol_name(ty))
+    mname += f'T{len(ty.type_args)}'
+    for arg in ty.type_args:
+        mname += mangle_type(arg)
+
+
+def mangle_fn(ty: Union[FuncType, FuncPointerType]):
     tcount = len(ty.atypes)
     out = f'{mangle_type(ty.get_return_type())}{tcount}'
     for atype in ty.atypes:
@@ -1067,12 +1332,12 @@ def mangle_symbol_name(symbol: Symbol):
     mangled = ''
     segments = full_name.split('::')
     for segment in segments:
-        mangled += f'N{len(segment)}{segment}'
+        mangled += f'{len(segment)}{segment}'
     return mangled
 
 
 def mangle_symbol(symbol: Symbol, **kwargs):
-    mname = '_Z%s' % (mangle_symbol_name(symbol))
+    mname = '_ZN%s' % (mangle_symbol_name(symbol))
     if isinstance(symbol, Func):
         mname += 'E'
         atypes = kwargs['atypes']
@@ -1123,8 +1388,12 @@ def demangle_type(name: str) -> (str, str, bool):
         return '*', name[1:], False
     if name[0] == 'R':
         return '&', name[1:], False
-    if name[0] == 'A':
+    if name[0] == 'V':
         return 'atomic ', name[1:], False
+    if name[0] == 'K':
+        return 'const ', name[1:], False
+    if name[0] == 'M':
+        return 'mut ', name[1:], False
     if name[0] == 'v':
         return 'void', name[1:], True
     if name[0] == 'i':
@@ -1136,6 +1405,8 @@ def demangle_type(name: str) -> (str, str, bool):
     if name[0] == 'b':
         return 'bool', name[1:], True
     if name[0] == 'c':
+        return 'int8', name[1:], True
+    if name[0] == 'h':
         return 'byte', name[1:], True
     if name[0] == 'f':
         return 'float32', name[1:], True
@@ -1168,6 +1439,14 @@ def demangle_type(name: str) -> (str, str, bool):
         name_len, name = _consume_number(name)
         struct_name = name[:name_len]
         return struct_name, name[name_len:], True
+    if name[0] == 'A':
+        array_len, name = _consume_number(name)
+        out_str = f"[{array_len}]"
+        return out_str, name[1:], False
+    if name[0] == 'H':
+        hvector_len, name = _consume_number(name)
+        out_str = f"[<{hvector_len}>]"
+        return out_str, name[1:], False
     return 'Unk', name[1:], True
 
 
@@ -1181,6 +1460,22 @@ def demangle_symbol(name: str) -> (str, str):
         symbol += name[:length] + '::'
         name = name[length:]
     symbol = symbol.rstrip('::')
+    if name.startswith('E'):
+        name = name.strip('E')
+        args = []
+        arg = ''
+        while len(name) > 0:
+            parg, name, stop = demangle_type(name)
+            arg += parg
+            if not stop:
+                continue
+            args.append(arg)
+            arg = ''
+        args_string = ''
+        for arg in args:
+            args_string += arg + ', '
+        args_string = args_string.rstrip(', ')
+        return f'fn {symbol}({args_string});', ''
     return symbol, name
 
 
@@ -1234,6 +1529,7 @@ class FuncOverload:
         if atypes is None:
             atypes = []
         self.name = name
+        self.link_name = name
         self.fn = fn
         self.rtype = rtype
         self.atypes = atypes
@@ -1243,7 +1539,7 @@ class FuncOverload:
         self.irvalue = None
 
     def __str__(self):
-        s = f"overload {self.name} fn({print_types(self.atypes)})"
+        s = f"overload {self.name} fn({print_types(self.atypes)}): {self.rtype}"
         return s
 
     def key(self):
@@ -1254,8 +1550,11 @@ class FuncOverload:
     def to_dict(self):
         d = {'name': self.name,
              'symbol_type': 'overload',
+             'rtype': self.rtype.to_dict(False),
              'traits': self.traits,
              'atypes': [ty.to_dict(False) for ty in self.atypes]}
+        if self.link_name != self.name:
+            d['link_name'] = self.link_name
         return d
 
 
@@ -1304,6 +1603,8 @@ def get_implicit_conversion_for_match(expected: list, actual: list):
 def get_arg_list_match_value(expected: list, actual: list, default: list):
     if default is None:
         default = []
+    if len(expected) == len(actual) == 0:
+        return 10
     if len(expected) < len(actual):
         return 0
     if len(expected) == len(actual):
@@ -1317,7 +1618,15 @@ def get_arg_list_match_value(expected: list, actual: list, default: list):
             match += val
         return match
     if len(expected) > len(actual) >= len(expected) - len(default):
-        pass
+        match = 10 if len(actual) == 0 and len(expected) - len(default) == 0 else 0
+        for i in range(len(expected) - len(default)):
+            exp = expected[i]
+            act = actual[i]
+            val = get_type_match_value(exp, act)
+            if val == 0:
+                return 0
+            match += val
+        return match
     return 0
 
 
@@ -1360,9 +1669,12 @@ class Func(Symbol):
         self.overloads = overloads.copy()
         self.traits = traits
 
-    def add_overload(self, atypes, fn):
+    def add_overload(self, atypes, fn, rtype=None, default_args=None):
         key = mangle_name('', atypes)
-        self.overloads[key] = FuncOverload(key, fn, self.rtype, atypes, self.traits)
+        if rtype is None:
+            rtype = self.rtype
+        self.overloads[key] = FuncOverload(key, fn, rtype, atypes, default_args, self.traits)
+        return self.overloads[key]
 
     def add_existing_overload(self, ovrld):
         self.overloads[ovrld.name] = ovrld
@@ -1412,7 +1724,7 @@ class TupleType(Type):
     """
     A tuple type in Saturn.
     """
-    def __init__(self, name, irtype, elements=None, qualifiers=None, traits=None):
+    def __init__(self, name, irvalue, type_list, elements=None, qualifiers=None, traits=None):
         if qualifiers is None:
             qualifiers = []
         if traits is None:
@@ -1420,7 +1732,8 @@ class TupleType(Type):
         if elements is None:
             elements = []
         self.name = name
-        self.irtype = irtype
+        self.irtype = irvalue
+        self.type_list = type_list
         self.elements = elements.copy()
         self.tclass = 'tuple'
         self.qualifiers = qualifiers
@@ -1428,6 +1741,10 @@ class TupleType(Type):
         self.visibility = Visibility.DEFAULT
         self.link_type = LinkageType.PRIVATE
         self._next_element_idx = 0
+
+    def get_ir_type(self):
+        self.irtype = ir.LiteralStructType([ty.get_ir_type() for ty in self.type_list])
+        return self.irtype
 
     def add_element(self, ftype, irvalue):
         if irvalue is not None:
@@ -1447,14 +1764,17 @@ class TupleType(Type):
         return withval
 
     def get_pointer_to(self):
-        return TupleType(self.name,
-            self.irtype.as_pointer(),
-            self.elements.copy(),
-            qualifiers=self.qualifiers + [('ptr',)],
-            traits=self.traits
-        )
+        return PointerType(self)
 
-    def get_dereference_of(self):
+    def get_pointer_to_old(self):
+        return TupleType(self.name,
+                         ir.PointerType(self.get_ir_type()),
+                         self.type_list.copy(),
+                         self.elements.copy(),
+                         qualifiers=self.qualifiers + [('ptr',)],
+                         traits=self.traits)
+
+    def get_dereference_of_old(self):
         ql = self.qualifiers.copy()
         ql.reverse()
         for i in range(len(ql)):
@@ -1469,7 +1789,7 @@ class TupleType(Type):
             traits=self.traits
         )
 
-    def get_element_of(self):
+    def get_element_of_old(self):
         ql = self.qualifiers.copy()
         ql.reverse()
         for i in range(len(ql)):
@@ -1488,6 +1808,13 @@ class TupleType(Type):
         d = super().to_dict()
         d['elements'] = {k: v.to_dict() for k, v in self.elements}
         return d
+
+    def __str__(self):
+        s = 'tuple('
+        for ty in self.type_list:
+            s += f'{str(ty.lvalue.get_name())}, '
+        s = s.rstrip(', ') + ')'
+        return s
 
 
 def make_tuple_type(els: list):
@@ -1600,20 +1927,85 @@ def array_to_slice(ty: Type):
     return destty, ir.Constant(irtype, [array_size, irtype(irtype.null)])
 
 
+def struct_from_dict(package, module, d, parent=None):
+    name = d['name']
+    ctor = None if 'ctor' not in d else d['ctor']
+    dtor = None if 'dtor' not in d else d['dtor']
+    if package.lookup_symbol(name) is not None:
+        ty = package.lookup_symbol(name)
+        if isinstance(d['type'], dict):
+            dty = d['type']
+            if dty['type'] == 'pointer':
+                ty = ty.get_pointer_to()
+        return ty
+    operators = {} if 'operators' not in d else d['operators']
+    methods = {} if 'methods' not in d else d['methods']
+    qualifiers = [] if 'qualifiers' not in d else d['qualifiers']
+    traits = {} if 'traits' not in d else d['traits']
+    struct = StructType(name,
+                        module.context.get_identified_type(name),
+                        [],
+                        qualifiers=qualifiers,
+                        traits=traits)
+    package.add_symbol(name, struct)
+    irtypes = []
+    for name, field in d['fields'].items():
+        ty = symbol_from_dict(package, module, field['value_type'], struct)
+        struct.add_field(name, ty, None)
+        irtypes.append(ty.get_ir_type())
+    for op in operators.keys():
+        opfn = symbol_from_dict(package, module, operators[op], struct)
+        struct.add_operator(op, opfn)
+        for overload in opfn.overloads.values():
+            package.add_symbol(overload.name, opfn)
+    for name, method in methods.items():
+        methodfn = symbol_from_dict(package, module, method, struct)
+        struct.add_method(name, methodfn)
+        struct[name] = methodfn
+        methodfn.parent = struct
+    name = d['name']
+    if module.context.get_identified_type(name).is_opaque and len(d['fields']) > 0:
+        idstruct = module.context.get_identified_type(name)
+        idstruct.set_body(*irtypes)
+        struct.irtype = idstruct
+    if ctor is not None:
+        struct.add_ctor(symbol_from_dict(package, module, ctor, struct))
+    if dtor is not None:
+        struct.add_dtor(symbol_from_dict(package, module, dtor, struct))
+    return struct
+
+
 def parse_type_from_dict(package, module, d, parent=None):
     if d['type'] == 'pointer':
-        return parse_type_from_dict(package, module, d['pointee'], d).get_pointer_to()
+        ty = parse_type_from_dict(package, module, d['pointee'], d).get_pointer_to()
+        ty.qualifiers = d['qualifiers'] if 'qualifiers' in d else {}
+        return ty
+    if d['type'] == 'fn_ptr':
+        ty = FuncPointerType(d['name'], None, d['rtype'], d['atypes'])
+        ty.qualifiers = d['qualifiers'] if 'qualifiers' in d else {}
+        return ty
+    if d['type'] == 'array':
+        ty = parse_type_from_dict(package, module, d['element'], d).get_array_of(d['count'])
+        ty.qualifiers = d['qualifiers'] if 'qualifiers' in d else {}
+        return ty
+    if d['type'] == 'reference':
+        ty = parse_type_from_dict(package, module, d['base'], d).get_reference_to()
+        ty.qualifiers = d['qualifiers'] if 'qualifiers' in d else {}
+        return ty
     if package.lookup_symbol(d['name']) is not None:
         name = d['name']
         ty = package.lookup_symbol(name)
         return ty
     elif d['name'] in types:
         return types[d['name']]
-    return Type(d['name'],
-                d['tclass'],
-                irtype=None,
-                qualifiers=d['qualifiers'],
-                traits=d['traits'])
+    if d['tclass'] == 'struct':
+        return struct_from_dict(package, module, d, parent)
+    else:
+        return Type(d['name'],
+                    d['tclass'],
+                    irtype=None,
+                    qualifiers=d['qualifiers'],
+                    traits=d['traits'])
 
 
 def symbol_from_dict(package, module, d_, parent=None):
@@ -1621,54 +2013,7 @@ def symbol_from_dict(package, module, d_, parent=None):
     ty = d['symbol_type']
     c_decl = False if 'c_decl' not in d else d['c_decl']
     if ty == 'type':
-        if d['tclass'] != 'struct':
-            return parse_type_from_dict(package, module, d['type'].copy())
-        else:
-            name = d['name']
-            ctor = None if 'ctor' not in d else d['ctor']
-            dtor = None if 'dtor' not in d else d['dtor']
-            if package.lookup_symbol(name) is not None:
-                ty = package.lookup_symbol(name)
-                if isinstance(d['type'], dict):
-                    dty = d['type']
-                    if dty['type'] == 'pointer':
-                        ty = ty.get_pointer_to()
-                return ty
-            # elif name in types:
-            #     return types[name]
-            operators = {} if 'operators' not in d else d['operators']
-            methods = {} if 'methods' not in d else d['methods']
-            struct = StructType(name,
-                                module.context.get_identified_type(name),
-                                [],
-                                qualifiers=d['qualifiers'],
-                                traits=d['traits'])
-            package.add_symbol(name, struct)
-            irtypes = []
-            for name, field in d['fields'].items():
-                ty = symbol_from_dict(package, module, field['value_type'], struct)
-                struct.add_field(name, ty, None)
-                irtypes.append(ty.get_ir_type())
-            for op in operators.keys():
-                opfn = symbol_from_dict(package, module, operators[op], struct)
-                struct.add_operator(op, opfn)
-                for overload in opfn.overloads.values():
-                    package.add_symbol(overload.name, opfn)
-            for name, method in methods.items():
-                methodfn = symbol_from_dict(package, module, method, struct)
-                struct.add_method(name, methodfn)
-                struct[name] = methodfn
-                methodfn.parent = struct
-            name = d['name']
-            if module.context.get_identified_type(name).is_opaque and len(d['fields']) > 0:
-                idstruct = module.context.get_identified_type(name)
-                idstruct.set_body(*irtypes)
-                struct.irtype = idstruct
-            if ctor is not None:
-                struct.add_ctor(symbol_from_dict(package, module, ctor, struct))
-            if dtor is not None:
-                struct.add_dtor(symbol_from_dict(package, module, dtor, struct))
-            return struct
+        return parse_type_from_dict(package, module, d)
     elif ty == 'value':
         valty = symbol_from_dict(package, module, d['value_type'].copy())
         val = GlobalValue(d['name'], valty,
@@ -1688,7 +2033,9 @@ def symbol_from_dict(package, module, d_, parent=None):
         for key, overload in d['overloads'].items():
             atypes = [symbol_from_dict(package, module, v.copy(), overload) for v in overload['atypes']]
             irtypes = [] if len(atypes) == 1 and atypes[0].is_void() else [atype.get_ir_type() for atype in atypes]
+            rtype = symbol_from_dict(package, module, overload['rtype'].copy())
             fnty = ir.FunctionType(rtype.get_ir_type(), irtypes)
+            link_name = overload['link_name'] if 'link_name' in overload else ''
 
             ovld = FuncOverload(mangle_name('', atypes), None, func.rtype, atypes, func.traits.copy())
             if not c_decl:

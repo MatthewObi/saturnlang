@@ -5,7 +5,7 @@ import llvmlite
 
 from lexer import lexer
 from sparser import parser, ParserState
-from codegen import CodeGen
+from codegen import CodeGen, test_jit
 from package import Package
 from cachedmodule import CachedModule
 from ctypes import create_string_buffer, c_char_p, pointer, byref
@@ -58,7 +58,6 @@ def parse_command_line_args() -> CommandArgs:
                 command_args.add_arg(k, v)
             continue
 
-    print(command_args.args)
     return command_args
 
 
@@ -114,6 +113,8 @@ def compile_package(name, working_directory='.',
     package = Package.get_or_create(name, working_directory=working_directory, out_file=out_file, target=target)
     for ty in types.values():
         if not ty.name.startswith('C::'):
+            from package import Visibility
+            ty.visibility = Visibility.PRIVATE
             package.add_symbol_extern(ty.name, ty)
     print(f'Compiling package {name} in directory {working_directory} with target {target.name}...')
 
@@ -130,7 +131,7 @@ def compile_package(name, working_directory='.',
             files.append(f)
         eval_files.append(f)
 
-    for f in glob.glob("*.c"):
+    for f in glob.glob(f"{working_directory}/*.c"):
         if compile_target == 'wasm':
             if use_emscripten:
                 print(f"emcc -c {f}")
@@ -158,7 +159,6 @@ def compile_package(name, working_directory='.',
     for ff in files:
         print(f"Parsing {ff}...")
         if ff not in cachedmods.keys():
-            ev_text_input = ""
             with open(ff, encoding='utf8') as f:
                 ev_text_input = f.read()
 
@@ -181,9 +181,6 @@ def compile_package(name, working_directory='.',
         module.filestack = [ff]
         module.filestack_idx = 0
 
-        # ev_pg = Parser(module, builder, package, False)
-        # ev_pg.parse()
-        # ev_parser = ev_pg.get_parser()
         ast = parser.parse(evtokens, state=ParserState(builder, module, package))
         ast.generate_symbols()
         ev_mod.add_parsed_ast(ast)
@@ -208,7 +205,6 @@ def compile_package(name, working_directory='.',
         evalfiles.remove(ff)
 
         if ff not in cachedmods.keys():
-            text_input = ""
             with open(ff) as f:
                 text_input = f.read()
 
@@ -254,13 +250,6 @@ def compile_package(name, working_directory='.',
         ir = codegen.create_ir()
         dest = ff[:-4]
         codegen.save_ir(dest + '.ll', ir)
-
-        # if ff == '.\\main.sat' and package.name == 'main':
-        #     codegen.load_ir('./packages/std/packages/lang/main.ll')
-        #     codegen.load_ir('./packages/std/packages/math/main.ll')
-        #     fn = package.lookup_symbol("testPrint").get_default_overload().fn
-        #     result = codegen.jit_execute(ir, fn, 22.4)
-        #     print(result)
 
         llfiles.append(dest)
         f2 = time.perf_counter()
@@ -343,6 +332,8 @@ def main():
 
     n2 = time.perf_counter()
     print(f"Compiled program in {n2-n1} seconds.")
+
+    test_jit()
 
 
 if __name__ == "__main__":

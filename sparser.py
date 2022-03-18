@@ -5,7 +5,7 @@ from ast import (
     DeferStatement,
     PackageDecl, ImportDecl, ImportDeclExtern, CIncludeDecl, CDeclareDecl, BinaryInclude,
     Attribute, AttributeList, ValueDecl,
-    TypeDecl, StructField, StructDeclBody, StructDecl, EnumDecl, EnumBody,
+    TypeDecl, StructField, StructDeclBody, StructDecl, StructGenericDecl, EnumDecl, EnumBody,
     Sum, Sub, Mul, Div, Mod, ShiftLeft, ShiftRight, And, Or, Xor, BinaryNot, BoolAnd, BoolOr, BoolNot, Negate, Print,
     AddressOf, DerefOf, ElementOf, TupleElementOf,
     Integer, UInteger, Integer64, UInteger64, Integer16, UInteger16, SByte,
@@ -13,15 +13,16 @@ from ast import (
     StructLiteralElement, StructLiteralBody, StructLiteral, Null,
     ArrayLiteralElement, ArrayLiteralBody, ArrayLiteral, TypeExpr, TupleTypeExpr, OptionalTypeExpr, FuncTypeExpr,
     TupleLiteralElement, TupleLiteralBody, TupleLiteral,
+    GenericTypeArg, CaptureExpr,
     FuncDecl, FuncDeclExtern, FuncArgList, FuncArg, GlobalVarDecl, VarDecl, VarDeclAssign, LambdaExpr,
     MethodDecl, MethodDeclExtern,
-    LValue, LValueField, FuncCall, LambdaCall, MethodCall, CastExpr, SelectExpr,
+    LValue, LValueField, LValueGeneric, FuncCall, LambdaCall, MethodCall, CastExpr, SelectExpr,
     MakeExpr, MakeSharedExpr, MakeUnsafeExpr, MakeUnsafeArrayExpr, DestroyExpr,
     Assignment, AddAssignment, SubAssignment, MulAssignment, ModAssignment, AndAssignment, OrAssignment, XorAssignment,
     PrefixIncrementOp, PrefixDecrementOp,
     Boolean, Spaceship, BooleanEq, BooleanNeq, BooleanGte, BooleanGt, BooleanLte, BooleanLt,
     IfStatement, WhileStatement, DoWhileStatement, SwitchCase, SwitchDefaultCase, SwitchBody, SwitchStatement,
-    ForStatement, IterExpr, PointerTypeExpr, ReferenceTypeExpr, ArrayTypeExpr
+    ForStatement, IterExpr, PointerTypeExpr, ReferenceTypeExpr, ArrayTypeExpr, HVectorTypeExpr
 )
 from serror import throw_saturn_error
 
@@ -42,7 +43,7 @@ class Parser:
              'INT', 'UINT', 'LONGINT', 'ULONGINT', 'SBYTE', 'BYTE', 'SHORTINT', 'USHORTINT',
              'HALF', 'FLOAT', 'DOUBLE', 'QUAD', 'STRING', 'MLSTRING',
              'HEXINT', 'HEXUINT', 'HEXLINT', 'HEXULINT', 'HEXSINT', 'HEXUSINT', 'HEXBINT', 'HEXSBINT',
-             'IDENT', 'TPRINT', 'DOT', 'RARROW', 'TRETURN',
+             'IDENT', 'TPRINT', 'DOT', 'RARROW', 'TRETURN', 'LVEC', 'RVEC',
              'LPAREN', 'RPAREN', 'LBRACKET', 'RBRACKET', 'LDBRACKET', 'RDBRACKET', 'LANGLE', 'RANGLE',
              'SEMICOLON', 'ADD', 'SUB', 'MUL', 'DIV', 'MOD', 'LSHFT', 'RSHFT',
              'AND', 'OR', 'XOR', 'BOOLAND', 'BOOLOR', 'BINNOT', 'QMARK', 'INC', 'DEC',
@@ -173,6 +174,17 @@ class Parser:
             else:
                 spos = p[1].getsourcepos()
                 return ValueDecl(state.builder, state.module, state.package, spos, p[1], [s[0] for s in p[0]])
+
+        @self.pg.production('value_decl : storage_spec_list AND IDENT')
+        @self.pg.production('value_decl : AND IDENT')
+        def value_decl_ref(state, p):
+            if len(p) == 2:
+                spos = p[0].getsourcepos()
+                return ValueDecl(state.builder, state.module, state.package, spos, p[1], is_ref=True)
+            else:
+                spos = p[1].getsourcepos()
+                return ValueDecl(state.builder, state.module, state.package, spos, p[2], [s[0] for s in p[0]],
+                                 is_ref=True)
 
         @self.pg.production('func_decl : TFN IDENT LPAREN decl_args RPAREN COLON typeexpr block')
         def func_decl(state, p):
@@ -447,6 +459,11 @@ class Parser:
             spos = p[0].getsourcepos()
             return StructDecl(state.builder, state.module, state.package, spos, p[1], None, state.decl_mode)
 
+        @self.pg.production('struct_decl : TTYPE generic_type_decl lvalue COLON TSTRUCT struct_decl_body')
+        def struct_decl_generic(state, p):
+            spos = p[0].getsourcepos()
+            return StructGenericDecl(state.builder, state.module, state.package, spos, p[2], p[1], p[5], state.decl_mode)
+
         @self.pg.production('struct_decl_body : LBRACE struct_decl_list RBRACE')
         @self.pg.production('struct_decl_body : LBRACE RBRACE')
         def struct_decl_body(state, p):
@@ -475,12 +492,38 @@ class Parser:
         @self.pg.production('struct_decl_field : value_decl COLON typeexpr SEMICOLON')
         def struct_decl_field(state, p):
             spos = p[0].getsourcepos()
-            return StructField(state.builder, state.module, state.package, spos, p[0].name, p[2])
+            spec = None if not p[0].qualifiers else p[0].qualifiers
+            return StructField(state.builder, state.module, state.package, spos,
+                               p[0].name, p[2], p[0].qualifiers)
 
         @self.pg.production('struct_decl_field : value_decl COLON typeexpr EQ expr SEMICOLON')
         def struct_decl_field_init(state, p):
             spos = p[0].getsourcepos()
-            return StructField(state.builder, state.module, state.package, spos, p[0].name, p[2], p[4])
+            spec = None if not p[0].qualifiers else p[0].qualifiers
+            return StructField(state.builder, state.module, state.package, spos,
+                               p[0].name, p[2], spec, p[4])
+
+        @self.pg.production('generic_type_decl : LANGLE generic_type_list RANGLE')
+        def generic_type_decl(state, p):
+            return p[1]
+
+        @self.pg.production('generic_type_list : generic_type_list COMMA generic_type_element')
+        @self.pg.production('generic_type_list : generic_type_list COMMA')
+        @self.pg.production('generic_type_list : generic_type_element')
+        def generic_type_list(state, p):
+            if len(p) == 1:
+                return [p[0]]
+            elif len(p) == 2:
+                return p[0]
+            else:
+                p[0].append(p[2])
+                return p[0]
+
+        @self.pg.production('generic_type_element : TTYPE IDENT')
+        @self.pg.production('generic_type_element : TTYPE IDENT EQ lvalue')
+        def generic_type_element(state, p):
+            spos = p[0].getsourcepos()
+            return GenericTypeArg(state.builder, state.module, state.package, spos, p[1])
 
         @self.pg.production('enum_decl : TTYPE lvalue COLON TENUM enum_decl_body')
         def enum_decl(state, p):
@@ -553,6 +596,22 @@ class Parser:
                 stmt_list = p[1]
                 spos = p[1][0].getsourcepos()
                 code_block = CodeBlock(state.builder, state.module, state.package, spos, stmt_list[0])
+                for stmt in stmt_list[1:]:
+                    code_block.add(stmt)
+                return code_block
+
+        @self.pg.production('block : capture_expr LBRACE stmt_list RBRACE')
+        @self.pg.production('block : capture_expr LBRACE RBRACE')
+        def block_capture(state, p):
+            if len(p) == 3:
+                spos = p[2].getsourcepos()
+                return CodeBlock(state.builder, state.module, state.package, spos,
+                                 Statement(state.builder, state.module, state.package, spos, None),
+                                 capture=p[0])
+            else:
+                stmt_list = p[2]
+                spos = p[2][0].getsourcepos()
+                code_block = CodeBlock(state.builder, state.module, state.package, spos, stmt_list[0], capture=p[0])
                 for stmt in stmt_list[1:]:
                     code_block.add(stmt)
                 return code_block
@@ -706,6 +765,12 @@ class Parser:
                 else:
                     size = p[1]
                     return ArrayTypeExpr(state.builder, state.module, state.package, spos, p[3], size)
+
+        @self.pg.production('typeexpr : LVEC expr RVEC typeexpr')
+        def typeexpr_hvector(state, p):
+            spos = p[0].getsourcepos()
+            size = p[1]
+            return HVectorTypeExpr(state.builder, state.module, state.package, spos, p[3], size)
 
         @self.pg.production('typeexpr : TTUPLE LPAREN tuple_type_list RPAREN')
         def typeexpr_tuple(state, p):
@@ -1036,27 +1101,54 @@ class Parser:
         #     block = p[8]
         #     capture = p[1]
         #     return LambdaExpr(state.builder, state.module, state.package, spos, rtype, block, args, capture)
-        #
-        # @self.pg.production('capture_expr : LBRACKET AND RBRACKET')
-        # @self.pg.production('capture_expr : LBRACKET MUL RBRACKET')
-        # @self.pg.production('capture_expr : LBRACKET capture_args_list RBRACKET')
-        # def capture_expr(state, p):
-        #     pass
-        #
-        # @self.pg.production('capture_args_list : AND')
-        # @self.pg.production('capture_args_list : MUL')
-        # @self.pg.production('capture_args_list : capture_arg')
-        # @self.pg.production('capture_args_list : capture_args_list COMMA capture_arg')
-        # @self.pg.production('capture_args_list : capture_args_list COMMA')
-        # def capture_args_list(state, p):
-        #     pass
-        #
-        # @self.pg.production('capture_arg : lvalue')
-        # @self.pg.production('capture_arg : AND lvalue')
-        # @self.pg.production('capture_arg : MUL lvalue')
-        # def capture_arg(state, p):
-        #     if len(p) == 1:
-        #         return p[0], False
+
+        @self.pg.production('capture_expr : LBRACKET RBRACKET')
+        def capture_expr_empty(state, p):
+            capture = CaptureExpr(state.builder, state.module, state.package, p[1].getsourcepos())
+            return capture
+
+        @self.pg.production('capture_expr : LBRACKET capture_args_list RBRACKET')
+        def capture_expr(state, p):
+            capture = CaptureExpr(state.builder, state.module, state.package, p[1][0][0].getsourcepos())
+            for arg in p[1]:
+                if arg[0].name == '&':
+                    capture.capture_all_by_ref = True
+                elif arg[0].name == '*':
+                    capture.capture_all_by_value = True
+                else:
+                    if arg[2]:
+                        capture.capture_by_ref(arg[0], arg[1])
+                    else:
+                        capture.capture_by_value(arg[0], arg[1])
+            return capture
+
+        @self.pg.production('capture_args_list : AND')
+        def capture_args_list_all_by_ref(state, p):
+            return [(LValue(state.builder, state.module, state.package, p[0].getsourcepos(), '&'),
+                     [],
+                     True)]
+
+        @self.pg.production('capture_args_list : MUL')
+        def capture_args_list_all_by_value(state, p):
+            return [(LValue(state.builder, state.module, state.package, p[0].getsourcepos(), '*'),
+                     [],
+                     False)]
+
+        @self.pg.production('capture_args_list : capture_arg')
+        @self.pg.production('capture_args_list : capture_args_list COMMA capture_arg')
+        @self.pg.production('capture_args_list : capture_args_list COMMA')
+        def capture_args_list(state, p):
+            if len(p) == 1:
+                return [p[0]]
+            elif len(p) == 3:
+                p[0].append(p[2])
+            return p[0]
+
+        @self.pg.production('capture_arg : value_decl')
+        def capture_arg(state, p):
+            return LValue(state.builder, state.module, state.package, p[0].spos, p[0].name.value), \
+                   p[0].qualifiers, \
+                   p[0].is_ref
 
         @self.pg.production('func_call : lvalue LPAREN args RPAREN')
         def func_call(state, p):
@@ -1117,8 +1209,8 @@ class Parser:
         @self.pg.production('lvalue : lvalue LANGLE RANGLE')
         def lvalue_generic(state, p):
             spos = p[0].getsourcepos()
-            if len(p) == 1:
-                return LValue(state.builder, state.module, state.package, spos, p[0].value)
+            if len(p) == 4:
+                return LValueGeneric(state.builder, state.module, state.package, spos, p[2], p[0])
             else:
                 return LValue(state.builder, state.module, state.package, spos, p[2].value, p[0])
 
@@ -1243,9 +1335,13 @@ class Parser:
                 return p[0]
 
         @self.pg.production('array_literal_element : expr')
+        @self.pg.production('array_literal_element : number COLON expr')
         def array_literal_element(state, p):
             spos = p[0].getsourcepos()
-            return ArrayLiteralElement(state.builder, state.module, state.package, spos, p[0])
+            if len(p) == 1:
+                return ArrayLiteralElement(state.builder, state.module, state.package, spos, p[0])
+            else:
+                return ArrayLiteralElement(state.builder, state.module, state.package, spos, p[2], int(p[0].value))
 
         @self.pg.production('tuple_literal : TTUPLE LBRACE tuple_literal_body RBRACE')
         def tuple_literal(state, p):
