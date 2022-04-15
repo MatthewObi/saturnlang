@@ -22,7 +22,7 @@ from ast import (
     PrefixIncrementOp, PrefixDecrementOp,
     Boolean, Spaceship, BooleanEq, BooleanNeq, BooleanGte, BooleanGt, BooleanLte, BooleanLt,
     IfStatement, WhileStatement, DoWhileStatement, SwitchCase, SwitchDefaultCase, SwitchBody, SwitchStatement,
-    ForStatement, IterExpr, PointerTypeExpr, ReferenceTypeExpr, ArrayTypeExpr, HVectorTypeExpr
+    ForStatement, IterExpr, PointerTypeExpr, ReferenceTypeExpr, ArrayTypeExpr, HVectorTypeExpr, SliceTypeExpr,
 )
 from serror import throw_saturn_error
 
@@ -766,6 +766,11 @@ class Parser:
                     size = p[1]
                     return ArrayTypeExpr(state.builder, state.module, state.package, spos, p[3], size)
 
+        @self.pg.production('typeexpr : LBRACKET RBRACKET typeexpr')
+        def typeexpr_slice(state, p):
+            spos = p[0].getsourcepos()
+            return SliceTypeExpr(state.builder, state.module, state.package, spos, p[2])
+
         @self.pg.production('typeexpr : LVEC expr RVEC typeexpr')
         def typeexpr_hvector(state, p):
             spos = p[0].getsourcepos()
@@ -1070,7 +1075,7 @@ class Parser:
             elif operator.gettokentype() == 'BOOLOR':
                 return BoolOr(state.builder, state.module, state.package, spos, left, right)
 
-        @self.pg.production('expr : TCAST BOOLLT typeexpr BOOLGT LPAREN expr RPAREN')
+        @self.pg.production('expr : TCAST LANGLE typeexpr RANGLE LPAREN expr RPAREN')
         def expr_cast(state, p):
             spos = p[0].getsourcepos()
             ctype = p[2]

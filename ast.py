@@ -2,7 +2,7 @@ from llvmlite import ir
 from rply import Token
 from typesys import TupleType, Type, make_tuple_type, types, FuncType, StructType, Value, mangle_name, print_types, \
     Func, GlobalValue, ConstexprValue, make_optional_type, mangle_symbol, mangle_symbol_name, demangle_name, \
-    make_slice_type, array_to_slice, EnumType, GenericType, HVectorType, mangle_type
+    array_to_slice, EnumType, GenericType, HVectorType, mangle_type, SliceType
 from serror import throw_saturn_error
 from package import Visibility, LinkageType, Package
 
@@ -13,6 +13,21 @@ GLOBALS = {}
 
 def clean_string_literal(str_lit: str) -> str:
     return str_lit.strip('\"').replace('\\n', '\n').replace('\\t', '\t')
+
+
+def slice_new(base_type: Type, builder: ir.IRBuilder) -> ir.AllocaInstr:
+    ptr = builder.alloca(base_type.get_slice_of().get_ir_type())
+    return ptr
+
+
+def slice_element_of(builder: ir.IRBuilder, module: ir.Module, value: Value, idx_value):
+    i32 = ir.IntType(32)
+    ir_value = value.get_ir_value(module)
+    slice_type: SliceType = value.type
+    bc = builder.bitcast(ir_value, slice_type.get_element_of().get_pointer_to().get_pointer_to().get_ir_type())
+    ld = builder.load(bc)
+    gep = builder.gep(ld, [idx_value], inbounds=True)
+    return gep
 
 
 class Scope:
@@ -42,7 +57,7 @@ class Scope:
     def call_destructors(self):
         if not self.destructed:
             for var in self.vars.values():
-                if var.type.has_dtor() and var.type.is_value():
+                if var.type.is_value() and var.type.has_dtor():
                     fn = var.type.get_dtor()
                     ovrld = fn.get_overload([var.type.get_pointer_to()])
                     if ovrld:
@@ -981,7 +996,11 @@ class LValueField(Expr):
         self.is_deref = False
 
     def get_type(self):
-        stype = self.lvalue.get_type().get_base_type()
+        stype = self.lvalue.get_type()
+        if stype.is_slice():
+            if self.fname == 'len':
+                return types['uint64']
+        stype = stype.get_base_type()
         if not stype.is_struct():
             lineno = self.getsourcepos().lineno
             colno = self.getsourcepos().colno
@@ -993,6 +1012,9 @@ class LValueField(Expr):
     def get_ir_type(self):
         irtype = self.lvalue.get_ir_type()
         stype = self.lvalue.get_type()
+        if stype.is_slice():
+            if self.fname == 'len':
+                return types['uint64'].get_ir_type()
         findex = stype.get_field_index(self.fname)
         return irtype.gep(ir.Constant(ir.IntType(32), findex))
 
@@ -1002,6 +1024,12 @@ class LValueField(Expr):
     def get_pointer(self):
         stype = self.lvalue.get_type()
         ptr = self.lvalue.get_pointer()
+        if stype.is_slice():
+            if self.fname == 'len':
+                i64 = ir.IntType(64)
+                i32 = ir.IntType(32)
+                gep = self.builder.gep(ptr.irvalue, [i64(0), i32(1)])
+                return Value('', types['uint64'], gep)
         if stype.is_pointer():
             stype = stype.get_dereference_of()
         findex = stype.get_field_index(self.fname)
@@ -1035,8 +1063,15 @@ class LValueField(Expr):
         return Value(self.fname, stype.get_field_type(findex), gep, quals)
 
     def eval(self):
-        stype = self.lvalue.get_type().get_base_type()
+        stype = self.lvalue.get_type()
         ptr = self.lvalue.get_pointer()
+        if stype.is_slice():
+            if self.fname == 'len':
+                i64 = ir.IntType(64)
+                i32 = ir.IntType(32)
+                gep = self.builder.gep(ptr.irvalue, [i64(0), i32(1)])
+                return self.builder.load(gep)
+        stype = stype.get_base_type()
         findex = stype.get_field_index(self.fname)
         if findex == -1:
             lineno = self.getsourcepos().lineno
@@ -1111,6 +1146,23 @@ def cast_to(builder: ir.IRBuilder, module, package, expr, ctype):
         elif exprt.is_array():
             if castt.is_pointer():
                 cast = builder.bitcast(val, castt.get_ir_type())
+            elif castt.is_slice():
+                i64 = ir.IntType(64)
+                i32 = ir.IntType(32)
+                _name = module.get_unique_name("_unnamed_slice_alloc")
+                with builder.goto_entry_block():
+                    ptr = builder.alloca(castt.get_ir_type())
+                    value = Value(_name, castt, ptr)
+                    add_new_local(_name, value)
+                slice_data = builder.gep(ptr, [i64(0), i32(0)], inbounds=True)
+                print(slice_data.type)
+                array_ptr = builder.bitcast(expr.get_pointer().irvalue, exprt.get_element_of().get_pointer_to().get_ir_type())
+                slice_data_ptr = builder.bitcast(slice_data,
+                                                 exprt.get_element_of().get_pointer_to().get_pointer_to().get_ir_type())
+                builder.store(array_ptr, slice_data_ptr)
+                slice_len = builder.gep(ptr, [i64(0), i32(1)], inbounds=True)
+                builder.store(i64(exprt.get_array_count()), slice_len)
+                cast = builder.load(ptr)
         elif exprt.is_integer():
             if castt.is_pointer():
                 cast = builder.inttoptr(val, castt.get_ir_type())
@@ -1472,6 +1524,20 @@ class ElementOf(PostfixOp):
                     self.expr.eval()
                 ], True)
                 return Value(ptr.name, ptr.type.get_dereference_of(), gep, ptr.qualifiers)
+            elif leftty.is_slice():
+                left_ir = self.left.get_pointer().irvalue
+                expr_ir = self.expr.eval()
+                print(left_ir, expr_ir)
+                gep = self.builder.gep(left_ir, [
+                    ir.Constant(ir.IntType(64), 0),
+                    ir.Constant(ir.IntType(32), 0),
+                ], True)
+                ld = self.builder.load(gep)
+                bc = self.builder.bitcast(ld, ld.type.pointee.element.as_pointer())
+                gep2 = self.builder.gep(bc, [
+                    expr_ir
+                ], True)
+                return Value(ptr.name, ptr.type.get_dereference_of(), gep2, ptr.qualifiers)
             else:
                 gep = self.builder.gep(irvalue, [
                     ir.Constant(ir.IntType(32), 0),
@@ -1718,32 +1784,34 @@ class Sum(BinaryOp):
                 throw_saturn_error(self.builder, self.module, lineno, colno,
                                    f"Attempting to perform addition with two vectors of incompatible types "
                                    f"({str(self.left.get_type())} and {str(self.right.get_type())}).")
-        elif lty.is_struct() and lty.has_operator('+'):
-            fn = lty.get_operator('+')
-            if not fn:
-                lineno = self.spos.lineno
-                colno = self.spos.colno
-                throw_saturn_error(self.builder, self.module, lineno, colno,
-                                   f"Cannot perform addition with struct ({lty.name}). Has no operator+.")
-            atypes = [lty.get_pointer_to(), rty.get_pointer_to()]
-            ovrld = fn.search_overload(atypes)
-            if not ovrld:
-                atypes = [lty.get_pointer_to(), rty.get_reference_to()]
-                ovrld = fn.search_overload(atypes)
-                if not ovrld:
+        else:
+            lty = lty.get_base_type()
+            if lty.is_struct() and lty.has_operator('+'):
+                fn = lty.get_operator('+')
+                if not fn:
                     lineno = self.spos.lineno
                     colno = self.spos.colno
                     throw_saturn_error(self.builder, self.module, lineno, colno,
-                                       f"Could not find overload for struct ({str(lty)}) operator+ with argument types: "
-                                       f"({str(lty)} and {str(rty)}).")
-            o_fn = implicit_define_function(self.module, ovrld.overload.fn)
-            i = self.builder.call(o_fn, [self.left.get_pointer().irvalue, self.right.get_pointer().irvalue])
-        else:
-            lineno = self.spos.lineno
-            colno = self.spos.colno
-            throw_saturn_error(self.builder, self.module, lineno, colno, 
-                               f"Attempting to perform addition with two operands of incompatible types "
-                               f"({str(self.left.get_type())} and {str(self.right.get_type())}).")
+                                       f"Cannot perform addition with struct ({lty.name}). Has no operator+.")
+                atypes = [lty.get_pointer_to(), rty.get_pointer_to()]
+                ovrld = fn.search_overload(atypes)
+                if not ovrld:
+                    atypes = [lty.get_pointer_to(), rty.get_reference_to()]
+                    ovrld = fn.search_overload(atypes)
+                    if not ovrld:
+                        lineno = self.spos.lineno
+                        colno = self.spos.colno
+                        throw_saturn_error(self.builder, self.module, lineno, colno,
+                                           f"Could not find overload for struct ({str(lty)}) operator+ with argument types: "
+                                           f"({str(lty)} and {str(rty)}).")
+                o_fn = implicit_define_function(self.module, ovrld.overload.fn)
+                i = self.builder.call(o_fn, [self.left.get_pointer().irvalue, self.right.get_pointer().irvalue])
+            else:
+                lineno = self.spos.lineno
+                colno = self.spos.colno
+                throw_saturn_error(self.builder, self.module, lineno, colno,
+                                   f"Attempting to perform addition with two operands of incompatible types "
+                                   f"({str(self.left.get_type())} and {str(self.right.get_type())}).")
         return i
 
     def consteval(self):
@@ -4364,6 +4432,33 @@ class HVectorTypeExpr(TypeExpr):
         size = self.size.consteval()
         if self.type is None:
             self.type = self.element.get_type().get_hvector_of(size)
+        return self.type
+
+    def eval(self):
+        pass
+
+
+class SliceTypeExpr(TypeExpr):
+    """
+    Expression representing a slice Saturn type.
+    """
+    def __init__(self, builder, module, package, spos, element, decl_mode=False):
+        super().__init__(builder, module, package, spos, None)
+        self.element = element
+
+    def get_base_type(self):
+        return self.element.get_base_type()
+
+    def copy(self):
+        return SliceTypeExpr(self.builder, self.module, self.package, self.spos, self.element.copy())
+
+    def replace_base_type(self, new_type_expr):
+        return SliceTypeExpr(self.builder, self.module, self.package, self.spos,
+                             new_type_expr)
+
+    def get_type(self):
+        if self.type is None:
+            self.type = self.element.get_type().get_slice_of()
         return self.type
 
     def eval(self):

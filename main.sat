@@ -14,6 +14,14 @@ fn hVectorAdd(x: [<4>]int, y: [<4>]int): [<4>]int {
     return x + y;
 }
 
+fn passArrayAsSlice(arr: []int): int {
+    mut sum: int = 0;
+    for x in 0 .. arr.len {
+        sum += arr[x];
+    }
+    return sum;
+}
+
 fn dAdd(x: int, y: int = 0, z: int = 2): int {
     return x + y + z;
 }
@@ -61,7 +69,7 @@ priv fn GetString(): string
 pub fn testPassPtr(str: cstring): uint64
 {
     mut len := 0ul;
-    mut s := cast<*byte>(str);
+    mut s := cast<[*byte]>(str);
     while *s != 0b {
         ++len;
         ++s;
@@ -122,6 +130,8 @@ pub fn main(argc: int, argv: *cstring): int
     }
 
     array := []int { 11, 13, 15 };
+    array_sum := passArrayAsSlice(array);
+    printf("11 + 13 + 15 = %d\n", array_sum);
 
     printf("Welcome to the 🪐Saturn Programming Language!🪐\n");
     str: string = "Hello, 世界! 😃 ";

@@ -10,7 +10,6 @@ from package import Package
 from cachedmodule import CachedModule
 from ctypes import create_string_buffer, c_char_p, pointer, byref
 from compilerutil import CompileTarget, targets
-# import cProfile
 
 import sys
 import os
@@ -85,6 +84,7 @@ def compile_package(name, working_directory='.',
 
     target = targets[compile_target]
 
+    # Define output file using package type and compilation target.
     if package_type == PackageType.LIBRARY:
         out_file = f'{working_directory}/{name}.{target.short_name}.a' if not target.platform == 'windows' \
             else f'{working_directory}/{name}.{target.short_name}.lib'
@@ -97,6 +97,7 @@ def compile_package(name, working_directory='.',
     else:
         out_file = f''
 
+    # Clean files.
     if clean:
         for f in glob.glob(f"{working_directory}/*.o"):
             os.remove(f)
@@ -111,6 +112,7 @@ def compile_package(name, working_directory='.',
     linkfiles = []
 
     package = Package.get_or_create(name, working_directory=working_directory, out_file=out_file, target=target)
+    # Add primitive type symbols to package.
     for ty in types.values():
         if not ty.name.startswith('C::'):
             from package import Visibility
@@ -118,6 +120,7 @@ def compile_package(name, working_directory='.',
             package.add_symbol_extern(ty.name, ty)
     print(f'Compiling package {name} in directory {working_directory} with target {target.name}...')
 
+    # Get all .sat files in the current working directory.
     for f in glob.glob(f"{working_directory}/*.sat"):
         mod_t = os.path.getmtime(f)
         objf = f.replace('.sat', '.o')
@@ -131,6 +134,7 @@ def compile_package(name, working_directory='.',
             files.append(f)
         eval_files.append(f)
 
+    # Compile all .c files in current working directory.
     for f in glob.glob(f"{working_directory}/*.c"):
         if compile_target == 'wasm':
             if use_emscripten:
@@ -276,8 +280,8 @@ def compile_package(name, working_directory='.',
             linkfiles.append(f)
             modifiedobjs.append(f)
     if len(modifiedobjs) == 0:
-        print('Project up to date. Nothing to do.')
-        exit(0)
+        print('Package up to date. Nothing to do.')
+        return package
 
     if package_type == PackageType.LIBRARY:
         linkcmd = f'llvm-ar -r {out_file} '
@@ -288,10 +292,7 @@ def compile_package(name, working_directory='.',
                      '-L./wasm/sysroot/lib/wasm32-wasi -lc -lrt ' \
                      '"./wasm/sysroot/lib/wasm32-wasi/crt1.o" '
         elif target.platform == 'windows':
-            linkcmd = f'lld-link -subsystem:console -out:{out_file} -defaultlib:libcmt ' \
-                      '-libpath:"C:/Program Files (x86)/Microsoft Visual Studio/2019/Community/VC/Tools/MSVC/14.26.28801/lib/x64" ' \
-                      '-libpath:"C:/Program Files (x86)/Windows Kits/10/Lib/10.0.18362.0/ucrt/x64" ' \
-                      '-libpath:"C:/Program Files (x86)/Windows Kits/10/Lib/10.0.18362.0/um/x64" -nologo '
+            linkcmd = f'clang -m64 -Wall -Xlinker /subsystem:console -lShell32 -o {out_file} '
         elif target.platform == 'linux':
             linkcmd = f'clang -lc -lrt -lm -Wall -o {out_file} '
         else:
@@ -323,7 +324,6 @@ def get_relative_directory_for_package(package_symbol):
 
 def main():
     n1 = time.perf_counter()
-
     std_lang_package = compile_package('lang', working_directory=get_relative_directory_for_package('std::lang'),
                                        opt_level=2)
     std_math_package = compile_package('math', working_directory=get_relative_directory_for_package('std::math'),
@@ -333,9 +333,16 @@ def main():
     n2 = time.perf_counter()
     print(f"Compiled program in {n2-n1} seconds.")
 
-    test_jit()
+    # Uncomment the following line to test JIT-compilation (make sure you're building for your native system first!)
+    # test_jit()
 
 
 if __name__ == "__main__":
     main()
+    # Uncomment the lines below and comment the line above to run the compiler with profiling.
+    # import cProfile
     # cProfile.run('main()', "profile")
+    # import pstats
+    # from pstats import SortKey
+    # p = pstats.Stats('profile')
+    # p.strip_dirs().sort_stats(2).print_stats()

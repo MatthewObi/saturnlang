@@ -5,7 +5,7 @@ package lang;
  *
  * Copyright Matthew Obi 2022
  *
- * Last modified 2022 March 17
+ * Last modified 2022 April 15
  */
 
 /*
@@ -98,7 +98,7 @@ pub fn(*string) operator=(str: cstring): void {
 pub fn(*string) operator=(str: &string): void {
     if this.ptr != str.ptr then this.delete();
     this.ptr = str.ptr;
-    this.len = cast<uint>(str.len);
+    this.len = cast<[uint]>(str.len);
     this.alloc = str.alloc;
 }
 
@@ -116,21 +116,21 @@ pub fn(*string) operator+(str: *string): string {
     strcat(new_ptr, str.ptr);
     return (string) {
         ptr: new_ptr,
-        len: cast<uint>(strlen(new_ptr)),
+        len: cast<[uint]>(strlen(new_ptr)),
         alloc: true
     };
 }
 
 pub fn(*string) substr(start: uint, len: uint): string {
     mut new_ptr := make unsafe [len+1u]byte;
-    src_ptr := cast<*byte>(this.ptr);
+    src_ptr := cast<[*byte]>(this.ptr);
     for i in 0u..len {
         if i >= this.len then break;
         new_ptr[i] = src_ptr[start + i];
     }
     return (string) {
         ptr: new_ptr,
-        len: cast<uint>(strlen(new_ptr)),
+        len: cast<[uint]>(strlen(new_ptr)),
         alloc: true
     };
 }

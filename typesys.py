@@ -94,13 +94,16 @@ class Type(Symbol):
                                                     self.debug_info.distinct)
         return self.dtype[key]
 
-    def get_array_count(self):
+    def get_array_count_old(self):
         array_size = -1
         for q in reversed(self.qualifiers):
             if q[0] == 'array':
                 array_size = q[1]
                 break
         return array_size
+
+    def get_array_count(self):
+        return 1
 
     def make_array(self, size):
         self.qualifiers.append(('array', size))
@@ -117,6 +120,9 @@ class Type(Symbol):
 
     def get_hvector_of(self, size):
         return HVectorType(self, size)
+
+    def get_slice_of(self):
+        return SliceType(self)
 
     def get_pointer_to(self):
         return PointerType(self)
@@ -232,6 +238,9 @@ class Type(Symbol):
     def is_byte_pointer(self):
         base_ty = self.get_base_type()
         return self.is_actual_pointer() and (base_ty.name == 'byte' or base_ty.name == 'C::char')
+
+    def is_slice(self):
+        return False
 
     def is_value(self):
         return not (self.is_array()
@@ -690,6 +699,9 @@ class ArrayType(Type):
 
     def get_element_of(self):
         return self.element
+
+    def get_slice_of(self):
+        return SliceType(self)
 
     def get_base_type(self):
         return self.element.get_base_type()
@@ -1281,7 +1293,7 @@ def mangle_type(atype: Type):
     atype = get_base_type(atype)
     if atype.is_integer():
         if atype.get_integer_bits() == 8:
-            mname += 'h' if atype.is_unsigned() else 'c'
+            mname += 'c' if atype.is_unsigned() else 'a'
         elif atype.get_integer_bits() == 16:
             mname += 't' if atype.is_unsigned() else 's'
         elif atype.get_integer_bits() == 32:
@@ -1375,7 +1387,7 @@ def is_legal_user_defined_name(name: str) -> bool:
 
 def _consume_number(s: str) -> (int, str):
     num_s = ''
-    while s[0].isdigit():
+    while len(s) > 0 and s[0].isdigit():
         num_s += s[0]
         s = s[1:]
     if num_s == '':
@@ -1398,15 +1410,21 @@ def demangle_type(name: str) -> (str, str, bool):
         return 'void', name[1:], True
     if name[0] == 'i':
         return 'int', name[1:], True
+    if name[0] == 'j':
+        return 'uint', name[1:], True
     if name[0] == 's':
         return 'int16', name[1:], True
+    if name[0] == 't':
+        return 'uint16', name[1:], True
     if name[0] == 'l':
         return 'int64', name[1:], True
+    if name[0] == 'm':
+        return 'uint64', name[1:], True
     if name[0] == 'b':
         return 'bool', name[1:], True
-    if name[0] == 'c':
+    if name[0] == 'a':
         return 'int8', name[1:], True
-    if name[0] == 'h':
+    if name[0] == 'c':
         return 'byte', name[1:], True
     if name[0] == 'f':
         return 'float32', name[1:], True
@@ -1435,18 +1453,43 @@ def demangle_type(name: str) -> (str, str, bool):
         out_str = out_str.rstrip(', ')
         out_str += f') {ret_type}'
         return out_str, name, True
+    if name[0] == '_':
+        name = name[1:]
+        type_arg_index, name = _consume_number(name)
+        type_args = [chr(ord('T') + i) for i in range(6)] + [chr(ord('A') + i) for i in range(10)]
+        return type_args[type_arg_index], name, True
     if name[0] == 'S':
-        name_len, name = _consume_number(name)
-        struct_name = name[:name_len]
-        return struct_name, name[name_len:], True
+        name = name[2:]
+        struct_name = ''
+        while len(name) > 0 and name[0].isdigit():
+            name_len, name = _consume_number(name)
+            struct_name += name[:name_len] + '::'
+            name = name[name_len:]
+        struct_name = struct_name.rstrip('::')
+        if len(name) > 0 and name[0] == 'T':
+            name = name[1:]
+            type_len, name = _consume_number(name)
+            gtype_str = '<'
+            for i in range(type_len):
+                stop = False
+                arg_type = ''
+                while not stop:
+                    arg_type_s, name, stop = demangle_type(name)
+                    arg_type += arg_type_s
+                gtype_str += arg_type + ', '
+            gtype_str = gtype_str.rstrip(', ') + '>'
+            struct_name += gtype_str
+        return struct_name, name, True
     if name[0] == 'A':
+        name = name[1:]
         array_len, name = _consume_number(name)
         out_str = f"[{array_len}]"
-        return out_str, name[1:], False
+        return out_str, name, False
     if name[0] == 'H':
+        name = name[1:]
         hvector_len, name = _consume_number(name)
         out_str = f"[<{hvector_len}>]"
-        return out_str, name[1:], False
+        return out_str, name, False
     return 'Unk', name[1:], True
 
 
@@ -1479,17 +1522,34 @@ def demangle_symbol(name: str) -> (str, str):
     return symbol, name
 
 
-def demangle_name(name: str) -> str:
+def demangle_name(name: str) -> (str, str):
     if not name.startswith('_ZN'):
-        return name
+        return name, ''
     name = name.strip('_ZN')
-    name_size_s = ''
-    while name[0].isdigit():
-        name_size_s += name[0]
+    fn_name = ''
+    while len(name) > 0 and name[0].isdigit():
+        name_size_s = ''
+        while name[0].isdigit():
+            name_size_s += name[0]
+            name = name[1:]
+        name_size = int(name_size_s)
+        fn_name += name[:name_size] + '::'
+        name = name[name_size:]
+    fn_name = fn_name.rstrip('::')
+    if len(name) > 0 and name[0] == 'T':
         name = name[1:]
-    name_size = int(name_size_s)
-    fn_name = name[:name_size]
-    name = name[name_size:]
+        type_len, name = _consume_number(name)
+        type_args = [chr(ord('T') + i) for i in range(7)] + [chr(ord('A') + i) for i in range(9)]
+        gtype_str = '<'
+        for i in range(type_len):
+            stop = False
+            arg_type = f'{type_args[i]} = '
+            while not stop:
+                arg_type_s, name, stop = demangle_type(name)
+                arg_type += arg_type_s
+            gtype_str += arg_type + ', '
+        gtype_str = gtype_str.rstrip(', ') + '>'
+        fn_name += gtype_str
     name = name.strip('E')
     args = []
     arg = ''
@@ -1504,7 +1564,17 @@ def demangle_name(name: str) -> str:
     for arg in args:
         args_string += arg + ', '
     args_string = args_string.rstrip(', ')
-    return f'fn {fn_name}({args_string});'
+    return fn_name, args_string
+
+
+def demangle_name_as_function(name: str) -> str:
+    fn_name, args_string = demangle_name(name)
+    return f"fn {fn_name}({args_string});"
+
+
+def demangle_name_as_variable(name: str) -> str:
+    fn_name, args_string = demangle_name(name)
+    return f"var {fn_name};"
 
 
 def print_types(types_list: list):
@@ -1860,45 +1930,28 @@ class SliceType(Type):
     """
     An immutable array reference in Saturn.
     """
-    def __init__(self, name, irtype, element, qualifiers=None, traits=None):
-        super().__init__(name, 'slice', irtype, qualifiers, traits)
+
+    def __init__(self, element_type, qualifiers=None, traits=None):
+        super().__init__(element_type.name, element_type.tclass, None, qualifiers=qualifiers, traits=traits)
         if qualifiers is None:
             qualifiers = []
         if traits is None:
             traits = {}
-        self.element = element
+        self.element = element_type
         self.qualifiers = qualifiers
         self.traits = traits
 
     def get_ir_type(self):
         if self.irtype is None:
             i64 = ir.IntType(64)
-            self.irtype = ir.LiteralStructType([i64, self.element.get_ir_type().as_pointer()])
+            self.irtype = ir.LiteralStructType([ir.ArrayType(self.element.get_ir_type(), 0).as_pointer(), i64])
         return self.irtype
 
     def get_base_type(self):
         return self.element
 
-    def get_pointer_to(self):
-        return SliceType(self.name,
-                         self.get_ir_type().as_pointer(),
-                         self.element,
-                         qualifiers=self.qualifiers + [('ptr',)],
-                         traits=self.traits)
-
-    def get_dereference_of(self):
-        ql = self.qualifiers.copy()
-        ql.reverse()
-        for i in range(len(ql)):
-            if ql[i][0] == 'ptr':
-                ql.pop(i)
-                break
-        ql.reverse()
-        return SliceType(self.name,
-                         self.get_ir_type().pointee,
-                         self.element,
-                         qualifiers=ql,
-                         traits=self.traits)
+    def is_slice(self):
+        return True
 
     def get_element_of(self):
         return self.element
@@ -1908,16 +1961,9 @@ class SliceType(Type):
         return s
 
 
-def make_slice_type(ty: Type):
-    s = SliceType("",
-                  None,
-                  ty)
-    return s
-
-
 def array_to_slice(ty: Type):
     elty = ty.get_element_of()
-    destty = make_slice_type(elty)
+    destty = None # make_slice_type(elty)
     array_size = 0
     for q in reversed(ty.qualifiers):
         if q[0] == 'array':
